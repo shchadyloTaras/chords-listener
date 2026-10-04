@@ -1,0 +1,51 @@
+/* Tempo UI: beat-pulse dots (driven per frame from the player clock, see BeatPulse.tsx). */
+
+.tp-dot {
+  display: block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  background-color: var(--border-strong);
+  transform-origin: 50% 50%;
+  will-change: transform;
+}
+.tp-dot[data-down] {
+  width: 0.625rem;
+  height: 0.625rem;
+}
+.tp-dot[data-s='on'] {
+  background-color: var(--text);
+}
+.tp-dot[data-down][data-s='on'] {
+  background-color: var(--accent);
+}
+
+/* Small variant (toolbar / compact places). */
+.tp-pulse-sm .tp-dot {
+  width: 0.375rem;
+  height: 0.375rem;
+}
+.tp-pulse-sm .tp-dot[data-down] {
+  width: 0.5rem;
+  height: 0.5rem;
+}
+
+/* Tap button flash on every tap. */
+@keyframes tp-tap {
+  from {
+    box-shadow: 0 0 0 0 var(--accent-soft);
+    background-color: var(--accent-soft);
+  }
+  to {
+    box-shadow: 0 0 0 10px transparent;
+  }
+}
+.tp-tap-flash {
+  animation: tp-tap 260ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tp-tap-flash {
+    animation: none;
+  }
+}

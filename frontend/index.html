@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="uk" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="description" content="Розпізнавання акордів з YouTube та аудіофайлів — локально, на твоєму компʼютері." />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#0c0c0e" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Chords Listener</title>
+    <script>
+      // YouTube refuses to embed its player on pages served from a bare IP address, so the same
+      // local server opened as 127.0.0.1 / [::1] moves to "localhost" (one origin for settings too).
+      ;(function () {
+        var h = location.hostname
+        if (location.protocol === 'http:' && (h === '127.0.0.1' || h === '[::1]' || h === '::1')) {
+          location.replace('http://localhost' + (location.port ? ':' + location.port : '') + location.pathname + location.search + location.hash)
+        }
+      })()
+    </script>
+    <script>
+      // Apply the saved theme + language before first paint (no flash).
+      ;(function () {
+        var root = document.documentElement
+        try {
+          var saved = JSON.parse(localStorage.getItem('chords-listener-settings') || '{}').state || {}
+          var theme = saved.theme || 'dark'
+          if (theme === 'system') theme = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+          root.setAttribute('data-theme', theme === 'light' ? 'light' : 'dark')
+          if (saved.lang === 'en' || saved.lang === 'uk') root.lang = saved.lang
+        } catch (e) {
+          root.setAttribute('data-theme', 'dark')
+        }
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

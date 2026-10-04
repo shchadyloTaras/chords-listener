@@ -1,0 +1,350 @@
+// Typed client for the chord server (see docs/SPEC.md "HTTP API"), mode-aware:
+//  · server mode — same-origin "/api" (page served by the backend / Vite proxy) or the user's own server
+//    at `serverUrl` when the page is hosted elsewhere (GitHub Pages); URLs it returns are resolved against it;
+//  · browser mode — no server reachable: files and recordings are analyzed in the page (lib/local), tracks
+//    live in IndexedDB. Ids starting with "local-" always belong to the browser library, in any mode.
+import type { ChordSegment, ErrorCode, Health, Job, Track, TrackSummary } from '../types'
+import {
+  cancelLocalTrackJobs,
+  deleteLocalTrack,
+  getLocalJob,
+  getLocalTrack,
+  isLocalId,
+  listLocalJobs,
+  listLocalTracks,
+  LocalError,
+  patchLocalTrack,
+  resetLocalTrack,
+  startLocalReanalysis,
+  startLocalUpload,
+} from './local'
+import {
+  needsFetchUpload,
+  noteServerTrouble,
+  resolveServerUrl,
+  SAME_ORIGIN_API,
+  serverFetch,
+  whenSettled,
+} from './serverMode'
+
+/** Backend error codes plus client-side failure modes. */
+export type ClientErrorCode = ErrorCode | 'network' | 'aborted' | 'http' | 'server_required'
+
+const SERVER_CODES: readonly ErrorCode[] = [
+  'invalid_url',
+  'download_failed',
+  'unsupported_format',
+  'too_long',
+  'too_large',
+  'analysis_failed',
+  'not_found',
+  'internal',
+]
+
+function isServerCode(v: unknown): v is ErrorCode {
+  return typeof v === 'string' && (SERVER_CODES as readonly string[]).includes(v)
+}
+
+export class ApiError extends Error {
+  readonly code: ClientErrorCode
+  readonly status: number
+
+  constructor(message: string, code: ClientErrorCode, status = 0) {
+    super(message)
+    this.name = 'ApiError'
+    this.code = code
+    this.status = status
+  }
+}
+
+/** Normalizes anything thrown by the client into an ApiError. */
+export function toApiError(err: unknown): ApiError {
+  if (err instanceof ApiError) return err
+  if (err instanceof LocalError) return new ApiError(err.message, err.code, err.status)
+  if (err instanceof DOMException && err.name === 'AbortError') return new ApiError('Request aborted', 'aborted')
+  return new ApiError(err instanceof Error ? err.message : String(err), 'network')
+}
+
+/** Same-origin API base (the page is served by the backend). The live base is `useConnection().apiBase`. */
+export const API_BASE = SAME_ORIGIN_API
+
+export interface JobOptions {
+  separate?: boolean
+}
+
+export interface TrackPatch {
+  title?: string
+  artist?: string
+  chords?: ChordSegment[]
+}
+
+async function errorFromResponse(res: Response): Promise<ApiError> {
+  const status = res.status
+  let detail = res.statusText || `HTTP ${status}`
+  let code: ClientErrorCode | null = null
+  let parsed = false
+  try {
+    const body: unknown = await res.json()
+    parsed = true
+    if (body && typeof body === 'object') {
+      const b = body as { detail?: unknown; code?: unknown }
+      if (typeof b.detail === 'string') detail = b.detail
+      if (isServerCode(b.code)) code = b.code
+    }
+  } catch {
+    /* non-JSON body */
+  }
+  if (!code) {
+    // A dev proxy answers 5xx without a JSON body when the backend is not running.
+    if (status === 502 || status === 503 || status === 504 || (status === 500 && !parsed)) code = 'network'
+    else if (status === 404) code = 'not_found'
+    else if (status === 413) code = 'too_large'
+    else if (status >= 500) code = 'internal'
+    else code = 'http'
+  }
+  return new ApiError(detail, code, status)
+}
+
+/** API base of the connected server (waits for the first probe); throws when there is none. */
+async function serverBase(): Promise<string> {
+  const conn = await whenSettled()
+  if (conn.status === 'server' && conn.apiBase) return conn.apiBase
+  throw new ApiError('The local chord server is not reachable', 'network')
+}
+
+/** Runs a browser-library operation, reporting failures as ApiError. */
+async function local<T>(op: () => Promise<T>): Promise<T> {
+  try {
+    return await op()
+  } catch (err) {
+    throw toApiError(err)
+  }
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const base = await serverBase()
+  const headers = new Headers(init.headers)
+  headers.set('Accept', 'application/json')
+  if (typeof init.body === 'string') headers.set('Content-Type', 'application/json')
+  let res: Response
+  try {
+    res = await serverFetch(base + path, { ...init, headers })
+  } catch (err) {
+    const e = toApiError(err)
+    if (e.code === 'network') noteServerTrouble()
+    throw e
+  }
+  if (!res.ok) {
+    const e = await errorFromResponse(res)
+    if (e.code === 'network') noteServerTrouble()
+    throw e
+  }
+  if (res.status === 204) return undefined as T
+  const text = await res.text()
+  return (text ? JSON.parse(text) : undefined) as T
+}
+
+/** Server objects carry server-relative URLs; make them work from a page on another origin. */
+function withServerUrls<T extends { thumbnail?: string | null; audioUrl?: string }>(obj: T): T {
+  const out = { ...obj }
+  if (typeof out.thumbnail === 'string') out.thumbnail = resolveServerUrl(out.thumbnail)
+  if (typeof out.audioUrl === 'string') out.audioUrl = resolveServerUrl(out.audioUrl)
+  return out
+}
+
+function serverJob(job: Job): Job {
+  return withServerUrls(job)
+}
+
+const enc = encodeURIComponent
+
+// ---------------------------------------------------------------- endpoints
+
+export async function getHealth(signal?: AbortSignal): Promise<Health> {
+  return request('/health', { signal, cache: 'no-store' })
+}
+
+/** Links (YouTube & co.) need the server's downloader. */
+export async function createJob(url: string, options?: JobOptions): Promise<Job> {
+  const conn = await whenSettled()
+  if (conn.status !== 'server')
+    throw new ApiError('Links need the local Chords Listener server (YouTube downloads)', 'server_required')
+  const job = await request<Job>('/jobs', { method: 'POST', body: JSON.stringify(options ? { url, options } : { url }) })
+  return serverJob(job)
+}
+
+export async function listJobs(signal?: AbortSignal): Promise<Job[]> {
+  const conn = await whenSettled()
+  const browserJobs = listLocalJobs()
+  if (conn.status !== 'server') return browserJobs
+  const jobs = (await request<Job[]>('/jobs', { signal, cache: 'no-store' })).map(serverJob)
+  return [...browserJobs, ...jobs].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+}
+
+export async function getJob(id: string, signal?: AbortSignal): Promise<Job> {
+  if (isLocalId(id)) {
+    const job = getLocalJob(id)
+    if (!job) throw new ApiError('Job not found', 'not_found', 404)
+    return job
+  }
+  return serverJob(await request<Job>(`/jobs/${enc(id)}`, { signal, cache: 'no-store' }))
+}
+
+/** Server library (when connected) plus the tracks analyzed in this browser, newest first. */
+export async function listTracks(signal?: AbortSignal): Promise<TrackSummary[]> {
+  const conn = await whenSettled()
+  const browserTracks = await local(listLocalTracks)
+  if (conn.status !== 'server') return browserTracks
+  let serverTracks: TrackSummary[]
+  try {
+    serverTracks = (await request<TrackSummary[]>('/tracks', { signal, cache: 'no-store' })).map(withServerUrls)
+  } catch (err) {
+    const e = toApiError(err)
+    // the server just went away: show what this browser has (the next probe switches modes)
+    if (e.code === 'network' && browserTracks.length) return browserTracks
+    throw e
+  }
+  return [...browserTracks, ...serverTracks].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+}
+
+export async function getTrack(id: string, signal?: AbortSignal): Promise<Track> {
+  if (isLocalId(id)) return local(() => getLocalTrack(id))
+  return withServerUrls(await request<Track>(`/tracks/${enc(id)}`, { signal }))
+}
+
+export async function updateTrack(id: string, patch: TrackPatch): Promise<Track> {
+  if (isLocalId(id)) return local(() => patchLocalTrack(id, patch))
+  return withServerUrls(await request<Track>(`/tracks/${enc(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }))
+}
+
+export async function resetTrack(id: string): Promise<Track> {
+  if (isLocalId(id)) return local(() => resetLocalTrack(id))
+  return withServerUrls(await request<Track>(`/tracks/${enc(id)}/reset`, { method: 'POST' }))
+}
+
+export async function reanalyzeTrack(id: string, options?: JobOptions): Promise<Job> {
+  if (isLocalId(id)) return local(() => startLocalReanalysis(id))
+  const job = await request<Job>(`/tracks/${enc(id)}/reanalyze`, {
+    method: 'POST',
+    body: JSON.stringify(options ? { options } : {}),
+  })
+  return serverJob(job)
+}
+
+/** `keepalive` lets a pending delete finish while the page unloads. */
+export async function deleteTrack(id: string, opts: { keepalive?: boolean } = {}): Promise<void> {
+  if (isLocalId(id)) {
+    cancelLocalTrackJobs(id)
+    return local(() => deleteLocalTrack(id))
+  }
+  return request(`/tracks/${enc(id)}`, { method: 'DELETE', keepalive: opts.keepalive })
+}
+
+/** Playback URL of a server track (browser tracks get an object URL from getTrack). */
+export function trackAudioUrl(id: string): string {
+  return resolveServerUrl(`${API_BASE}/tracks/${enc(id)}/audio`)
+}
+
+/**
+ * Fallback for browsers that refuse to stream http://localhost media inside an https page while fetch()
+ * to it works (seen in Safari): loads the whole file into a Blob URL. Null when not applicable / failed.
+ * The caller owns the returned URL (URL.revokeObjectURL when done).
+ */
+export async function fetchAudioBlobUrl(url: string): Promise<string | null> {
+  let target: URL
+  try {
+    target = new URL(url, location.href)
+  } catch {
+    return null
+  }
+  if ((target.protocol !== 'http:' && target.protocol !== 'https:') || target.origin === location.origin) return null
+  try {
+    const res = await serverFetch(target.href, { cache: 'force-cache' })
+    if (!res.ok) return null
+    return URL.createObjectURL(await res.blob())
+  } catch {
+    return null
+  }
+}
+
+export type UploadProgress = (fraction: number, loaded: number, total: number) => void
+
+/**
+ * Starts analysis of a media file and returns the created Job.
+ * Server mode: multipart upload (`file`), XHR for upload progress. Browser mode: analyzed in the page.
+ */
+export async function uploadFile(
+  file: File,
+  onProgress?: UploadProgress,
+  opts: { options?: JobOptions; signal?: AbortSignal } = {},
+): Promise<Job> {
+  const { signal, options } = opts
+  if (signal?.aborted) throw new ApiError('Upload aborted', 'aborted')
+  const conn = await whenSettled()
+  if (conn.status !== 'server' || !conn.apiBase) {
+    return local(() =>
+      startLocalUpload(file, (f) => onProgress?.(f, Math.round(f * file.size), file.size), signal),
+    )
+  }
+  const url = `${conn.apiBase}/jobs/upload`
+  const form = new FormData()
+  form.append('file', file, file.name)
+  if (options) form.append('options', JSON.stringify(options))
+
+  if (needsFetchUpload(url)) {
+    // XHR cannot carry the Local Network Access hint: plain fetch, without byte progress
+    onProgress?.(0, 0, file.size)
+    let res: Response
+    try {
+      res = await serverFetch(url, { method: 'POST', body: form, headers: { Accept: 'application/json' }, signal })
+    } catch (err) {
+      throw toApiError(err)
+    }
+    if (!res.ok) throw await errorFromResponse(res)
+    onProgress?.(1, file.size, file.size)
+    return serverJob((await res.json()) as Job)
+  }
+
+  return new Promise<Job>((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    const onAbortSignal = () => xhr.abort()
+    signal?.addEventListener('abort', onAbortSignal, { once: true })
+    const done = () => signal?.removeEventListener('abort', onAbortSignal)
+
+    xhr.open('POST', url)
+    xhr.setRequestHeader('Accept', 'application/json')
+    xhr.responseType = 'text'
+    xhr.upload.onprogress = (e) => {
+      const total = e.lengthComputable ? e.total : file.size
+      onProgress?.(total ? Math.min(1, e.loaded / total) : 0, e.loaded, total)
+    }
+    xhr.onload = () => {
+      done()
+      const res = new Response(xhr.responseText || null, {
+        status: xhr.status,
+        statusText: xhr.statusText,
+        headers: { 'Content-Type': xhr.getResponseHeader('Content-Type') ?? 'application/json' },
+      })
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          onProgress?.(1, file.size, file.size)
+          resolve(serverJob(JSON.parse(xhr.responseText) as Job))
+        } catch {
+          reject(new ApiError('Malformed server response', 'internal', xhr.status))
+        }
+      } else {
+        errorFromResponse(res).then(reject, () => reject(new ApiError(xhr.statusText, 'http', xhr.status)))
+      }
+    }
+    xhr.onerror = () => {
+      done()
+      noteServerTrouble()
+      reject(new ApiError('Network error', 'network'))
+    }
+    xhr.onabort = () => {
+      done()
+      reject(new ApiError('Upload aborted', 'aborted'))
+    }
+    xhr.send(form)
+  })
+}

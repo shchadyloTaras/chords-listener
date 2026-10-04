@@ -1,0 +1,62 @@
+/* Handpan diagram: steel shell tones per theme. Tokens come from src/index.css. */
+
+/* Dark theme: nitrided, smoky steel. */
+.cw-handpan {
+  --hp-rim: #55565d;
+  --hp-rim-lo: #1a1a1e;
+  --hp-shell-hi: #4d4e56;
+  --hp-shell: #2d2e34;
+  --hp-shell-lo: #18181c;
+  --hp-sheen: rgb(255 255 255 / 0.09);
+  --hp-field: rgb(255 255 255 / 0.045);
+  --hp-field-stroke: rgb(255 255 255 / 0.2);
+  --hp-dimple: rgb(0 0 0 / 0.28);
+  --hp-label: #ecebe7;
+  --hp-label-dim: rgb(236 235 231 / 0.5);
+}
+
+/* Light theme: brushed stainless steel. */
+[data-theme='light'] .cw-handpan {
+  --hp-rim: #b7b5ae;
+  --hp-rim-lo: #7f7d77;
+  --hp-shell-hi: #fbfaf7;
+  --hp-shell: #d9d7d0;
+  --hp-shell-lo: #b2b0a9;
+  --hp-sheen: rgb(255 255 255 / 0.55);
+  --hp-field: rgb(255 255 255 / 0.32);
+  --hp-field-stroke: rgb(40 38 34 / 0.24);
+  --hp-dimple: rgb(40 38 34 / 0.1);
+  --hp-label: #1d1c21;
+  --hp-label-dim: rgb(29 28 33 / 0.5);
+}
+
+.cw-hp-field {
+  transition:
+    fill 160ms ease,
+    stroke 160ms ease,
+    opacity 160ms ease;
+}
+
+.cw-hp-halo {
+  transition: opacity 160ms ease;
+}
+
+/* Native selects styled like the workspace's segmented controls (chevron drawn separately). */
+.cw-hp-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  color: inherit;
+}
+.cw-hp-select option,
+.cw-hp-select optgroup {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cw-hp-field,
+  .cw-hp-halo {
+    transition: none;
+  }
+}

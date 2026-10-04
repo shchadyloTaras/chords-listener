@@ -1,0 +1,320 @@
+import clsx from 'clsx'
+import { AnimatePresence, motion } from 'framer-motion'
+import { CircleAlert, CircleCheck, FileAudio, FolderOpen, Link2, LoaderCircle, Mic, Server, X } from 'lucide-react'
+import { useEffect, useId, useRef, useState, type ClipboardEvent, type FormEvent } from 'react'
+import { useT } from '../../i18n'
+import { useApp } from '../../store'
+import { toApiError, type ClientErrorCode } from '../../lib/api'
+import { onServerRequired, useConnection } from '../../lib/serverMode'
+import { ServerRequiredNotice } from '../layout/ServerStatusGuide'
+import { submitUrl, useJobs } from '../../hooks/useJobs'
+import { useIsDesktopPointer, useMediaQuery } from '../../hooks/useMediaQuery'
+import { errorText } from '../jobs/errorText'
+import { Button } from '../ui/IconButton'
+import { VideoSiteIcon } from '../ui/Logo'
+import { formatBytes } from '../ui/format'
+import { RecorderPanel } from './RecorderPanel'
+import { startFiles } from './startFiles'
+import { checkUrl, FILE_ACCEPT, findUrl } from './url'
+
+type Hint =
+  | { kind: 'idle' }
+  | { kind: 'youtube' }
+  | { kind: 'other' }
+  | { kind: 'invalid' }
+  | { kind: 'error'; code: ClientErrorCode }
+  /** a link was given but no server is connected (browser mode) */
+  | { kind: 'server' }
+
+function UploadProgress() {
+  const t = useT()
+  const lang = useApp((s) => s.lang)
+  const uploads = useJobs((s) => s.uploads)
+  const upload = uploads[uploads.length - 1]
+  if (!upload) return null
+  const pct = Math.round(upload.progress * 100)
+  return (
+    <div className="rounded-2xl border border-border-strong bg-surface px-4 py-3.5">
+      <div className="flex items-center gap-3">
+        <FileAudio className="size-5 shrink-0 text-accent" aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium text-text">{upload.filename}</p>
+          <p className="text-xs text-muted">
+            {pct < 100 ? t('core.upload.uploading', { size: formatBytes(upload.size, lang) }) : t('core.upload.starting')}
+          </p>
+        </div>
+        <span className="font-mono text-sm text-text tabular-nums">{pct}%</span>
+        <Button size="sm" variant="ghost" onClick={() => upload.cancel()}>
+          {t('core.cancel')}
+        </Button>
+      </div>
+      <div
+        className="mt-3 h-1.5 overflow-hidden rounded-full bg-surface-3"
+        role="progressbar"
+        aria-label={t('core.upload.progress')}
+        aria-valuenow={pct}
+        aria-valuemin={0}
+        aria-valuemax={100}
+      >
+        <div className="h-full rounded-full bg-accent transition-[width] duration-150" style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The home page's one big input: paste a link (starts immediately), Enter to submit,
+ * pick a file, or record from the microphone.
+ */
+export function SmartInput({ className }: { className?: string }) {
+  const t = useT()
+  const hintId = useId()
+  const inputRef = useRef<HTMLInputElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [value, setValue] = useState('')
+  const [hint, setHint] = useState<Hint>({ kind: 'idle' })
+  const [busy, setBusy] = useState(false)
+  const [recording, setRecording] = useState(false)
+  const uploading = useJobs((s) => s.uploads.length > 0)
+  const autoFocus = useIsDesktopPointer()
+  const wide = useMediaQuery('(min-width: 640px)')
+  const connected = useConnection((s) => s.status === 'server')
+
+  useEffect(() => {
+    if (autoFocus) inputRef.current?.focus()
+  }, [autoFocus])
+
+  // a link pasted elsewhere on the page while no server is connected lands here, with the explanation
+  useEffect(
+    () =>
+      onServerRequired((url) => {
+        setValue(url)
+        setHint({ kind: 'server' })
+      }),
+    [],
+  )
+
+  const live = (text: string): Hint => {
+    if (!text.trim()) return { kind: 'idle' }
+    const c = checkUrl(text)
+    if (c.ok) return { kind: c.kind === 'youtube' ? 'youtube' : 'other' }
+    return { kind: 'idle' }
+  }
+
+  const submit = async (text: string) => {
+    const c = checkUrl(text)
+    if (!c.ok || !c.url) {
+      setHint({ kind: 'invalid' })
+      inputRef.current?.focus()
+      return
+    }
+    setBusy(true)
+    try {
+      await submitUrl(c.url)
+      setValue('')
+      setHint({ kind: 'idle' })
+    } catch (e) {
+      const code = toApiError(e).code
+      setHint(code === 'server_required' ? { kind: 'server' } : { kind: 'error', code })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault()
+    if (!value.trim()) {
+      inputRef.current?.focus()
+      return
+    }
+    void submit(value)
+  }
+
+  const onPaste = (e: ClipboardEvent<HTMLInputElement>) => {
+    const files = e.clipboardData.files
+    if (files.length) {
+      e.preventDefault()
+      startFiles(files)
+      return
+    }
+    const text = e.clipboardData.getData('text')
+    const url = findUrl(text)
+    // A clean paste into an empty field starts right away.
+    if (url && !value.trim() && checkUrl(url).ok) {
+      e.preventDefault()
+      setValue(url)
+      setHint(live(url))
+      void submit(url)
+    }
+  }
+
+  if (recording) {
+    return (
+      <div className={className}>
+        <RecorderPanel onClose={() => setRecording(false)} />
+      </div>
+    )
+  }
+
+  if (uploading) {
+    return (
+      <div className={className}>
+        <UploadProgress />
+      </div>
+    )
+  }
+
+  const hintNode = (() => {
+    switch (hint.kind) {
+      case 'youtube':
+        return (
+          <span className="flex items-center gap-1.5 text-success">
+            <CircleCheck className="size-3.5 shrink-0" aria-hidden="true" />
+            {t('core.input.hintYoutube')}
+          </span>
+        )
+      case 'other':
+        return (
+          <span className="flex items-center gap-1.5 text-text">
+            <CircleCheck className="size-3.5 shrink-0 text-success" aria-hidden="true" />
+            {t('core.input.hintOther')}
+          </span>
+        )
+      case 'invalid':
+        return (
+          <span className="flex items-center gap-1.5 text-danger">
+            <CircleAlert className="size-3.5 shrink-0" aria-hidden="true" />
+            {t('core.input.hintInvalid')}
+          </span>
+        )
+      case 'error':
+        return (
+          <span className="flex items-center gap-1.5 text-danger">
+            <CircleAlert className="size-3.5 shrink-0" aria-hidden="true" />
+            {errorText(hint.code)}
+          </span>
+        )
+      case 'server':
+        return connected ? (
+          <span className="flex items-center gap-1.5 text-success">
+            <CircleCheck className="size-3.5 shrink-0" aria-hidden="true" />
+            {t('web.input.serverReady')}
+          </span>
+        ) : (
+          <span className="flex items-center gap-1.5 text-text">
+            <Server className="size-3.5 shrink-0 text-accent" aria-hidden="true" />
+            {t('web.input.needServer')}
+          </span>
+        )
+      default:
+        return <span className="text-muted">{t('core.input.hintIdle')}</span>
+    }
+  })()
+
+  const isYoutube = hint.kind === 'youtube'
+
+  return (
+    <div className={className}>
+      <form onSubmit={onSubmit} noValidate>
+        <div
+          className={clsx(
+            'group flex h-16 items-center gap-2 rounded-2xl border bg-surface pr-2 pl-4 transition-[border-color,box-shadow] duration-150',
+            'focus-within:border-accent focus-within:shadow-[0_0_0_4px_var(--accent-soft)]',
+            hint.kind === 'invalid' || hint.kind === 'error' ? 'border-danger/60' : 'border-border-strong',
+          )}
+        >
+          <span className="flex size-6 shrink-0 items-center justify-center text-faint" aria-hidden="true">
+            {isYoutube ? <VideoSiteIcon className="size-5 text-text" /> : <Link2 className="size-5" />}
+          </span>
+          <label htmlFor={`${hintId}-input`} className="sr-only">
+            {t('core.input.label')}
+          </label>
+          <input
+            id={`${hintId}-input`}
+            ref={inputRef}
+            type="url"
+            inputMode="url"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            enterKeyHint="go"
+            value={value}
+            disabled={busy}
+            placeholder={t(wide ? 'core.input.placeholder' : 'core.input.placeholderShort')}
+            aria-describedby={hintId}
+            aria-invalid={hint.kind === 'invalid' || hint.kind === 'error'}
+            onChange={(e) => {
+              setValue(e.target.value)
+              setHint(live(e.target.value))
+            }}
+            onBlur={() => {
+              if (value.trim() && !checkUrl(value).ok) setHint({ kind: 'invalid' })
+            }}
+            onPaste={onPaste}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape' && value) {
+                e.preventDefault()
+                setValue('')
+                setHint({ kind: 'idle' })
+              }
+            }}
+            className="h-full min-w-0 flex-1 bg-transparent text-base text-text outline-none! placeholder:text-faint sm:text-[17px]"
+          />
+          <AnimatePresence>
+            {value && !busy && (
+              <motion.button
+                type="button"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.1 }}
+                aria-label={t('core.input.clear')}
+                onClick={() => {
+                  setValue('')
+                  setHint({ kind: 'idle' })
+                  inputRef.current?.focus()
+                }}
+                className="rounded-lg p-1.5 text-faint hover:bg-surface-3 hover:text-text"
+              >
+                <X className="size-4" />
+              </motion.button>
+            )}
+          </AnimatePresence>
+          <Button type="submit" variant="primary" disabled={busy} className="h-11 px-3.5 sm:px-5">
+            {busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : null}
+            <span className="hidden sm:inline">{t('core.input.submit')}</span>
+            <span className="sm:hidden">{t('core.input.submitShort')}</span>
+          </Button>
+        </div>
+        <p id={hintId} aria-live="polite" className="mt-2.5 min-h-5 px-1 text-sm">
+          {hintNode}
+        </p>
+      </form>
+      {hint.kind === 'server' && !connected && (
+        <ServerRequiredNotice onConnected={() => void submit(value)} onDismiss={() => setHint({ kind: 'idle' })} />
+      )}
+
+      <div className="mt-5 flex flex-wrap items-center gap-2">
+        <Button icon={<FolderOpen className="size-4" />} onClick={() => fileRef.current?.click()}>
+          {t('core.input.pickFile')}
+        </Button>
+        <Button variant="ghost" icon={<Mic className="size-4" />} onClick={() => setRecording(true)}>
+          {t('core.input.record')}
+        </Button>
+        <span className="hidden text-sm text-faint md:inline">{t('core.input.dropHint')}</span>
+        <input
+          ref={fileRef}
+          type="file"
+          accept={FILE_ACCEPT}
+          multiple
+          hidden
+          onChange={(e) => {
+            if (e.target.files?.length) startFiles(e.target.files)
+            e.target.value = ''
+          }}
+        />
+      </div>
+    </div>
+  )
+}

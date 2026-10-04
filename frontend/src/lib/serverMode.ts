@@ -1,0 +1,379 @@
+// Where the chord server is, if anywhere:
+//  · same origin — the page is served by the backend (http://localhost:8765) or proxied by Vite: API at "/api";
+//  · remote — the page lives elsewhere (GitHub Pages) and talks to the user's own server at `serverUrl`
+//    (default http://localhost:8765, started with ./start.sh);
+//  · none — "browser mode": files and mic recordings are analyzed in the page and kept in IndexedDB.
+//
+// Chrome's Local Network Access (Chrome 142+): a public https page needs the user's permission
+// ("loopback-network" / "local-network", formerly "local-network-access") before it may reach
+// http://localhost or a LAN address. The first request shows the browser prompt, so a page that is still
+// at "prompt" is only probed when the user asks for it (a click), never in the background.
+// http://localhost itself is a potentially trustworthy origin (no mixed-content block in Chrome/Firefox);
+// LAN host names need fetch(..., { targetAddressSpace: 'local' }) to be exempt from mixed-content checks.
+import { useEffect } from 'react'
+import { create } from 'zustand'
+import { useApp } from '../store'
+import type { Health } from '../types'
+
+/** Static build hosted away from the backend (GitHub Pages, base "/chords-listener/"). */
+export const HOSTED = import.meta.env.BASE_URL !== '/'
+
+export const SAME_ORIGIN_API = '/api'
+export const PROJECT_REPO = 'https://github.com/shchadyloTaras/chords-listener.git'
+
+export type ConnectionStatus = 'checking' | 'server' | 'browser'
+export type NetworkPermission = 'granted' | 'prompt' | 'denied' | 'unsupported'
+/** why the last probe did not reach a server */
+export type ProbeFailure = 'unreachable' | 'permission' | 'blocked' | 'invalid-url' | 'not-chords'
+export type AddressSpace = 'loopback' | 'local' | 'public'
+
+export interface ConnectionState {
+  status: ConnectionStatus
+  /** API base of the connected server: "/api" or "http://localhost:8765/api" */
+  apiBase: string | null
+  /** origin of the connected server (absolute), used to resolve URLs it returns */
+  serverOrigin: string | null
+  /** the connected server is on another origin than the page */
+  remote: boolean
+  health: Health | null
+  /** browser permission to reach the configured server (Local Network Access) */
+  permission: NetworkPermission
+  probing: boolean
+  failure: ProbeFailure | null
+  checkedAt: number
+}
+
+export const useConnection = create<ConnectionState>()(() => ({
+  status: 'checking',
+  apiBase: null,
+  serverOrigin: null,
+  remote: false,
+  health: null,
+  permission: 'unsupported',
+  probing: false,
+  failure: null,
+  checkedAt: 0,
+}))
+
+// ------------------------------------------------------------------ addresses
+
+/** "localhost:8765", "http://127.0.0.1:8765/api/" → "http://localhost:8765"-style origin, or null. */
+export function normalizeServerUrl(raw: string): string | null {
+  let text = raw.trim()
+  if (!text) return null
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) text = `http://${text}`
+  let u: URL
+  try {
+    u = new URL(text)
+  } catch {
+    return null
+  }
+  if ((u.protocol !== 'http:' && u.protocol !== 'https:') || !u.hostname || u.username || u.password) return null
+  return u.origin
+}
+
+function isIpLiteral(host: string): boolean {
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':')
+}
+
+/** Address space a host name belongs to, as far as the name alone tells. */
+export function addressSpaceOf(hostname: string): AddressSpace {
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  if (h === 'localhost' || h.endsWith('.localhost') || /^127\./.test(h) || h === '::1' || h === '0.0.0.0') return 'loopback'
+  if (
+    /^10\./.test(h) ||
+    /^192\.168\./.test(h) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(h) ||
+    /^169\.254\./.test(h) ||
+    /^f[cd][0-9a-f]{2}:/.test(h) ||
+    /^fe80:/.test(h) ||
+    h.endsWith('.local')
+  )
+    return 'local'
+  return 'public'
+}
+
+function pageSpace(): AddressSpace {
+  return typeof location === 'undefined' ? 'loopback' : addressSpaceOf(location.hostname)
+}
+
+/**
+ * Address space Chrome will gate a request to `origin` with, when the page itself is public
+ * (null = no Local Network Access permission involved).
+ */
+export function gatedSpace(origin: string, page: AddressSpace = pageSpace()): 'loopback' | 'local' | null {
+  if (page !== 'public') return null
+  let host: string
+  try {
+    host = new URL(origin).hostname
+  } catch {
+    return null
+  }
+  const space = addressSpaceOf(host)
+  if (space !== 'public') return space
+  // a LAN name like "studio-mac.lan" over plain http: we can only assume it is local
+  return origin.startsWith('http:') && !isIpLiteral(host.replace(/^\[|\]$/g, '')) ? 'local' : null
+}
+
+/**
+ * `targetAddressSpace` to pass to fetch(): needed only for http LAN names on an https page (mixed content);
+ * loopback and private IP literals are recognized by the browser on its own.
+ */
+export function addressHint(url: string, page: AddressSpace = pageSpace(), secure = isSecurePage()): 'local' | null {
+  if (!secure) return null
+  let u: URL
+  try {
+    u = new URL(url)
+  } catch {
+    return null
+  }
+  if (u.protocol !== 'http:') return null
+  const host = u.hostname.replace(/^\[|\]$/g, '')
+  if (addressSpaceOf(host) !== 'public' || isIpLiteral(host)) return null
+  return gatedSpace(u.origin, page) === 'local' ? 'local' : null
+}
+
+function isSecurePage(): boolean {
+  return typeof location !== 'undefined' && location.protocol === 'https:'
+}
+
+/** fetch() towards the chord server, with the Local Network Access hint when the browser needs one. */
+export function serverFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const hint = addressHint(url)
+  if (hint) {
+    try {
+      return fetch(new Request(url, { ...init, targetAddressSpace: hint } as RequestInit & { targetAddressSpace: string }))
+    } catch {
+      /* this browser does not know the option */
+    }
+  }
+  return fetch(url, init)
+}
+
+/** Whether uploads must use fetch() (no progress events) instead of XHR, which cannot carry the hint. */
+export function needsFetchUpload(url: string): boolean {
+  return addressHint(url) !== null
+}
+
+/** Resolves a path the server returned ("/api/tracks/…/audio") against the connected server. */
+export function resolveServerUrl(path: string): string {
+  const { remote, serverOrigin } = useConnection.getState()
+  if (!path || !remote || !serverOrigin || !path.startsWith('/') || path.startsWith('//')) return path
+  return serverOrigin + path
+}
+
+// ------------------------------------------------------------------ permission (Chrome LNA)
+
+const watched = new WeakSet<PermissionStatus>()
+
+async function queryPermission(space: 'loopback' | 'local'): Promise<NetworkPermission> {
+  if (typeof navigator === 'undefined' || !navigator.permissions?.query) return 'unsupported'
+  const names = space === 'loopback' ? ['loopback-network', 'local-network-access'] : ['local-network', 'local-network-access']
+  for (const name of names) {
+    try {
+      const status = await navigator.permissions.query({ name } as unknown as PermissionDescriptor)
+      if (!watched.has(status)) {
+        watched.add(status)
+        status.addEventListener('change', () => {
+          useConnection.setState({ permission: status.state })
+          if (status.state === 'granted') void probeServer()
+        })
+      }
+      return status.state
+    } catch {
+      /* permission name unknown to this browser: try the next one */
+    }
+  }
+  return 'unsupported'
+}
+
+// ------------------------------------------------------------------ probing
+
+interface Candidate {
+  base: string
+  origin: string
+  remote: boolean
+}
+
+function candidates(): Candidate[] | null {
+  const out: Candidate[] = []
+  const here = typeof location !== 'undefined' ? location.origin : ''
+  if (!HOSTED && here) out.push({ base: SAME_ORIGIN_API, origin: here, remote: false })
+  const origin = normalizeServerUrl(useApp.getState().serverUrl)
+  if (!origin) return out.length ? out : null
+  if (HOSTED || origin !== here) out.push({ base: `${origin}/api`, origin, remote: true })
+  return out
+}
+
+function isHealth(v: unknown): v is Health {
+  if (!v || typeof v !== 'object') return false
+  const h = v as Partial<Health>
+  return typeof h.ok === 'boolean' && !!h.engine && typeof h.engine === 'object'
+}
+
+type HealthResult = { health: Health } | { failure: ProbeFailure }
+
+async function fetchHealth(base: string, timeoutMs: number): Promise<HealthResult> {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+  try {
+    const res = await serverFetch(`${base}/health`, {
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+      signal: ctrl.signal,
+    })
+    if (!res.ok) return { failure: res.status === 404 ? 'not-chords' : 'unreachable' }
+    const body: unknown = await res.json().catch(() => null)
+    return isHealth(body) ? { health: body } : { failure: 'not-chords' }
+  } catch {
+    return { failure: 'unreachable' }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+let inflight: Promise<boolean> | null = null
+let pendingInteractive: Promise<boolean> | null = null
+
+/**
+ * Looks for a server (same origin first, then `serverUrl`) and updates the connection state.
+ * `interactive` = the user asked for it (a click): may show the browser's local-network prompt and waits for it.
+ */
+export function probeServer(opts: { interactive?: boolean } = {}): Promise<boolean> {
+  if (!opts.interactive) return inflight ?? (inflight = run(false).finally(() => (inflight = null)))
+  if (pendingInteractive) return pendingInteractive
+  const prev = inflight ?? Promise.resolve(false)
+  pendingInteractive = prev
+    .catch(() => false)
+    .then(() => (inflight = run(true).finally(() => (inflight = null))))
+    .finally(() => (pendingInteractive = null))
+  return pendingInteractive
+}
+
+async function run(interactive: boolean): Promise<boolean> {
+  useConnection.setState({ probing: true })
+  const list = candidates()
+  let failure: ProbeFailure | null = list ? 'unreachable' : 'invalid-url'
+  let permission: NetworkPermission = 'unsupported'
+  for (const c of list ?? []) {
+    const gated = c.remote ? gatedSpace(c.origin) : null
+    let timeout = interactive ? 8000 : 4000
+    if (gated) {
+      permission = await queryPermission(gated)
+      if (permission === 'denied' && !interactive) {
+        failure = 'blocked'
+        continue
+      }
+      if (permission === 'prompt') {
+        if (!interactive) {
+          failure = 'permission'
+          continue
+        }
+        timeout = 90_000 // the browser is asking the user
+      }
+    }
+    const result = await fetchHealth(c.base, timeout)
+    if ('health' in result) {
+      useConnection.setState({
+        status: 'server',
+        apiBase: c.base,
+        serverOrigin: c.origin,
+        remote: c.remote,
+        health: result.health,
+        permission: gated ? 'granted' : permission,
+        probing: false,
+        failure: null,
+        checkedAt: Date.now(),
+      })
+      return true
+    }
+    failure = result.failure
+    if (gated && failure === 'unreachable') {
+      // a refused prompt looks like a network error: tell the two apart
+      permission = await queryPermission(gated)
+      if (permission === 'denied') failure = 'blocked'
+    }
+  }
+  useConnection.setState({
+    status: 'browser',
+    apiBase: null,
+    serverOrigin: null,
+    remote: false,
+    health: null,
+    permission,
+    probing: false,
+    failure,
+    checkedAt: Date.now(),
+  })
+  return false
+}
+
+/** Resolves once the first probe has finished (or after `timeoutMs`). */
+export function whenSettled(timeoutMs = 6000): Promise<ConnectionState> {
+  const now = useConnection.getState()
+  if (now.status !== 'checking') return Promise.resolve(now)
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer)
+      unsubscribe()
+      resolve(useConnection.getState())
+    }
+    const timer = setTimeout(done, timeoutMs)
+    const unsubscribe = useConnection.subscribe((s) => {
+      if (s.status !== 'checking') done()
+    })
+  })
+}
+
+let troubleTimer: ReturnType<typeof setTimeout> | null = null
+
+/** A server request failed at the network level: re-check soon (the server may have stopped). */
+export function noteServerTrouble(): void {
+  if (troubleTimer) return
+  troubleTimer = setTimeout(() => {
+    troubleTimer = null
+    void probeServer()
+  }, 300)
+}
+
+/** Probes on start, when the address changes, on focus, and periodically (every 10 s while not connected). */
+export function useConnectionPolling(): void {
+  const status = useConnection((s) => s.status)
+  const serverUrl = useApp((s) => s.serverUrl)
+
+  useEffect(() => {
+    void probeServer()
+  }, [serverUrl])
+
+  useEffect(() => {
+    const onFocus = () => void probeServer()
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [])
+
+  useEffect(() => {
+    const every = status === 'server' ? 30_000 : HOSTED ? 10_000 : 3_000
+    const id = window.setInterval(() => {
+      if (!document.hidden) void probeServer()
+    }, every)
+    return () => window.clearInterval(id)
+  }, [status])
+}
+
+// ------------------------------------------------------------------ "this needs the server" hand-off
+
+type ServerRequiredListener = (url: string) => void
+const serverRequiredListeners = new Set<ServerRequiredListener>()
+
+/** A link was given while no server is connected (e.g. pasted anywhere on the page): let the input explain. */
+export function announceServerRequired(url: string): boolean {
+  serverRequiredListeners.forEach((fn) => fn(url))
+  return serverRequiredListeners.size > 0
+}
+
+export function onServerRequired(fn: ServerRequiredListener): () => void {
+  serverRequiredListeners.add(fn)
+  return () => {
+    serverRequiredListeners.delete(fn)
+  }
+}

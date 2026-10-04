@@ -1,0 +1,115 @@
+/* Chord workspace styles that are awkward as utilities. Tokens come from src/index.css. */
+
+@property --cw-glow {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: transparent;
+}
+
+/* Lead-sheet chord typography: big root, raised accidental, smaller quality, slash bass. */
+.cw-chord {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  line-height: 1;
+  white-space: nowrap;
+  font-feature-settings: 'ss01' on;
+}
+.cw-chord .cw-acc {
+  font-size: 0.62em;
+  position: relative;
+  top: -0.48em;
+  margin-left: 0.02em;
+  letter-spacing: 0;
+}
+.cw-chord .cw-suffix {
+  font-size: 0.56em;
+  font-weight: 500;
+  margin-left: 0.04em;
+  letter-spacing: -0.01em;
+}
+.cw-chord .cw-bass {
+  font-size: 0.56em;
+  font-weight: 500;
+  opacity: 0.78;
+  letter-spacing: -0.01em;
+}
+.cw-chord .cw-acc + .cw-suffix {
+  margin-left: -0.08em;
+}
+
+.cw-lowconf {
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 0.18em;
+  text-decoration-color: color-mix(in oklch, var(--muted) 70%, transparent);
+}
+
+.cw-no-scrollbar {
+  scrollbar-width: none;
+}
+.cw-no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Hint that a horizontally scrolling row continues past the right edge. */
+.cw-fade-end {
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+
+/* Hero "stage light": a soft wash in the current chord's color that cross-fades on change. */
+.cw-stage {
+  transition: --cw-glow 600ms ease;
+  background:
+    radial-gradient(120% 140% at 0% 0%, color-mix(in oklch, var(--cw-glow) 22%, transparent) 0%, transparent 55%),
+    var(--surface);
+}
+[data-theme='light'] .cw-stage {
+  background:
+    radial-gradient(120% 140% at 0% 0%, color-mix(in oklch, var(--cw-glow) 16%, transparent) 0%, transparent 55%),
+    var(--surface);
+}
+
+/* Beat dots (hero countdown + sheet bars). State is set from the playhead clock. */
+.cw-beat {
+  transition: background-color 90ms linear, transform 120ms ease-out, opacity 90ms linear;
+}
+.cw-beat[data-s='past'] {
+  opacity: 0.28;
+}
+.cw-beat[data-s='now'] {
+  background-color: var(--cw-beat-on, var(--accent));
+  transform: scale(1.35);
+  opacity: 1;
+}
+
+/* Piano keys keep real-instrument contrast in both themes. */
+.cw-piano {
+  --cw-key-white: #e8e6e0;
+  --cw-key-black: #101013;
+}
+[data-theme='light'] .cw-piano {
+  --cw-key-white: #ffffff;
+  --cw-key-black: #26252b;
+}
+
+/* Progress fills are driven with transform: scaleX(). */
+.cw-fill {
+  transform-origin: 0 50%;
+  will-change: transform;
+}
+
+.cw-hatch {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0 5px,
+    color-mix(in oklch, var(--faint) 22%, transparent) 5px 6px
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cw-stage {
+    transition: none;
+  }
+}

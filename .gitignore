@@ -1,0 +1,42 @@
+data/
+node_modules/
+frontend/dist/
+frontend/dist-pages/
+backend/.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+coverage/
+*.tsbuildinfo
+.DS_Store
+
+# Local tooling / secrets
+.claude/
+.vscode/
+.idea/
+.env
+.env.*
+*.log
+
+# Media and test recordings (songs live in data/, synthetic test songs are generated on demand)
+*.wav
+*.mp3
+*.m4a
+*.aac
+*.aiff
+*.flac
+*.ogg
+*.opus
+*.webm
+*.mp4
+*.mov
+*.mkv
+
+# Firebase CLI / emulators
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
+database-debug.log*
+pubsub-debug.log*
+.firebase/
