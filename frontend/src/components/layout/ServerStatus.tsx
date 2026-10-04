@@ -1,89 +1,249 @@
 import clsx from 'clsx'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Check, Globe, LoaderCircle, Server } from 'lucide-react'
-import { useEffect, useId, useRef, useState } from 'react'
+import { Check, ChevronRight, Cloud, ExternalLink, Globe, LoaderCircle, RefreshCw, Server } from 'lucide-react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { t as tNow, useT } from '../../i18n'
-import { HOSTED, normalizeServerUrl, useConnection } from '../../lib/serverMode'
+import { useAuth, useAuthDialog } from '../../lib/auth'
+import {
+  HOSTED,
+  normalizeServerUrl,
+  refreshCloudHealth,
+  setLocalServerEnabled,
+  useConnection,
+  useServerPrefs,
+} from '../../lib/serverMode'
 import { useApp } from '../../store'
+import { AccountButtons } from '../account/AccountCta'
+import { useCloudInvite } from '../account/cloudInvite'
+import { Button } from '../ui/IconButton'
 import { ServerSetup } from './ServerStatusGuide'
 
-/** Toasts when the local server appears / goes away (after the first check). */
+type ModeKind = 'cloud' | 'server' | 'browser' | 'checking'
+
+function useModeKind(): ModeKind {
+  return useConnection((s) =>
+    s.status === 'server' ? (s.backend === 'cloud' ? 'cloud' : 'server') : s.status === 'browser' ? 'browser' : 'checking',
+  )
+}
+
+/** Toasts when the user's own server appears / goes away (after the first check). The cloud comes with signing in. */
 function useConnectionToasts() {
   const status = useConnection((s) => s.status)
   const remote = useConnection((s) => s.remote)
-  const prev = useRef({ status, remote })
+  const backend = useConnection((s) => s.backend)
+  const prev = useRef({ status, remote, backend })
   useEffect(() => {
     const before = prev.current
-    prev.current = { status, remote }
-    if (before.status === 'checking' || before.status === status) return
+    prev.current = { status, remote, backend }
+    if (before.status === 'checking' || (before.status === status && before.backend === backend)) return
+    if (backend === 'cloud' || before.backend === 'cloud') return
     // the page served by the server keeps its own banner; toasts are for the hosted / remote setup
     if (!HOSTED && !remote && !before.remote) return
     const { toast } = useApp.getState()
     if (status === 'server') toast(tNow('web.toast.connected'), 'success')
     else if (status === 'browser' && before.status === 'server') toast(tNow('web.toast.disconnected'), 'info')
-  }, [status, remote])
+  }, [status, remote, backend])
+}
+
+function PanelHead({ icon, tone, title, children }: { icon: ReactNode; tone: 'ok' | 'calm'; title: string; children?: ReactNode }) {
+  return (
+    <div className="flex items-start gap-3">
+      <span
+        className={clsx(
+          'mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg',
+          tone === 'ok' ? 'bg-success/15 text-success' : 'bg-accent-soft text-accent',
+        )}
+      >
+        {icon}
+      </span>
+      <div className="min-w-0">
+        <p className="flex items-center gap-1.5 font-display text-base font-semibold tracking-tight">
+          {title}
+          {tone === 'ok' && <Check className="size-4 text-success" aria-hidden="true" />}
+        </p>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+/** Health of the cloud: waking up (Cloud Run starts on demand), not answering, or the engine. */
+function CloudHealthLine() {
+  const t = useT()
+  const health = useConnection((s) => s.health)
+  const failure = useConnection((s) => s.failure)
+  const [checking, setChecking] = useState(false)
+  if (health) {
+    return (
+      <p className="mt-1 text-xs text-faint">
+        {t('web.server.engine', { engine: `${health.engine.name} ${health.engine.version}`.trim() })}
+        {health.ytdlp ? ` · yt-dlp ${health.ytdlp}` : ''}
+      </p>
+    )
+  }
+  if (failure) {
+    return (
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-text">
+        <span>{t('web.cloud.down')}</span>
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={checking}
+          icon={<RefreshCw className={clsx('size-3.5', checking && 'animate-spin')} aria-hidden="true" />}
+          onClick={() => {
+            setChecking(true)
+            void refreshCloudHealth().finally(() => setChecking(false))
+          }}
+        >
+          {t('web.cloud.check')}
+        </Button>
+      </div>
+    )
+  }
+  return (
+    <p className="mt-1 flex items-center gap-1.5 text-xs text-faint">
+      <LoaderCircle className="size-3 animate-spin" aria-hidden="true" />
+      {t('web.cloud.waking')}
+    </p>
+  )
+}
+
+/** "Advanced": the user's own server (./start.sh) — optional, never the main path. */
+function AdvancedServer({ onConnected }: { onConnected(): void }) {
+  const t = useT()
+  const kind = useModeKind()
+  const signedIn = useAuth((s) => !!s.user)
+  const localServer = useServerPrefs((s) => s.localServer)
+  const serverUrl = useApp((s) => s.serverUrl)
+  const direct = normalizeServerUrl(serverUrl)
+  const [open, setOpen] = useState(kind === 'server')
+
+  return (
+    <div className="mt-4 border-t border-border pt-3">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="-mx-1 flex w-[calc(100%+0.5rem)] items-center gap-1.5 rounded-md px-1 py-1 text-left text-xs font-semibold tracking-wide text-faint uppercase hover:text-muted"
+      >
+        <ChevronRight className={clsx('size-3.5 transition-transform duration-150', open && 'rotate-90')} aria-hidden="true" />
+        {t('web.advanced.summary')}
+      </button>
+      {open && (
+        <div className="mt-2 space-y-3">
+          {signedIn && kind === 'cloud' ? (
+            <p className="text-sm text-muted">
+              {t('web.advanced.cloudFirst')}{' '}
+              {direct && (
+                <a
+                  href={direct}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="inline-flex items-center gap-1 font-mono text-accent hover:underline"
+                >
+                  {direct.replace(/^https?:\/\//, '')}
+                  <ExternalLink className="size-3" aria-hidden="true" />
+                </a>
+              )}
+            </p>
+          ) : (
+            <>
+              <p className="text-sm text-muted">{t('web.advanced.what')}</p>
+              <ServerSetup showSteps={kind !== 'server'} onConnected={onConnected} />
+              {localServer && HOSTED && (
+                <button
+                  type="button"
+                  onClick={() => setLocalServerEnabled(false)}
+                  className="text-xs text-muted underline-offset-2 hover:text-text hover:underline"
+                >
+                  {t('web.advanced.disable')}
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function PanelBody({ onConnected }: { onConnected(): void }) {
   const t = useT()
-  const status = useConnection((s) => s.status)
-  const health = useConnection((s) => s.health)
+  const kind = useModeKind()
   const serverOrigin = useConnection((s) => s.serverOrigin)
+  const health = useConnection((s) => s.health)
+  const email = useAuth((s) => s.user?.email ?? '')
+  const invite = useCloudInvite()
   const serverUrl = useApp((s) => s.serverUrl)
-  const connected = status === 'server'
   const url = (serverOrigin ?? normalizeServerUrl(serverUrl) ?? serverUrl).replace(/^https?:\/\//, '')
+
+  if (kind === 'cloud') {
+    return (
+      <>
+        <PanelHead icon={<Cloud className="size-4" aria-hidden="true" />} tone="ok" title={t('web.mode.cloud')}>
+          <p className="mt-0.5 text-sm text-muted">{t('web.cloud.what')}</p>
+          {email && <p className="mt-1 truncate text-xs text-faint">{t('web.cloud.account', { email })}</p>}
+          <CloudHealthLine />
+        </PanelHead>
+        <p className="mt-3 text-xs text-faint">{t('web.cloud.limits')}</p>
+        <AdvancedServer onConnected={onConnected} />
+      </>
+    )
+  }
+
+  if (kind === 'server') {
+    return (
+      <>
+        <PanelHead icon={<Server className="size-4" aria-hidden="true" />} tone="ok" title={t('web.mode.server')}>
+          <p className="mt-0.5 text-sm text-muted">{t('web.server.connected', { url })}</p>
+        </PanelHead>
+        <p className="mt-3 text-sm text-muted">
+          {t('web.server.what')}
+          {health?.engine?.name && (
+            <span className="mt-1 block text-xs text-faint">
+              {t('web.server.engine', { engine: `${health.engine.name} ${health.engine.version}`.trim() })}
+              {health.ytdlp ? ` · yt-dlp ${health.ytdlp}` : ''}
+            </span>
+          )}
+        </p>
+        <p className="mt-3 text-xs text-faint">{t('web.browser.localNote')}</p>
+        <AdvancedServer onConnected={onConnected} />
+      </>
+    )
+  }
 
   return (
     <>
-      <div className="flex items-start gap-3">
-        <span
-          className={clsx(
-            'mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg',
-            connected ? 'bg-success/15 text-success' : 'bg-accent-soft text-accent',
-          )}
-        >
-          {connected ? <Server className="size-4" aria-hidden="true" /> : <Globe className="size-4" aria-hidden="true" />}
-        </span>
-        <div className="min-w-0">
-          <p className="font-display text-base font-semibold tracking-tight">
-            {connected ? t('web.mode.server') : t('web.mode.browser')}
-          </p>
-          <p className="mt-0.5 text-sm text-muted">
-            {connected ? t('web.server.connected', { url }) : t('web.browser.what')}
-          </p>
+      <PanelHead
+        icon={kind === 'checking' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Globe className="size-4" aria-hidden="true" />}
+        tone="calm"
+        title={kind === 'checking' ? t('web.mode.checking') : t('web.mode.browser')}
+      >
+        <p className="mt-0.5 text-sm text-muted">{t('web.browser.what')}</p>
+        <p className="mt-1 text-sm text-muted">{t('web.browser.needServer')}</p>
+      </PanelHead>
+      {invite && (
+        <div className="mt-4 rounded-xl border border-accent/30 bg-accent-soft p-3">
+          <p className="text-sm font-medium text-text">{t('web.browser.cta')}</p>
+          <AccountButtons size="sm" className="mt-2.5" />
         </div>
-      </div>
-
-      <p className="mt-3 text-sm text-muted">
-        {connected ? t('web.server.what') : t('web.browser.needServer')}
-        {connected && health?.engine?.name && (
-          <span className="mt-1 block text-xs text-faint">
-            {t('web.server.engine', { engine: `${health.engine.name} ${health.engine.version}`.trim() })}
-            {health.ytdlp ? ` · yt-dlp ${health.ytdlp}` : ''}
-          </span>
-        )}
-      </p>
-
-      {!connected && (
-        <p className="mt-4 text-xs font-semibold tracking-wide text-faint uppercase">{t('web.guide.title')}</p>
       )}
-      <div className="mt-2">
-        <ServerSetup showSteps={!connected} onConnected={onConnected} />
-      </div>
-      {connected && <p className="mt-4 text-xs text-faint">{t('web.browser.localNote')}</p>}
+      <AdvancedServer onConnected={onConnected} />
     </>
   )
 }
 
 /**
- * Header chip with the current mode ("Local server ✓" / "Browser mode") and a popover with the
- * server address, a connection check and setup instructions. Hidden when the page is served by
- * the server itself (nothing to choose there).
+ * Header chip with the current mode («Хмара ✓» / «Браузерний режим» / «Локальний сервер ✓») and a popover:
+ * what the mode means, signing up for the cloud, and (under "Advanced") the user's own server. Hidden when
+ * the page is served by the server itself (nothing to choose there).
  */
 export function ServerStatus({ compact = false }: { compact?: boolean }) {
   const t = useT()
-  const status = useConnection((s) => s.status)
+  const kind = useModeKind()
   const remote = useConnection((s) => s.remote)
+  // the cloud did not answer its health check: still the cloud, but say so
+  const troubled = useConnection((s) => s.backend === 'cloud' && !!s.failure)
   const [open, setOpen] = useState(false)
   const id = useId()
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -116,21 +276,39 @@ export function ServerStatus({ compact = false }: { compact?: boolean }) {
     }
   }, [open])
 
-  const visible = HOSTED || status === 'browser' || (status === 'server' && remote)
+  // the account dialog takes over: close the popover underneath
+  useEffect(
+    () =>
+      useAuthDialog.subscribe((s, prev) => {
+        if (s.open && !prev.open) setOpen(false)
+      }),
+    [],
+  )
+
+  const visible = HOSTED || kind === 'browser' || kind === 'cloud' || (kind === 'server' && remote)
   if (!visible) return null
 
-  const label = status === 'server' ? t('web.mode.server') : status === 'browser' ? t('web.mode.browser') : t('web.mode.checking')
-  const icon =
-    status === 'server' ? (
-      <span className="relative flex size-4 items-center justify-center" aria-hidden="true">
-        <Server className="size-4" />
-        <span className="absolute -right-0.5 -bottom-0.5 size-2 rounded-full bg-success ring-2 ring-surface-2" />
-      </span>
-    ) : status === 'browser' ? (
-      <Globe className="size-4" aria-hidden="true" />
-    ) : (
-      <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
-    )
+  const label =
+    kind === 'cloud'
+      ? t('web.mode.cloud')
+      : kind === 'server'
+        ? t('web.mode.server')
+        : kind === 'browser'
+          ? t('web.mode.browser')
+          : t('web.mode.checking')
+  const connected = (kind === 'cloud' || kind === 'server') && !troubled
+  const icon = kind === 'cloud' || kind === 'server' ? (
+    <span className="relative flex size-4 items-center justify-center" aria-hidden="true">
+      {kind === 'cloud' ? <Cloud className="size-4" /> : <Server className="size-4" />}
+      <span
+        className={clsx('absolute -right-0.5 -bottom-0.5 size-2 rounded-full ring-2 ring-surface-2', troubled ? 'bg-accent' : 'bg-success')}
+      />
+    </span>
+  ) : kind === 'browser' ? (
+    <Globe className="size-4" aria-hidden="true" />
+  ) : (
+    <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+  )
 
   return (
     <div ref={wrapRef} className="relative">
@@ -148,12 +326,12 @@ export function ServerStatus({ compact = false }: { compact?: boolean }) {
           'border-border bg-surface-2 text-muted hover:bg-surface-3 hover:text-text',
           open && 'bg-surface-3 text-text',
           compact ? 'w-8 justify-center' : 'w-8 justify-center sm:w-auto sm:px-2.5',
-          status === 'server' && 'text-text',
+          connected && 'text-text',
         )}
       >
         {icon}
         {!compact && <span className="hidden whitespace-nowrap sm:inline">{label}</span>}
-        {!compact && status === 'server' && <Check className="hidden size-3.5 text-success sm:block" aria-hidden="true" />}
+        {!compact && connected && <Check className="hidden size-3.5 text-success sm:block" aria-hidden="true" />}
       </button>
 
       <AnimatePresence>

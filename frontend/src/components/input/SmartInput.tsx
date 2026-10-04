@@ -1,20 +1,22 @@
 import clsx from 'clsx'
 import { AnimatePresence, motion } from 'framer-motion'
-import { CircleAlert, CircleCheck, FileAudio, FolderOpen, Link2, LoaderCircle, Mic, Server, X } from 'lucide-react'
-import { useEffect, useId, useRef, useState, type ClipboardEvent, type FormEvent } from 'react'
+import { AudioLines, CircleAlert, CircleCheck, Cloud, FileAudio, FolderOpen, Link2, LoaderCircle, X } from 'lucide-react'
+import { useEffect, useId, useRef, useState, type ClipboardEvent, type FormEvent, type ReactNode } from 'react'
 import { useT } from '../../i18n'
 import { useApp } from '../../store'
 import { toApiError, type ClientErrorCode } from '../../lib/api'
 import { onServerRequired, useConnection } from '../../lib/serverMode'
-import { ServerRequiredNotice } from '../layout/ServerStatusGuide'
-import { submitUrl, useJobs } from '../../hooks/useJobs'
+import { useJobs } from '../../hooks/useJobs'
+import { paths } from '../../hooks/useRoute'
 import { useIsDesktopPointer, useMediaQuery } from '../../hooks/useMediaQuery'
 import { errorText } from '../jobs/errorText'
-import { Button } from '../ui/IconButton'
+import { AccountButtons } from '../account/AccountCta'
+import { useCloudInvite } from '../account/cloudInvite'
+import { Button, IconButton } from '../ui/IconButton'
 import { VideoSiteIcon } from '../ui/Logo'
 import { formatBytes } from '../ui/format'
-import { RecorderPanel } from './RecorderPanel'
 import { startFiles } from './startFiles'
+import { startLink } from './startLink'
 import { checkUrl, FILE_ACCEPT, findUrl } from './url'
 
 type Hint =
@@ -23,8 +25,8 @@ type Hint =
   | { kind: 'other' }
   | { kind: 'invalid' }
   | { kind: 'error'; code: ClientErrorCode }
-  /** a link was given but no server is connected (browser mode) */
-  | { kind: 'server' }
+  /** a non-YouTube link while no server is connected: only the cloud can fetch it */
+  | { kind: 'account' }
 
 function UploadProgress() {
   const t = useT()
@@ -62,9 +64,72 @@ function UploadProgress() {
   )
 }
 
+/** A link to another site was given without a server: the cloud fetches it once the user signs in. */
+function AccountNotice({ onDismiss }: { onDismiss(): void }) {
+  const t = useT()
+  const titleId = useId()
+  return (
+    <section aria-labelledby={titleId} className="relative mt-3 rounded-2xl border border-border-strong bg-surface p-4 sm:p-5">
+      <IconButton label={t('web.input.dismiss')} size="sm" onClick={onDismiss} className="absolute top-2 right-2">
+        <X className="size-4" />
+      </IconButton>
+      <div className="flex items-start gap-3 pr-8">
+        <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
+          <Cloud className="size-4" aria-hidden="true" />
+        </span>
+        <div className="min-w-0">
+          <h2 id={titleId} className="font-display text-base font-semibold tracking-tight">
+            {t('cloud.input.accountTitle')}
+          </h2>
+          <p className="mt-1 text-sm text-muted">{t('cloud.input.accountText')}</p>
+          <AccountButtons size="sm" className="mt-3" />
+        </div>
+      </div>
+    </section>
+  )
+}
+
+/** One of the big "ways in" under the link field. */
+function WayCard({
+  icon,
+  title,
+  hint,
+  href,
+  onClick,
+}: {
+  icon: ReactNode
+  title: string
+  hint: string
+  href?: string
+  onClick?(): void
+}) {
+  const body = (
+    <>
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-surface-3 text-accent transition-colors group-hover:bg-accent-soft">
+        {icon}
+      </span>
+      <span className="min-w-0">
+        <span className="block font-display text-[17px] leading-tight font-semibold tracking-tight text-text">{title}</span>
+        <span className="mt-0.5 block text-sm leading-snug text-muted">{hint}</span>
+      </span>
+    </>
+  )
+  const cls =
+    'group flex min-h-[4.5rem] items-center gap-3.5 rounded-2xl border border-border-strong bg-surface px-4 py-3 text-left transition-colors duration-150 hover:border-accent/50 hover:bg-surface-2 focus-visible:border-accent'
+  return href ? (
+    <a href={href} className={cls}>
+      {body}
+    </a>
+  ) : (
+    <button type="button" onClick={onClick} className={cls}>
+      {body}
+    </button>
+  )
+}
+
 /**
- * The home page's one big input: paste a link (starts immediately), Enter to submit,
- * pick a file, or record from the microphone.
+ * The home page's ways in: paste a link (starts immediately, Enter to submit), pick or drop a file, or
+ * let the site listen (microphone / a tab) with live chords.
  */
 export function SmartInput({ className }: { className?: string }) {
   const t = useT()
@@ -74,22 +139,23 @@ export function SmartInput({ className }: { className?: string }) {
   const [value, setValue] = useState('')
   const [hint, setHint] = useState<Hint>({ kind: 'idle' })
   const [busy, setBusy] = useState(false)
-  const [recording, setRecording] = useState(false)
   const uploading = useJobs((s) => s.uploads.length > 0)
   const autoFocus = useIsDesktopPointer()
   const wide = useMediaQuery('(min-width: 640px)')
   const connected = useConnection((s) => s.status === 'server')
+  const guest = useConnection((s) => s.status === 'browser')
+  const invite = useCloudInvite()
 
   useEffect(() => {
     if (autoFocus) inputRef.current?.focus()
   }, [autoFocus])
 
-  // a link pasted elsewhere on the page while no server is connected lands here, with the explanation
+  // a link pasted elsewhere on the page that needs an account lands here, with the explanation
   useEffect(
     () =>
       onServerRequired((url) => {
         setValue(url)
-        setHint({ kind: 'server' })
+        setHint({ kind: 'account' })
       }),
     [],
   )
@@ -110,16 +176,29 @@ export function SmartInput({ className }: { className?: string }) {
     }
     setBusy(true)
     try {
-      await submitUrl(c.url)
+      const started = await startLink(c.url)
+      if (started.kind === 'account') {
+        setHint({ kind: 'account' })
+        return
+      }
       setValue('')
       setHint({ kind: 'idle' })
     } catch (e) {
-      const code = toApiError(e).code
-      setHint(code === 'server_required' ? { kind: 'server' } : { kind: 'error', code })
+      setHint({ kind: 'error', code: toApiError(e).code })
     } finally {
       setBusy(false)
     }
   }
+
+  // signed in from the notice: the cloud is connected now, start the waiting link
+  const submitRef = useRef(submit)
+  useEffect(() => {
+    submitRef.current = submit
+  })
+  const waiting = hint.kind === 'account' ? value : ''
+  useEffect(() => {
+    if (connected && waiting) void submitRef.current(waiting)
+  }, [connected, waiting])
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault()
@@ -148,14 +227,6 @@ export function SmartInput({ className }: { className?: string }) {
     }
   }
 
-  if (recording) {
-    return (
-      <div className={className}>
-        <RecorderPanel onClose={() => setRecording(false)} />
-      </div>
-    )
-  }
-
   if (uploading) {
     return (
       <div className={className}>
@@ -164,50 +235,48 @@ export function SmartInput({ className }: { className?: string }) {
     )
   }
 
+  const ok = (text: string) => (
+    <span className="flex items-center gap-1.5 text-success">
+      <CircleCheck className="size-3.5 shrink-0" aria-hidden="true" />
+      {text}
+    </span>
+  )
+  const bad = (text: string) => (
+    <span className="flex items-center gap-1.5 text-danger">
+      <CircleAlert className="size-3.5 shrink-0" aria-hidden="true" />
+      {text}
+    </span>
+  )
+
   const hintNode = (() => {
     switch (hint.kind) {
       case 'youtube':
-        return (
-          <span className="flex items-center gap-1.5 text-success">
-            <CircleCheck className="size-3.5 shrink-0" aria-hidden="true" />
-            {t('core.input.hintYoutube')}
-          </span>
-        )
+        return ok(guest ? t('cloud.input.hintYoutubeGuest') : t('core.input.hintYoutube'))
       case 'other':
-        return (
+        return guest ? (
+          <span className="flex items-center gap-1.5 text-text">
+            <Cloud className="size-3.5 shrink-0 text-accent" aria-hidden="true" />
+            {t('web.input.needServer')}
+          </span>
+        ) : (
           <span className="flex items-center gap-1.5 text-text">
             <CircleCheck className="size-3.5 shrink-0 text-success" aria-hidden="true" />
             {t('core.input.hintOther')}
           </span>
         )
       case 'invalid':
-        return (
-          <span className="flex items-center gap-1.5 text-danger">
-            <CircleAlert className="size-3.5 shrink-0" aria-hidden="true" />
-            {t('core.input.hintInvalid')}
-          </span>
-        )
+        return bad(t('core.input.hintInvalid'))
       case 'error':
+        return bad(errorText(hint.code))
+      case 'account':
         return (
-          <span className="flex items-center gap-1.5 text-danger">
-            <CircleAlert className="size-3.5 shrink-0" aria-hidden="true" />
-            {errorText(hint.code)}
-          </span>
-        )
-      case 'server':
-        return connected ? (
-          <span className="flex items-center gap-1.5 text-success">
-            <CircleCheck className="size-3.5 shrink-0" aria-hidden="true" />
-            {t('web.input.serverReady')}
-          </span>
-        ) : (
           <span className="flex items-center gap-1.5 text-text">
-            <Server className="size-3.5 shrink-0 text-accent" aria-hidden="true" />
+            <Cloud className="size-3.5 shrink-0 text-accent" aria-hidden="true" />
             {t('web.input.needServer')}
           </span>
         )
       default:
-        return <span className="text-muted">{t('core.input.hintIdle')}</span>
+        return <span className="text-muted">{guest ? t('cloud.input.hintGuest') : t('core.input.hintIdle')}</span>
     }
   })()
 
@@ -215,6 +284,7 @@ export function SmartInput({ className }: { className?: string }) {
 
   return (
     <div className={className}>
+      <h2 className="sr-only">{t('cloud.ways.label')}</h2>
       <form onSubmit={onSubmit} noValidate>
         <div
           className={clsx(
@@ -291,18 +361,21 @@ export function SmartInput({ className }: { className?: string }) {
           {hintNode}
         </p>
       </form>
-      {hint.kind === 'server' && !connected && (
-        <ServerRequiredNotice onConnected={() => void submit(value)} onDismiss={() => setHint({ kind: 'idle' })} />
-      )}
+      {hint.kind === 'account' && !connected && invite && <AccountNotice onDismiss={() => setHint({ kind: 'idle' })} />}
 
-      <div className="mt-5 flex flex-wrap items-center gap-2">
-        <Button icon={<FolderOpen className="size-4" />} onClick={() => fileRef.current?.click()}>
-          {t('core.input.pickFile')}
-        </Button>
-        <Button variant="ghost" icon={<Mic className="size-4" />} onClick={() => setRecording(true)}>
-          {t('core.input.record')}
-        </Button>
-        <span className="hidden text-sm text-faint md:inline">{t('core.input.dropHint')}</span>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <WayCard
+          icon={<FolderOpen className="size-5" aria-hidden="true" />}
+          title={t('cloud.ways.file.title')}
+          hint={t('cloud.ways.file.hint')}
+          onClick={() => fileRef.current?.click()}
+        />
+        <WayCard
+          icon={<AudioLines className="size-5" aria-hidden="true" />}
+          title={t('cloud.ways.listen.title')}
+          hint={t('cloud.ways.listen.hint')}
+          href={`#${paths.listen()}`}
+        />
         <input
           ref={fileRef}
           type="file"

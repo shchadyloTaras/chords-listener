@@ -14,6 +14,14 @@ const KEYS: Record<string, string> = {
   'auth/too-many-requests': 'account.error.tooManyRequests',
   'auth/network-request-failed': 'account.error.network',
   'auth/user-disabled': 'account.error.userDisabled',
+  'auth/timeout': 'account.error.network',
+  'auth/internal-error': 'account.error.generic',
+  'auth/quota-exceeded': 'account.error.tooManyRequests',
+  'auth/operation-not-allowed': 'account.error.notAllowed',
+  'auth/admin-restricted-operation': 'account.error.notAllowed',
+  'auth/web-storage-unsupported': 'account.error.storage',
+  'auth/user-token-expired': 'account.error.expired',
+  'auth/invalid-user-token': 'account.error.expired',
 }
 
 export function authErrorKey(err: unknown): string {

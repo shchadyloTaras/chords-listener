@@ -1,8 +1,9 @@
 import { Eye, EyeOff, Loader2, MailCheck } from 'lucide-react'
 import { useEffect, useId, useRef, useState, type FormEvent, type RefObject } from 'react'
 import { useT } from '../../i18n'
-import { sendPasswordReset, signIn, signUp } from '../../lib/auth'
+import { sendPasswordReset, signIn, signUp, type AuthDialogMode, type AuthDialogReason } from '../../lib/auth'
 import { authErrorKey } from '../../lib/authErrors'
+import { cloudPrefix, useConnection } from '../../lib/serverMode'
 import { useApp } from '../../store'
 import { Button, IconButton } from '../ui/IconButton'
 import { Modal } from '../ui/Modal'
@@ -15,8 +16,9 @@ const MIN_PASSWORD = 6
 /** Errors about the email field; every other error is shown against the password. */
 const EMAIL_ERRORS = new Set(['account.error.invalidEmail', 'account.error.emailInUse'])
 
+// 16px text on phones: iOS Safari zooms the page into smaller inputs on focus
 const inputClass =
-  'h-11 w-full rounded-xl border border-border-strong bg-surface-2 px-3.5 text-[15px] text-text placeholder:text-faint ' +
+  'h-11 w-full rounded-xl border border-border-strong bg-surface-2 px-3.5 text-base text-text placeholder:text-faint sm:text-[15px] ' +
   'transition-colors duration-150 focus:border-accent focus:outline-none read-only:opacity-60 ' +
   'aria-invalid:border-danger/70'
 
@@ -34,11 +36,22 @@ function focusSoon(ref: RefObject<HTMLElement | null>) {
   window.setTimeout(() => ref.current?.focus())
 }
 
+interface AuthModalProps {
+  open: boolean
+  /** `signedIn` = the dialog has just signed someone in */
+  onClose(signedIn?: boolean): void
+  initialMode?: AuthDialogMode
+  /** the app asked for it: the session ended / the action needs an account */
+  reason?: AuthDialogReason
+}
+
 /** Email/password sign in, sign up and password reset in one dialog. */
-export function AuthModal({ open, onClose }: { open: boolean; onClose(): void }) {
+export function AuthModal({ open, onClose, initialMode = 'signIn', reason = null }: AuthModalProps) {
   const t = useT()
   const id = useId()
-  const [mode, setMode] = useState<Mode>('signIn')
+  const [mode, setMode] = useState<Mode>(initialMode)
+  // on the page served by a local server the account only syncs settings (the cloud is not used there)
+  const settingsOnly = useConnection((s) => !cloudPrefix() || (s.status === 'server' && s.backend === 'local' && !s.remote))
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -90,7 +103,7 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose(): void })
         const cred = mode === 'signIn' ? await signIn(email, password) : await signUp(email, password)
         const key = mode === 'signIn' ? 'account.welcome' : 'account.welcomeNew'
         useApp.getState().toast(t(key, { email: cred.user.email ?? '' }))
-        onClose()
+        onClose(true)
       }
     } catch (err) {
       fail(authErrorKey(err))
@@ -99,13 +112,16 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose(): void })
     }
   }
 
+  const intro =
+    mode === 'signIn' && reason ? `account.intro.${reason}` : mode === 'signIn' && settingsOnly ? 'account.intro.local' : `account.intro.${mode}`
+
   const errorId = `${id}-error`
   const emailError = !!error && (EMAIL_ERRORS.has(error) || mode === 'reset')
   const passwordError = !!error && !emailError
   const describe = (...ids: (string | false)[]) => ids.filter(Boolean).join(' ') || undefined
 
   return (
-    <Modal open={open} onClose={onClose} title={t(`account.title.${mode}`)} width="max-w-sm">
+    <Modal open={open} onClose={() => onClose()} title={t(`account.title.${mode}`)} width="max-w-sm">
       {resetSentTo ? (
         <div className="flex flex-col items-start gap-4 pb-1">
           <div className="flex gap-3">
@@ -120,7 +136,7 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose(): void })
         </div>
       ) : (
         <form onSubmit={onSubmit} noValidate aria-busy={busy} className="flex flex-col gap-4 pb-1">
-          <p className="text-sm text-muted">{t(`account.intro.${mode}`)}</p>
+          <p className="text-sm text-muted">{t(intro)}</p>
 
           <div className="flex flex-col gap-1.5">
             <label htmlFor={`${id}-email`} className="text-sm font-medium">
@@ -133,6 +149,8 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose(): void })
               inputMode="email"
               autoComplete={mode === 'signUp' ? 'email' : 'username'}
               autoCapitalize="off"
+              autoCorrect="off"
+              enterKeyHint={mode === 'reset' ? 'send' : 'next'}
               spellCheck={false}
               required
               value={email}
@@ -140,6 +158,13 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose(): void })
               aria-invalid={emailError || undefined}
               aria-describedby={describe(emailError && errorId)}
               onChange={(e) => setEmail(e.target.value)}
+              onKeyDown={(e) => {
+                // "next" on a phone keyboard: go to the password instead of submitting a half-filled form
+                if (e.key === 'Enter' && mode !== 'reset' && !password) {
+                  e.preventDefault()
+                  passwordRef.current?.focus()
+                }
+              }}
               className={inputClass}
             />
           </div>
@@ -166,6 +191,7 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose(): void })
                   id={`${id}-password`}
                   type={showPassword ? 'text' : 'password'}
                   autoComplete={mode === 'signUp' ? 'new-password' : 'current-password'}
+                  enterKeyHint="go"
                   minLength={MIN_PASSWORD}
                   required
                   value={password}

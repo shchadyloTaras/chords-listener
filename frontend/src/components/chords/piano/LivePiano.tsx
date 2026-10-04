@@ -1,18 +1,23 @@
 // "Живе піаніно": the song's notes falling onto a piano keyboard whose keys go down in sync with the
-// audio (notes transcribed once per track, see lib/transcription), plus chord-preview notes.
+// audio (notes transcribed once per track, see lib/transcription — from the instruments stem when the
+// server separated the vocals), plus chord-preview notes and, when the vocals were transcribed, the
+// sung melody as an outlined overlay with its own toggle.
 // Lazy-loaded by LivePianoSlot; rendered under the now-playing hero when the instrument is piano.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { LoaderCircle, RotateCcw, X } from 'lucide-react'
+import { LoaderCircle, Mic, RotateCcw, X } from 'lucide-react'
 import { useT } from '../../../i18n'
 import { useMediaQuery } from '../../../hooks/useMediaQuery'
 import { onLiveNotes } from '../../../lib/liveNotes'
 import { isMinorQuality } from '../../../lib/music/chord'
 import { formatTranspose } from '../../../lib/music/key'
-import { requestNotes, useTrackNotes, type NotesState } from '../../../lib/transcription'
+import { requestNotes, type NotesSource, type NotesState } from '../../../lib/transcription'
+import { fetchStem, useVocals } from '../../../lib/vocals'
 import { useApp } from '../../../store'
 import { useChordModel } from '../model'
+import { usePianoNotes } from '../score/pianoNotes'
+import { useScoreSettings } from '../score/scoreSettings'
 import { IconButton } from '../ui/controls'
 import { noteName } from './keyboard'
 import { readPalette } from './palette'
@@ -27,8 +32,22 @@ export default function LivePiano() {
   const { track, chords, spelling, rhythm, transpose } = model
   const lang = useApp((s) => s.lang)
   const setSetting = useApp((s) => s.setSetting)
-  const notes = useTrackNotes(track)
+  const { notes, source } = usePianoNotes(track)
+  const vocals = useVocals(track, { knownOnly: true })
+  const showVocals = useScoreSettings((s) => s.liveVocals)
+  const setScoreSetting = useScoreSettings((s) => s.setScoreSetting)
   const reduced = useMediaQuery('(prefers-reduced-motion: reduce)')
+  /** the notes of the current source, (re)requested by the retry / recompute buttons */
+  const request = useCallback(
+    (force = false) =>
+      requestNotes(
+        source === 'instruments'
+          ? { ...track, notesSource: 'instruments', loadAudio: (signal) => fetchStem(track, 'instruments', signal) }
+          : track,
+        { force },
+      ),
+    [track, source],
+  )
 
   const wrap = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -75,6 +94,10 @@ export default function LivePiano() {
   useEffect(() => {
     renderer.current?.setNotes(notes.status === 'ready' ? notes.index : null)
   }, [notes])
+
+  useEffect(() => {
+    renderer.current?.setVocals(showVocals && vocals.status === 'ready' ? vocals.index : null)
+  }, [vocals, showVocals])
 
   useEffect(() => {
     renderer.current?.setTranspose(transpose)
@@ -125,11 +148,22 @@ export default function LivePiano() {
       <div className="relative flex items-center gap-2 px-4 py-2 sm:px-5">
         <div className="min-w-0 flex-1">
           <h2 className="font-display text-[15px] leading-tight font-semibold tracking-tight">{t('keys.title')}</h2>
-          <Status state={notes} transpose={transpose} fmt={fmt} plural={plural} onRetry={() => requestNotes(track)} />
+          <Status state={notes} source={source} transpose={transpose} fmt={fmt} plural={plural} onRetry={() => request()} />
         </div>
+        {vocals.status === 'ready' && (
+          <IconButton
+            label={t('score.live.vocals.title')}
+            size="sm"
+            active={showVocals}
+            aria-pressed={showVocals}
+            onClick={() => setScoreSetting('liveVocals', !showVocals)}
+          >
+            <Mic size={15} />
+          </IconButton>
+        )}
         <SyncControl />
         {canRecompute && (
-          <IconButton label={t('keys.recompute.title')} size="sm" onClick={() => requestNotes(track, { force: true })}>
+          <IconButton label={t('keys.recompute.title')} size="sm" onClick={() => request(true)}>
             <RotateCcw size={15} />
           </IconButton>
         )}
@@ -155,12 +189,14 @@ export default function LivePiano() {
 
 function Status({
   state,
+  source,
   transpose,
   fmt,
   plural,
   onRetry,
 }: {
   state: NotesState
+  source: NotesSource
   transpose: number
   fmt: Intl.NumberFormat
   plural: Intl.PluralRules
@@ -187,6 +223,7 @@ function Status({
     case 'ready': {
       const n = state.index.count
       text = n ? t(`keys.status.notes.${plural.select(n)}`, { n: fmt.format(n) }) : t('keys.status.none')
+      if (source === 'instruments') extras.push(t('score.source.instrumentsShort'))
       if (transpose) extras.push(t('keys.status.transposed', { n: formatTranspose(transpose) }))
       if (!state.saved) extras.push(t('keys.status.notSaved'))
       title = state.stats

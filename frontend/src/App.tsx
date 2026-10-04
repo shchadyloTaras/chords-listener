@@ -1,5 +1,8 @@
 import { MotionConfig } from 'framer-motion'
 import { useCallback, useEffect, useState } from 'react'
+import { AuthDialogHost } from './components/account/AuthDialogHost'
+import { CapturePage } from './components/capture/CapturePage'
+import { ListenPage } from './components/capture/ListenPage'
 import { AppHeader } from './components/layout/AppHeader'
 import { DropOverlay } from './components/layout/DropOverlay'
 import { HealthBanner } from './components/layout/HealthBanner'
@@ -26,6 +29,10 @@ function Page({ route }: { route: Route }) {
       return <TrackPage key={route.id} id={route.id} />
     case 'demo':
       return <TrackPage key="demo" id="demo" demo />
+    case 'listen':
+      return <ListenPage key={route.source ?? 'listen'} initialSource={route.source} />
+    case 'capture':
+      return <CapturePage key={route.videoId} videoId={route.videoId} blocked={route.blocked} />
     default:
       return <NotFoundPage />
   }
@@ -44,11 +51,16 @@ export default function App() {
     void syncServerJobs()
   }, [])
 
-  // optional Firebase sign-in (settings sync); loads lazily, the app never waits for it
+  // Firebase sign-in (settings sync; the cloud API on the hosted site); loads lazily, the app never waits for it
   useEffect(() => startAuth(), [])
 
   // New page → start at the top.
-  const routeKey = route.name === 'job' || route.name === 'track' ? `${route.name}:${route.id}` : route.name
+  const routeKey =
+    route.name === 'job' || route.name === 'track'
+      ? `${route.name}:${route.id}`
+      : route.name === 'capture'
+        ? `capture:${route.videoId}`
+        : route.name
   useEffect(() => {
     window.scrollTo(0, 0)
   }, [routeKey])
@@ -63,6 +75,7 @@ export default function App() {
         </main>
       </div>
       <DropOverlay />
+      <AuthDialogHost />
       <Toaster />
       <ShortcutsModal open={helpOpen} onClose={() => setHelpOpen(false)} />
     </MotionConfig>

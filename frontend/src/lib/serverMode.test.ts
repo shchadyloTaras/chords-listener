@@ -2,11 +2,14 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   addressHint,
   addressSpaceOf,
+  candidateList,
   gatedSpace,
   HOSTED,
+  normalizeCloudUrl,
   normalizeServerUrl,
   resolveServerUrl,
   useConnection,
+  type CandidateInput,
 } from './serverMode'
 
 describe('normalizeServerUrl', () => {
@@ -82,3 +85,69 @@ describe('resolveServerUrl', () => {
 it('local builds are not the hosted build', () => {
   expect(HOSTED).toBe(false)
 })
+
+describe('API base selection (docs/CLOUD.md order)', () => {
+  const CLOUD = 'https://chords-api-abc123-ew.a.run.app'
+  const hosted: CandidateInput = {
+    hosted: true,
+    here: 'https://shchadylotaras.github.io',
+    signedIn: false,
+    cloudUrl: CLOUD,
+    localServer: false,
+    serverUrl: 'http://localhost:8765',
+  }
+  const bases = (i: CandidateInput) => candidateList(i).list.map((c) => `${c.backend}:${c.base}`)
+
+  it('hosted guest without an own server: browser mode', () => {
+    expect(bases(hosted)).toEqual([])
+  })
+
+  it('hosted + signed in: the cloud', () => {
+    const { list } = candidateList({ ...hosted, signedIn: true })
+    expect(list).toEqual([{ base: `${CLOUD}/api`, origin: CLOUD, remote: true, backend: 'cloud' }])
+  })
+
+  it('the cloud comes before the user’s own server, which is opt-in', () => {
+    expect(bases({ ...hosted, localServer: true })).toEqual(['local:http://localhost:8765/api'])
+    expect(bases({ ...hosted, localServer: true, signedIn: true })).toEqual([`cloud:${CLOUD}/api`, 'local:http://localhost:8765/api'])
+  })
+
+  it('the page served by a local server always asks it first', () => {
+    const local: CandidateInput = { ...hosted, hosted: false, here: 'http://localhost:8765', localServer: true, signedIn: true }
+    expect(bases(local)).toEqual(['local:/api', `cloud:${CLOUD}/api`])
+    // the Vite dev server: same origin (proxy), the cloud, then the configured server
+    expect(bases({ ...local, here: 'http://localhost:5173' })).toEqual(['local:/api', `cloud:${CLOUD}/api`, 'local:http://localhost:8765/api'])
+  })
+
+  it('no cloud configured: signing in changes nothing', () => {
+    expect(bases({ ...hosted, signedIn: true, cloudUrl: '' })).toEqual([])
+  })
+
+  it('flags an unusable own-server address', () => {
+    expect(candidateList({ ...hosted, localServer: true, serverUrl: 'ftp://x' })).toEqual({ list: [], invalidServerUrl: true })
+  })
+
+  it('normalizes the cloud URL', () => {
+    expect(normalizeCloudUrl(`${CLOUD}/`)).toBe(CLOUD)
+    expect(normalizeCloudUrl(`${CLOUD}/api/`)).toBe(CLOUD)
+    expect(normalizeCloudUrl(' https://example.com/chords/ ')).toBe('https://example.com/chords')
+    expect(normalizeCloudUrl('')).toBeNull()
+    expect(normalizeCloudUrl(undefined)).toBeNull()
+    expect(normalizeCloudUrl('javascript:alert(1)')).toBeNull()
+    expect(normalizeCloudUrl('not a url')).toBeNull()
+  })
+})
+
+describe('signed media URLs from the cloud', () => {
+  afterEach(() => useConnection.setState({ remote: false, serverOrigin: null, backend: null }))
+
+  it('resolves them against the cloud, keeping the signature', () => {
+    useConnection.setState({ remote: true, backend: 'cloud', serverOrigin: 'https://chords-api-abc123-ew.a.run.app' })
+    const signed = '/api/tracks/0123456789ab/audio?u=uid42&exp=1790000000&sig=ab12cd'
+    expect(resolveServerUrl(signed)).toBe(`https://chords-api-abc123-ew.a.run.app${signed}`)
+    expect(resolveServerUrl('/api/tracks/0123456789ab/stems/vocals?u=uid42&exp=1&sig=x')).toBe(
+      'https://chords-api-abc123-ew.a.run.app/api/tracks/0123456789ab/stems/vocals?u=uid42&exp=1&sig=x',
+    )
+  })
+})
+

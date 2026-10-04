@@ -32,7 +32,7 @@ for port in "$API_PORT" "$UI_PORT"; do
   fi
 done
 
-(cd "$ROOT/backend" && uv sync --quiet)
+(cd "$ROOT/backend" && uv sync --quiet --inexact ${CHORDS_WITH_VOCALS:+--extra vocals})
 [ -d "$ROOT/frontend/node_modules" ] || (cd "$ROOT/frontend" && npm install --no-audit --no-fund --loglevel=error)
 
 # Job control: each server gets its own process group, so cleanup can stop it together with its

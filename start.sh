@@ -78,8 +78,12 @@ if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
 fi
 
 # ------------------------------------------------------------------ backend deps
+# Vocal transcription (Demucs + CREPE, ~600 MB) is optional locally: CHORDS_WITH_VOCALS=1 ./start.sh
+# installs it; --inexact keeps it installed on later runs without the flag.
+VOCALS_EXTRA=""
+if [ -n "${CHORDS_WITH_VOCALS:-}" ]; then VOCALS_EXTRA="--extra vocals"; fi
 step "Python-залежності (uv sync)"
-(cd "$BACKEND" && uv sync --quiet) ||
+(cd "$BACKEND" && uv sync --quiet --inexact $VOCALS_EXTRA) ||
   die "uv sync не вдався." \
     "Перша установка збирає madmom з GitHub: потрібні git та Xcode Command Line Tools (xcode-select --install)." \
     "Спробуй ще раз з подробицями:  cd backend && uv sync"

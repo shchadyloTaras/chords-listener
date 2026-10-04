@@ -1,4 +1,4 @@
-// Note transcription for the live piano (Spotify's Basic Pitch on TF.js, in a worker).
+// Note transcription for the live piano and the score (Spotify's Basic Pitch on TF.js, in a worker).
 //
 //   const state = useTrackNotes(track)          // memory → saved notes → transcribe once and save
 //   if (state.status === 'ready') state.index.activeAt(t)
@@ -6,7 +6,9 @@
 // TF.js and the model load lazily (worker / dynamic import), never with the main bundle.
 export {
   NOTES_ENGINE,
+  getNotesState,
   modelUrl,
+  notesKey,
   releaseNotes,
   requestNotes,
   resetNotesService,
@@ -14,6 +16,7 @@ export {
   useNotesStore,
   useTrackNotes,
   type NotesErrorCode,
+  type NotesSource,
   type NotesState,
 } from './service'
 export { NoteIndex, BUCKET_SECONDS } from './noteIndex'

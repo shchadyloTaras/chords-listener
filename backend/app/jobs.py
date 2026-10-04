@@ -5,6 +5,8 @@ analyzing 0.45..1.0 (engine fraction scaled) -> done 1.
 """
 from __future__ import annotations
 
+import contextvars
+import hashlib
 import logging
 import secrets
 import shutil
@@ -13,11 +15,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional, get_args
+from typing import TYPE_CHECKING, Any, Callable, Optional, get_args
 
 from app.engine import analyze
 
-from .models import AnalysisResult, ErrorCode, Job, JobStatus, Settings
+from .models import AnalysisResult, ErrorCode, Job, JobStatus, Settings, VocalNotes
+from .quotas import QuotaExceeded, Quotas
 from .sources import (
     Cancelled,
     NormalizedUrl,
@@ -28,15 +31,24 @@ from .sources import (
     UrlFetcher,
     display_name,
     probe_media,
+    safe_suffix,
     track_id_for,
     transcode_to_mp3,
+    youtube_oembed,
     youtube_thumbnail,
+    youtube_url,
 )
 from .storage import AUDIO_FILE, TrackStore, summary_fields, utc_now
+from .users import current_uid
+
+if TYPE_CHECKING:
+    from .gcs import UploadBucket
 
 log = logging.getLogger("chords.jobs")
 
 Analyzer = Callable[..., dict]
+# (audio_path, stems_dir, progress, options) -> VocalNotes dict; writes stems_dir/<stem>.mp3 (app.vocals)
+VocalTranscriber = Callable[..., dict]
 
 ERROR_CODES = frozenset(get_args(ErrorCode))
 DOWNLOAD_RANGE = (0.0, 0.35)
@@ -54,7 +66,7 @@ class JobFailed(Exception):
 @dataclass
 class JobRecord:
     id: str
-    kind: str  # "url" | "upload" | "reanalyze"
+    kind: str  # "url" | "upload" | "reanalyze" | "vocals"
     created_at: str
     status: JobStatus = "queued"
     progress: float = 0.0
@@ -70,6 +82,7 @@ class JobRecord:
     cancel_reason: tuple[ErrorCode, str] = ("internal", "Cancelled")
     keys: set[str] = field(default_factory=set)
     created_ts: float = field(default_factory=time.time)
+    uid: Optional[str] = None  # owner (cloud mode); None in local mode
 
     @property
     def finished(self) -> bool:
@@ -79,6 +92,7 @@ class JobRecord:
         return Job.model_validate(
             {
                 "id": self.id,
+                "kind": "vocals" if self.kind == "vocals" else "analysis",
                 "status": self.status,
                 "progress": round(self.progress, 4),
                 "message": self.message,
@@ -100,28 +114,60 @@ class JobManager:
         store: TrackStore,
         fetcher: UrlFetcher,
         analyzer: Optional[Analyzer] = None,
+        vocal_transcriber: Optional[VocalTranscriber] = None,
     ) -> None:
         self.settings = settings
         self.store = store
         self.fetcher = fetcher
         self.analyzer: Analyzer = analyzer or analyze
+        self.vocal_transcriber = vocal_transcriber  # None: app.vocals.transcribe when the extra is installed
         self._lock = threading.RLock()
         self._jobs: dict[str, JobRecord] = {}
         self._active: dict[str, str] = {}  # dedup key ("track:<id>" / "url:<url>") -> job id
         self._track_locks: dict[str, threading.Lock] = {}
         self._executor = ThreadPoolExecutor(max_workers=settings.max_workers, thread_name_prefix="chords-job")
         self._closed = False
+        self.quotas = Quotas(settings, store)
+
+    # ------------------------------------------------------------------ per-user helpers (cloud mode)
+
+    def _ukey(self, key: str, uid: Optional[str] = None) -> str:
+        """Dedup / lock key namespaced by the owner, so users never share running jobs."""
+        uid = uid if uid is not None else current_uid()
+        return f"{uid}|{key}" if uid else key
+
+    def _visible(self, rec: JobRecord) -> bool:
+        return not self.settings.cloud or rec.uid == current_uid()
+
+    def running_count(self, uid: Optional[str] = None) -> int:
+        uid = uid if uid is not None else current_uid()
+        with self._lock:
+            return sum(1 for r in self._jobs.values() if r.uid == uid and not r.finished)
+
+    def admit(self, quota: Optional[str] = "analyses") -> None:
+        """Cloud mode: may the current user start one more job now? Checks the running-jobs limit, then
+        counts one unit of the daily ``quota`` ("analyses" | "vocals" | None). Raises QuotaExceeded (429).
+        Feature code that creates its own jobs (e.g. vocals) calls this right before submitting."""
+        if not self.settings.cloud:
+            return
+        with self._lock:
+            if self.running_count() >= self.settings.max_user_jobs:
+                raise QuotaExceeded(
+                    f"You already have {self.settings.max_user_jobs} songs in progress - wait for one to finish"
+                )
+            if quota:
+                self.quotas.consume(quota)
 
     # ------------------------------------------------------------------ queries
 
     def get(self, job_id: str) -> Optional[Job]:
         with self._lock:
             rec = self._jobs.get(job_id)
-            return rec.to_model() if rec else None
+            return rec.to_model() if rec and self._visible(rec) else None
 
     def list(self) -> list[Job]:
         with self._lock:
-            recs = sorted(self._jobs.values(), key=lambda r: r.created_ts, reverse=True)
+            recs = sorted((r for r in self._jobs.values() if self._visible(r)), key=lambda r: r.created_ts, reverse=True)
             return [r.to_model() for r in recs]
 
     # ------------------------------------------------------------------ submission
@@ -139,11 +185,12 @@ class JobManager:
             if url.youtube_id
             else {"type": "url", "url": url.url, "videoId": None, "filename": None}
         )
-        keys = {f"url:{url.url}"} | ({f"track:{track_id}"} if track_id else set())
+        keys = {self._ukey(f"url:{url.url}")} | ({self._ukey(f"track:{track_id}")} if track_id else set())
         with self._lock:
             running = self._find_active(keys)
             if running:
                 return running.to_model()
+            self.admit()
             rec = self._new_record(
                 "url",
                 options,
@@ -160,12 +207,17 @@ class JobManager:
         if self.store.exists(track_id):
             shutil.rmtree(upload.work_dir, ignore_errors=True)
             return self._already_done("upload", track_id)
-        keys = {f"track:{track_id}"}
+        keys = {self._ukey(f"track:{track_id}")}
         with self._lock:
             running = self._find_active(keys)
             if running:
                 shutil.rmtree(upload.work_dir, ignore_errors=True)
                 return running.to_model()
+            try:
+                self.admit()
+            except QuotaExceeded:
+                shutil.rmtree(upload.work_dir, ignore_errors=True)
+                raise
             rec = self._new_record(
                 "upload",
                 options,
@@ -178,11 +230,12 @@ class JobManager:
 
     def submit_reanalyze(self, track_id: str, options: dict[str, Any]) -> Job:
         meta = self.store.read_meta(track_id)  # raises TrackNotFound
-        keys = {f"track:{track_id}"}
+        keys = {self._ukey(f"track:{track_id}")}
         with self._lock:
             running = self._find_active(keys)
             if running:
                 return running.to_model()
+            self.admit()
             rec = self._new_record(
                 "reanalyze",
                 options,
@@ -194,13 +247,83 @@ class JobManager:
             self._submit(rec, lambda: self._run_reanalyze(rec, track_id))
             return rec.to_model()
 
+    def submit_storage(
+        self,
+        path: str,
+        bucket: UploadBucket,
+        *,
+        size: int,
+        title: Optional[str],
+        video_id: Optional[str],
+        start_offset: float,
+        options: dict[str, Any],
+    ) -> Job:
+        """Ingest a client upload from the bucket (``users/<uid>/uploads/...``, cloud mode). The job
+        downloads it, deletes the object, dedups by content sha1 and analyzes it like an upload.
+        ``video_id`` links the track to a YouTube video; ``start_offset`` (video time where the
+        recording begins) shifts every analysis time so chords line up with the video."""
+        filename = path.rsplit("/", 1)[-1] or "audio"
+        if video_id:
+            source = {"type": "youtube", "url": youtube_url(video_id), "videoId": video_id, "filename": None}
+        else:
+            source = {"type": "file", "url": None, "videoId": None, "filename": filename}
+        keys = {self._ukey(f"upload:{path}")}
+        with self._lock:
+            running = self._find_active(keys)
+            if running:
+                return running.to_model()
+            self.admit()
+            rec = self._new_record(
+                "upload",
+                options,
+                source=source,
+                title=(title or "").strip() or (None if video_id else display_name(filename)),
+                thumbnail=youtube_thumbnail(video_id) if video_id else None,
+                keys=keys,
+            )
+            self._submit(rec, lambda: self._run_storage(rec, path, bucket, size, start_offset))
+            return rec.to_model()
+
+    def vocals_available(self) -> bool:
+        """Vocal transcription can run here (the optional ``vocals`` extra is installed)."""
+        if self.vocal_transcriber is not None:
+            return True
+        from app import vocals
+
+        return vocals.available()
+
+    def submit_vocals(self, track_id: str, force: bool = False) -> Job:
+        """Separate the track's vocals and transcribe the sung melody (``kind: "vocals"``). Done at once
+        when the result is already stored, unless ``force``. The caller checks ``vocals_available()``."""
+        meta = self.store.read_meta(track_id)  # raises TrackNotFound
+        if not force and self.store.has_vocals(track_id):
+            return self._already_done("vocals", track_id, message="Vocals already transcribed")
+        keys = {self._ukey(f"vocals:{track_id}")}
+        with self._lock:
+            running = self._find_active(keys)
+            if running:
+                return running.to_model()
+            self.admit("vocals")
+            rec = self._new_record(
+                "vocals",
+                {},
+                source=meta.get("source"),
+                title=meta.get("title"),
+                thumbnail=meta.get("thumbnail"),
+                track_id=track_id,
+                keys=keys,
+            )
+            self._submit(rec, lambda: self._run_vocals(rec, track_id))
+            return rec.to_model()
+
     def cancel_track_jobs(self, track_id: str, code: ErrorCode, message: str) -> None:
         with self._lock:
-            job_id = self._active.get(f"track:{track_id}")
-            rec = self._jobs.get(job_id) if job_id else None
-            if rec and not rec.finished:
-                rec.cancel_reason = (code, message)
-                rec.cancel.set()
+            for key in (f"track:{track_id}", f"vocals:{track_id}"):
+                job_id = self._active.get(self._ukey(key))
+                rec = self._jobs.get(job_id) if job_id else None
+                if rec and not rec.finished:
+                    rec.cancel_reason = (code, message)
+                    rec.cancel.set()
 
     def shutdown(self) -> None:
         with self._lock:
@@ -214,6 +337,7 @@ class JobManager:
     # ------------------------------------------------------------------ registry internals
 
     def _new_record(self, kind: str, options: dict[str, Any], *, keys: set[str], **fields: Any) -> JobRecord:
+        fields.setdefault("uid", current_uid())
         rec = JobRecord(id=secrets.token_hex(8), kind=kind, created_at=utc_now(), options=dict(options), **fields)
         with self._lock:
             self._jobs[rec.id] = rec
@@ -223,7 +347,7 @@ class JobManager:
             self._prune()
         return rec
 
-    def _already_done(self, kind: str, track_id: str) -> Job:
+    def _already_done(self, kind: str, track_id: str, message: str = "Already analyzed") -> Job:
         try:
             meta = self.store.read_meta(track_id)
         except Exception:
@@ -231,7 +355,7 @@ class JobManager:
         rec = self._new_record(
             kind, {}, keys=set(), source=meta.get("source"), title=meta.get("title"), thumbnail=meta.get("thumbnail")
         )
-        self._update(rec, status="done", progress=1.0, message="Already analyzed", track_id=track_id)
+        self._update(rec, status="done", progress=1.0, message=message, track_id=track_id)
         return rec.to_model()
 
     def _find_active(self, keys: set[str]) -> Optional[JobRecord]:
@@ -274,7 +398,9 @@ class JobManager:
             self._fail(rec, "internal", "The server is shutting down")
             self._release(rec)
             return
-        self._executor.submit(self._run, rec, fn)
+        # The worker runs in a copy of the submitting request's context: same user (app.users), so the
+        # storage helpers resolve that user's paths inside the job.
+        self._executor.submit(contextvars.copy_context().run, self._run, rec, fn)
 
     def _run(self, rec: JobRecord, fn: Callable[[], None]) -> None:
         started = time.monotonic()
@@ -301,7 +427,7 @@ class JobManager:
 
     def _track_lock(self, track_id: str) -> threading.Lock:
         with self._lock:
-            return self._track_locks.setdefault(track_id, threading.Lock())
+            return self._track_locks.setdefault(self._ukey(track_id), threading.Lock())
 
     @staticmethod
     def _scaled(lo_hi: tuple[float, float], fraction: float) -> float:
@@ -318,7 +444,7 @@ class JobManager:
         if media.duration and media.duration > self.settings.max_duration_s:
             raise JobFailed("too_long", self._too_long_message(media.duration))
         track_id = media.track_id
-        self._claim(rec, f"track:{track_id}")
+        self._claim(rec, self._ukey(f"track:{track_id}", rec.uid))
         if self.store.exists(track_id):
             self._update(rec, status="done", progress=1.0, message="Already analyzed", track_id=track_id)
             return
@@ -359,6 +485,51 @@ class JobManager:
         finally:
             shutil.rmtree(upload.work_dir, ignore_errors=True)
 
+    def _run_storage(self, rec: JobRecord, path: str, bucket: UploadBucket, size: int, start_offset: float) -> None:
+        self._update(rec, status="downloading", progress=0.01, message="Fetching the upload")
+        work = self.store.new_work_dir(rec.id)
+        try:
+            src = work / ("upload" + safe_suffix(path.rsplit("/", 1)[-1]))
+            try:
+                bucket.download(
+                    path,
+                    src,
+                    size=size,
+                    progress=lambda f: self._update(rec, progress=self._scaled((0.01, DOWNLOAD_RANGE[1]), f)),
+                    cancel=rec.cancel,
+                    max_bytes=self.settings.max_upload_bytes,
+                )
+            finally:
+                bucket.delete(path)  # the upload is consumed whatever happens next
+            self._check_cancel(rec)
+            sha1 = _file_sha1(src)
+            track_id = sha1[:12]
+            self._claim(rec, self._ukey(f"track:{track_id}", rec.uid))
+            if self.store.exists(track_id):
+                self._update(rec, status="done", progress=1.0, message="Already analyzed", track_id=track_id)
+                return
+            probe = probe_media(src)
+            if not probe.has_audio:
+                raise JobFailed("unsupported_format", "This file has no audio track")
+            video_id = (rec.source or {}).get("videoId")
+            artist = probe.artist
+            if not rec.title:
+                title, channel = youtube_oembed(video_id) if video_id else (None, None)
+                artist = artist or channel
+                self._update(rec, title=title or probe.title or display_name(path.rsplit("/", 1)[-1]))
+            meta = {
+                "title": rec.title,
+                "artist": artist,
+                "thumbnail": rec.thumbnail,
+                "source": rec.source,
+                "sourceDuration": probe.duration,
+                "fileSize": src.stat().st_size,
+                "sha1": sha1,
+            }
+            self._process(rec, src, work, track_id, meta, probe=probe, start_offset=start_offset)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
     def _process(
         self,
         rec: JobRecord,
@@ -367,6 +538,7 @@ class JobManager:
         track_id: str,
         meta: dict[str, Any],
         probe: Optional[ProbeResult],
+        start_offset: float = 0.0,
     ) -> None:
         """Shared tail: probe -> transcode to playback mp3 -> analyze -> install into the library."""
         self._update(rec, status="decoding", progress=DECODE_RANGE[0], message="Converting audio")
@@ -391,6 +563,9 @@ class JobManager:
             raise JobFailed("too_long", self._too_long_message(playback.duration))
 
         analysis = self._analyze(rec, audio)
+        if start_offset > 0:
+            analysis = analysis.shifted(start_offset)
+            meta = {**meta, "startOffset": round(start_offset, 4)}
         self._update(rec, message="Saving")
         now = utc_now()
         full_meta = {
@@ -419,11 +594,65 @@ class JobManager:
     def _run_reanalyze(self, rec: JobRecord, track_id: str) -> None:
         audio = self.store.audio_path(track_id)
         analysis = self._analyze(rec, audio)
+        offset = self.store.read_meta(track_id).get("startOffset")
+        if isinstance(offset, (int, float)) and offset > 0:  # a recording linked to a video: keep video time
+            analysis = analysis.shifted(float(offset))
         self._update(rec, message="Saving")
         with self._track_lock(track_id):
             self._check_cancel(rec)
             self.store.save_reanalysis(track_id, analysis, rec.options)
         self._update(rec, status="done", progress=1.0, message="Done", track_id=track_id)
+
+    def _run_vocals(self, rec: JobRecord, track_id: str) -> None:
+        """Separation + melody transcription (app.vocals) on the track's audio; stems and vocals.json are
+        installed into the track when everything succeeded."""
+        self._update(rec, status="analyzing", progress=0.01, message="Preparing")
+        audio = self.store.audio_path(track_id)
+        offset = self.store.read_meta(track_id).get("startOffset") or 0.0
+        transcribe = self.vocal_transcriber
+        if transcribe is None:
+            from app.vocals import transcribe
+        work = self.store.new_work_dir(f"vocals-{rec.id}")
+        try:
+            stems = work / "stems"
+
+            def progress(fraction: float, message: str = "") -> None:
+                if rec.cancel.is_set():
+                    raise Cancelled()
+                try:
+                    value = float(fraction)
+                except (TypeError, ValueError):
+                    value = 0.0
+                # stay below 1.0 until the result is installed, so "progress == 1" always means done
+                self._update(rec, progress=min(0.99, max(0.01, value)),
+                             message=str(message).strip()[:120] or "Transcribing the vocals")
+
+            try:
+                raw = transcribe(str(audio), str(stems), progress, dict(rec.options))
+            except Cancelled:
+                raise
+            except Exception as exc:
+                self._check_cancel(rec)
+                reason = str(exc).strip().splitlines()[0][:200] if str(exc).strip() else type(exc).__name__
+                code = getattr(exc, "code", None)
+                if code in ERROR_CODES and code != "internal":  # VocalsError with a user-facing code
+                    log.warning("job %s: vocals failed on %s: [%s] %s", rec.id, track_id, code, reason)
+                    raise JobFailed(code, reason) from exc
+                log.exception("job %s: vocal transcription failed on %s", rec.id, track_id)
+                raise JobFailed("analysis_failed", f"Vocal transcription failed: {reason}") from exc
+            self._check_cancel(rec)
+            try:
+                vocals = VocalNotes.from_pipeline(raw, offset)
+            except ValueError as exc:
+                log.error("job %s: the vocal pipeline returned an invalid result: %s", rec.id, exc)
+                raise JobFailed("analysis_failed", "Vocal transcription returned an invalid result") from exc
+            self._update(rec, message="Saving")
+            with self._track_lock(track_id):
+                self._check_cancel(rec)
+                self.store.install_vocals(track_id, stems, vocals)
+            self._update(rec, status="done", progress=1.0, message="Done", track_id=track_id)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
 
     def _analyze(self, rec: JobRecord, audio: Path) -> AnalysisResult:
         self._update(rec, status="analyzing", progress=ANALYZE_RANGE[0], message="Analyzing chords")
@@ -464,6 +693,14 @@ class JobManager:
 
     def _too_long_message(self, duration: float) -> str:
         return too_long_message(duration, self.settings.max_duration_min)
+
+
+def _file_sha1(path: Path) -> str:
+    digest = hashlib.sha1()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def too_long_message(duration: float, limit_min: float) -> str:

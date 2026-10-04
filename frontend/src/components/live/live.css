@@ -1,0 +1,78 @@
+/* Live chords view. Tokens come from src/index.css; chord typography and the stage glow from
+   ../chords/chords.css (.cw-chord, .cw-stage). --lv-color is the chord's root colour. */
+
+.lv-hero {
+  transition: opacity 220ms ease;
+}
+.lv-hero[data-provisional='true'] {
+  opacity: 0.74;
+}
+
+/* Colour bar under the hero chord: solid once the chord is final, moving stripes while it is
+   still being decided. */
+.lv-bar {
+  height: 4px;
+  border-radius: 999px;
+  background-color: var(--lv-color, var(--chord-none));
+  transition: background-color 300ms ease, opacity 300ms ease;
+}
+.lv-bar[data-provisional='true'] {
+  background-color: transparent;
+  background-image: linear-gradient(
+    -45deg,
+    var(--lv-color) 25%,
+    color-mix(in oklch, var(--lv-color) 28%, transparent) 25%,
+    color-mix(in oklch, var(--lv-color) 28%, transparent) 50%,
+    var(--lv-color) 50%,
+    var(--lv-color) 75%,
+    color-mix(in oklch, var(--lv-color) 28%, transparent) 75%
+  );
+  background-size: 12px 12px;
+  animation: lv-stripes 700ms linear infinite;
+}
+@keyframes lv-stripes {
+  to {
+    background-position: 12px 0;
+  }
+}
+
+/* Ribbon of previous chords: most recent on the right, older ones fade out on the left. */
+.lv-ribbon {
+  scrollbar-width: none;
+  mask-image: linear-gradient(to right, transparent 0, #000 40px);
+}
+.lv-ribbon::-webkit-scrollbar {
+  display: none;
+}
+.lv-chip {
+  border-top: 3px solid var(--lv-color, var(--chord-none));
+  background: color-mix(in oklch, var(--lv-color, var(--chord-none)) 9%, var(--surface-2));
+  transition: opacity 200ms ease, background-color 200ms ease, box-shadow 200ms ease;
+}
+[data-theme='light'] .lv-chip {
+  background: color-mix(in oklch, var(--lv-color, var(--chord-none)) 10%, var(--surface));
+}
+.lv-chip[data-provisional='true'] {
+  border-top-style: dashed;
+  opacity: 0.72;
+}
+.lv-chip[data-now='true'] {
+  background: color-mix(in oklch, var(--lv-color, var(--chord-none)) 20%, var(--surface-2));
+  box-shadow: inset 0 0 0 1.5px color-mix(in oklch, var(--lv-color, var(--chord-none)) 70%, transparent);
+}
+[data-theme='light'] .lv-chip[data-now='true'] {
+  background: color-mix(in oklch, var(--lv-color, var(--chord-none)) 16%, var(--surface));
+}
+.lv-chip-gap {
+  border-top: 3px solid transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lv-bar[data-provisional='true'] {
+    animation: none;
+  }
+  .lv-hero,
+  .lv-chip {
+    transition: none;
+  }
+}

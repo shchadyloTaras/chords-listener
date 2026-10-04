@@ -1,0 +1,31 @@
+rules_version = '2';
+
+// Cloud Storage for Firebase (default bucket build-chords-listener.firebasestorage.app), docs/CLOUD.md → Uploads.
+// The site uploads big files and tab recordings to users/{uid}/uploads/{uploadId}/{fileName}; the API
+// (Cloud Run, its own service account, not bound by these rules) reads, ingests and deletes them.
+// Clients may only create their own uploads: ≤ 500 MB, audio/*, video/* or application/octet-stream.
+// Nothing can be read, listed or changed from the client; everything else in the bucket (the API's
+// per-user libraries under users/{uid}/tracks/...) is off limits.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /users/{uid}/uploads/{uploadId}/{fileName} {
+      allow read: if false;
+      allow create: if request.auth != null
+        && request.auth.uid == uid
+        && uploadId.size() <= 128
+        && fileName.size() <= 255
+        && request.resource.size > 0
+        && request.resource.size <= 500 * 1024 * 1024
+        && (request.resource.contentType.matches('audio/.*')
+            || request.resource.contentType.matches('video/.*')
+            || request.resource.contentType == 'application/octet-stream');
+      // a client may cancel (remove) its own pending upload
+      allow delete: if request.auth != null && request.auth.uid == uid;
+      allow update: if false;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

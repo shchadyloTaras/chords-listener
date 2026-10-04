@@ -1,10 +1,11 @@
 import clsx from 'clsx'
-import { ArrowLeft, RotateCcw, TriangleAlert } from 'lucide-react'
+import { ArrowLeft, LogIn, RotateCcw, TriangleAlert } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useT } from '../../i18n'
 import { toApiError, type ClientErrorCode } from '../../lib/api'
+import { openAuthDialog } from '../../lib/auth'
 import type { Job } from '../../types'
-import { acknowledgeJob, canRetry, ensureJob, isActiveJob, retryJob, useJobs } from '../../hooks/useJobs'
+import { acknowledgeJob, blockedVideoId, canRetry, ensureJob, isActiveJob, retryJob, useJobs } from '../../hooks/useJobs'
 import { navigate, paths } from '../../hooks/useRoute'
 import { useDocumentTitle } from '../../hooks/useDocumentTitle'
 import { Button } from '../ui/IconButton'
@@ -75,10 +76,13 @@ export function JobPage({ id }: { id: string }) {
     return () => ctrl.abort()
   }, [id])
 
+  // YouTube refused the server download: play the video here and listen to this tab instead
+  const blockedVideo = job ? blockedVideoId(job) : null
   useEffect(() => {
     if (job?.status === 'done' && job.trackId) navigate(paths.track(job.trackId), { replace: true })
     if (job?.status === 'error') acknowledgeJob(job.id)
-  }, [job?.status, job?.trackId, job?.id])
+    if (blockedVideo) navigate(paths.capture(blockedVideo, { blocked: true }), { replace: true })
+  }, [job?.status, job?.trackId, job?.id, blockedVideo])
 
   const running = !job || isActiveJob(job)
   const elapsed = useElapsed(job?.createdAt, running)
@@ -125,6 +129,11 @@ export function JobPage({ id }: { id: string }) {
               </div>
             )}
             <div className="mt-7 flex flex-wrap gap-2">
+              {errorCode === 'unauthorized' && (
+                <Button variant="primary" icon={<LogIn className="size-4" />} onClick={() => openAuthDialog('signIn', 'expired')}>
+                  {t('account.signIn')}
+                </Button>
+              )}
               {job && canRetry(job) && !retryGone && (
                 <Button
                   variant="primary"

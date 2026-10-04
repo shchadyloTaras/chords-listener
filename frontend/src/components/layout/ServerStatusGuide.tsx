@@ -1,10 +1,10 @@
 import clsx from 'clsx'
-import { Check, CircleAlert, CircleCheck, Copy, ExternalLink, LoaderCircle, PlugZap, Server, X } from 'lucide-react'
+import { Check, CircleAlert, CircleCheck, Copy, ExternalLink, LoaderCircle, PlugZap } from 'lucide-react'
 import { useId, useState, type FormEvent, type ReactNode } from 'react'
 import { useT } from '../../i18n'
-import { normalizeServerUrl, probeServer, PROJECT_REPO, useConnection } from '../../lib/serverMode'
+import { normalizeServerUrl, probeServer, PROJECT_REPO, setLocalServerEnabled, useConnection } from '../../lib/serverMode'
 import { useApp } from '../../store'
-import { Button, IconButton } from '../ui/IconButton'
+import { Button } from '../ui/IconButton'
 import { copyText } from '../ui/copyText'
 
 const DEFAULT_SERVER = 'http://localhost:8765'
@@ -176,6 +176,8 @@ export function ServerSetup({ onConnected, showSteps = true }: { onConnected?():
   const direct = normalizeServerUrl(serverUrl)
 
   const check = async () => {
+    // checking the address = "use my own server" (opt-in on the hosted site)
+    setLocalServerEnabled(true)
     if (await probeServer({ interactive: true })) onConnected?.()
   }
 
@@ -233,35 +235,5 @@ export function ServerSetup({ onConnected, showSteps = true }: { onConnected?():
         </p>
       )}
     </div>
-  )
-}
-
-/** Inline explanation under the link field when a link was given in browser mode. */
-export function ServerRequiredNotice({ onConnected, onDismiss }: { onConnected(): void; onDismiss(): void }) {
-  const t = useT()
-  const titleId = useId()
-  return (
-    <section
-      aria-labelledby={titleId}
-      className="relative mt-3 rounded-2xl border border-border-strong bg-surface p-4 sm:p-5"
-    >
-      <IconButton label={t('web.input.dismiss')} size="sm" onClick={onDismiss} className="absolute top-2 right-2">
-        <X className="size-4" />
-      </IconButton>
-      <div className="flex items-start gap-3 pr-8">
-        <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
-          <Server className="size-4" aria-hidden="true" />
-        </span>
-        <div className="min-w-0">
-          <h2 id={titleId} className="font-display text-base font-semibold tracking-tight">
-            {t('web.guide.title')}
-          </h2>
-          <p className="mt-1 text-sm text-muted">{t('web.browser.what')}</p>
-        </div>
-      </div>
-      <div className="mt-4">
-        <ServerSetup onConnected={onConnected} />
-      </div>
-    </section>
   )
 }

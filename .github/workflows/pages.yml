@@ -1,7 +1,9 @@
 # Builds the web UI as a static site and publishes it to GitHub Pages:
 # https://shchadylotaras.github.io/chords-listener/
-# The hosted page analyzes files in the browser and connects to the user's own server
-# (./start.sh → http://localhost:8765) for YouTube links. See README → "Веб-версія (GitHub Pages)".
+# The hosted page is the whole service: guests analyze files and recordings in the browser; signed-in users
+# use the cloud API (Cloud Run, docs/CLOUD.md) for YouTube links, uploads and their library. The API URL comes
+# from the repository variable CLOUD_API_URL (Settings → Secrets and variables → Actions → Variables); when it
+# is not set, the build uses the fallback in frontend/src/config.ts. See README → "Онлайн-версія".
 name: Deploy to GitHub Pages
 
 on:
@@ -44,6 +46,8 @@ jobs:
         run: npm run build
         env:
           VITE_BASE: /${{ github.event.repository.name }}/
+          # empty when the variable is not set: frontend/src/config.ts falls back to the deployed URL
+          VITE_CLOUD_API_URL: ${{ vars.CLOUD_API_URL }}
 
       - uses: actions/configure-pages@v6
 

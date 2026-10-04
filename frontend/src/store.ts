@@ -14,7 +14,8 @@ export interface PlayerController {
 
 export type Instrument = 'guitar' | 'ukulele' | 'piano' | 'handpan'
 export type Accidentals = 'auto' | 'sharp' | 'flat'
-export type ChordView = 'sheet' | 'timeline'
+/** chord sheet, timeline, or the score (sheet music, components/chords/score) */
+export type ChordView = 'sheet' | 'timeline' | 'score'
 export type ThemePref = 'dark' | 'light' | 'system'
 export type Lang = 'uk' | 'en'
 export type CopyFormat = 'bars' | 'timestamps' | 'chordpro' | 'unique'

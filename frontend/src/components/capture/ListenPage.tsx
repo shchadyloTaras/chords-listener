@@ -1,0 +1,248 @@
+import clsx from 'clsx'
+import { AppWindow, ArrowLeft, CircleAlert, Download, LoaderCircle, Mic, Pause, Play, RotateCcw, Square, X } from 'lucide-react'
+import { useCallback, useId, useState, type ReactNode } from 'react'
+import { t as tNow, useT } from '../../i18n'
+import { canCaptureTab } from '../../lib/live'
+import { toApiError } from '../../lib/api'
+import { useConnection } from '../../lib/serverMode'
+import { useApp } from '../../store'
+import { useDocumentTitle } from '../../hooks/useDocumentTitle'
+import { useJobs } from '../../hooks/useJobs'
+import { useMediaQuery } from '../../hooks/useMediaQuery'
+import { navigate, paths } from '../../hooks/useRoute'
+import { errorText } from '../jobs/errorText'
+import { Button } from '../ui/IconButton'
+import { LiveChordsView } from '../live'
+import { isCapturing, type CaptureFailure } from './machine'
+import { recordingFilename, recordingTitle, saveRecording } from './saveRecording'
+import { useCapture, type CaptureSource } from './useCapture'
+
+function failureText(error: CaptureFailure | null, reason: string): string {
+  if (!error) return ''
+  if (error === 'too-short') return tNow('cloud.capture.tooShort')
+  if (error === 'save') return tNow('cloud.capture.saveFailed', { reason })
+  if (error === 'embed' || error === 'player') return tNow('cloud.capture.error.failed')
+  return tNow(`cloud.capture.error.${error}`)
+}
+
+function SourceCard({
+  selected,
+  disabled,
+  icon,
+  title,
+  hint,
+  note,
+  onSelect,
+}: {
+  selected: boolean
+  disabled?: boolean
+  icon: ReactNode
+  title: string
+  hint: string
+  note?: string
+  onSelect(): void
+}) {
+  const hintId = useId()
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      aria-label={title}
+      aria-describedby={hintId}
+      disabled={disabled}
+      onClick={onSelect}
+      className={clsx(
+        'flex items-start gap-3.5 rounded-2xl border bg-surface px-4 py-4 text-left transition-colors duration-150',
+        'disabled:cursor-not-allowed disabled:opacity-55',
+        selected ? 'border-accent shadow-[0_0_0_3px_var(--accent-soft)]' : 'border-border-strong hover:border-accent/50 hover:bg-surface-2',
+      )}
+    >
+      <span className={clsx('flex size-10 shrink-0 items-center justify-center rounded-xl', selected ? 'bg-accent text-accent-fg' : 'bg-surface-3 text-accent')}>
+        {icon}
+      </span>
+      <span className="min-w-0">
+        <span className="block font-display text-[17px] leading-tight font-semibold tracking-tight text-text">{title}</span>
+        <span id={hintId} className="mt-1 block text-sm leading-snug text-muted">
+          {hint}
+          {note && <span className="mt-1.5 block text-xs text-faint">{note}</span>}
+        </span>
+      </span>
+    </button>
+  )
+}
+
+/** Upload progress while the recording is being saved. */
+function SavingLine() {
+  const t = useT()
+  const upload = useJobs((s) => s.uploads[s.uploads.length - 1])
+  const pct = upload ? Math.round(upload.progress * 100) : null
+  return (
+    <div className="mt-4 flex items-center gap-3 rounded-2xl border border-border bg-surface px-4 py-3" role="status">
+      <LoaderCircle className="size-5 shrink-0 animate-spin text-accent" aria-hidden="true" />
+      <span className="flex-1 text-sm text-text">{pct === null ? t('cloud.capture.preparing') : t('cloud.capture.saving')}</span>
+      {pct !== null && <span className="font-mono text-sm tabular-nums">{pct}%</span>}
+    </div>
+  )
+}
+
+/**
+ * "Слухати" (#/listen): live chords from the microphone or a browser tab; Stop saves the recording as a
+ * track (analyzed in the cloud when signed in, in this browser otherwise).
+ */
+export function ListenPage({ initialSource }: { initialSource: CaptureSource | null }) {
+  const t = useT()
+  const phone = useMediaQuery('(hover: none) and (pointer: coarse)')
+  const tabSupported = canCaptureTab() && !phone
+  const [source, setSource] = useState<CaptureSource>(initialSource === 'tab' && tabSupported ? 'tab' : 'mic')
+  const cloud = useConnection((s) => s.backend === 'cloud')
+  useDocumentTitle(t('cloud.listen.title'))
+
+  const save = useCallback(
+    (rec: { audio: Blob; mime: string }) => saveRecording(rec.audio, rec.mime, { title: recordingTitle() }),
+    [],
+  )
+  const capture = useCapture({
+    save,
+    onAutoStop: (reason) => useApp.getState().toast(tNow(reason === 'limit' ? 'cloud.capture.limit' : 'cloud.capture.ended'), 'info'),
+  })
+  const { state, dispatch } = capture
+  const phase = state.phase
+  const capturing = isCapturing(phase)
+  const busy = phase === 'stopping' || phase === 'saving' || phase === 'done'
+
+  const download = () => {
+    const rec = capture.recording
+    if (!rec) return
+    const href = URL.createObjectURL(rec.audio)
+    const a = document.createElement('a')
+    a.href = href
+    a.download = recordingFilename(recordingTitle(), rec.mime)
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    window.setTimeout(() => URL.revokeObjectURL(href), 10_000)
+  }
+
+  const errorMessage = state.error ? failureText(state.error, errorText(toApiError(capture.saveError).code)) : ''
+
+  return (
+    <div className="mx-auto w-full max-w-3xl px-4 pt-6 pb-24 sm:px-6 sm:pt-10">
+      <Button
+        variant="ghost"
+        className="-ml-3"
+        icon={<ArrowLeft className="size-4" />}
+        onClick={() => {
+          if (capturing) capture.cancel()
+          navigate(paths.home())
+        }}
+      >
+        {t('core.job.backHome')}
+      </Button>
+
+      <h1 className="mt-3 font-display text-3xl font-semibold tracking-tight sm:text-4xl">{t('cloud.listen.title')}</h1>
+      <p className="mt-2 max-w-[60ch] text-[15px] leading-relaxed text-muted sm:text-base">{t('cloud.listen.subtitle')}</p>
+
+      {capturing || busy ? (
+        <div className="mt-6">
+          <LiveChordsView session={capture.session} />
+          {capturing && (
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-muted">
+                {phase === 'paused' ? t('cloud.capture.paused') : t('cloud.listen.listening')} · {t('cloud.listen.limit')}
+              </p>
+              <div className="flex gap-2">
+                <Button size="sm" variant="ghost" icon={<X className="size-4" />} onClick={capture.cancel} className="flex-1 sm:flex-none">
+                  {t('cloud.listen.discard')}
+                </Button>
+                <Button
+                  size="sm"
+                  icon={phase === 'paused' ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}
+                  onClick={() => dispatch(phase === 'paused' ? { type: 'playing' } : { type: 'paused' })}
+                  className="flex-1 sm:flex-none"
+                >
+                  {phase === 'paused' ? t('cloud.capture.resume') : t('cloud.capture.pause')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  icon={<Square className="size-3.5" fill="currentColor" />}
+                  onClick={() => dispatch({ type: 'stop' })}
+                  className="flex-[2] sm:flex-none"
+                >
+                  {t('cloud.listen.stop')}
+                </Button>
+              </div>
+            </div>
+          )}
+          {busy && <SavingLine />}
+        </div>
+      ) : (
+        <div className="mt-7">
+          {phase === 'error' && (
+            <div role="alert" className="mb-5 flex items-start gap-2.5 rounded-xl border border-danger/40 bg-danger/[0.07] p-3 text-sm text-text">
+              <CircleAlert className="mt-0.5 size-4 shrink-0 text-danger" aria-hidden="true" />
+              <span>{errorMessage}</span>
+            </div>
+          )}
+
+          {phase === 'error' && state.hasRecording ? (
+            <div className="flex flex-wrap gap-2">
+              <Button variant="primary" icon={<RotateCcw className="size-4" />} onClick={capture.retrySave}>
+                {t('cloud.capture.retrySave')}
+              </Button>
+              <Button icon={<Download className="size-4" />} onClick={download}>
+                {t('cloud.capture.download')}
+              </Button>
+              <Button variant="ghost" onClick={capture.cancel}>
+                {t('cloud.capture.cancel')}
+              </Button>
+            </div>
+          ) : (
+            <>
+              <div role="radiogroup" aria-label={t('cloud.listen.title')} className="grid gap-3 sm:grid-cols-2">
+                <SourceCard
+                  selected={source === 'mic'}
+                  disabled={phase === 'requesting'}
+                  icon={<Mic className="size-5" aria-hidden="true" />}
+                  title={t('cloud.listen.mic.title')}
+                  hint={t('cloud.listen.mic.hint')}
+                  onSelect={() => setSource('mic')}
+                />
+                <SourceCard
+                  selected={source === 'tab'}
+                  disabled={!tabSupported || phase === 'requesting'}
+                  icon={<AppWindow className="size-5" aria-hidden="true" />}
+                  title={t('cloud.listen.tab.title')}
+                  hint={t('cloud.listen.tab.hint')}
+                  note={tabSupported ? undefined : t('cloud.listen.tab.unsupported')}
+                  onSelect={() => setSource('tab')}
+                />
+              </div>
+              <p className="mt-4 text-sm text-muted">{t(source === 'tab' ? 'cloud.listen.tab.howTo' : 'cloud.listen.mic.howTo')}</p>
+              <div className="mt-6 flex flex-wrap items-center gap-3">
+                <Button
+                  variant="primary"
+                  disabled={phase === 'requesting'}
+                  icon={phase === 'requesting' ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" fill="currentColor" />}
+                  onClick={() => void capture.start(source)}
+                  className="h-12 px-6 text-base"
+                >
+                  {t('cloud.listen.start')}
+                </Button>
+                {phase === 'requesting' && (
+                  <span aria-live="polite" className="text-sm text-muted">
+                    {t(source === 'tab' ? 'cloud.listen.requesting.tab' : 'cloud.listen.requesting.mic')}
+                  </span>
+                )}
+              </div>
+              <p className="mt-5 text-xs text-faint">
+                {t(cloud ? 'cloud.listen.saveCloud' : 'cloud.listen.saveGuest')} {t('cloud.listen.limit')}
+              </p>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}

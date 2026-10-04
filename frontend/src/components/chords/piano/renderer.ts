@@ -9,6 +9,9 @@
 //
 // Idle = no animation frames: the loop runs only while playing, while preview notes sound / glow, or
 // once after a change (seek, resize, data, theme).
+//
+// Vocal overlay (optional): the sung melody (lib/vocals) drawn as outlined notes in the ink colour —
+// distinct from the instruments' pitch colours — and a dot on the key the singer is on.
 import { useApp } from '../../../store'
 import type { LiveNote } from '../../../lib/liveNotes'
 import type { NoteIndex } from '../../../lib/transcription'
@@ -38,6 +41,8 @@ export interface FrameInfo {
   playing: boolean
   /** keys shown down (MIDI, after transposition / folding), ascending */
   keys: number[]
+  /** keys the singer is on (vocal overlay), ascending */
+  vocals: number[]
   range: KeyRange
 }
 
@@ -79,6 +84,7 @@ export class PianoRenderer {
   private readonly opts: RendererOptions
   private palette: Palette
   private index: NoteIndex | null = null
+  private vocals: NoteIndex | null = null
   private transpose = 0
   private chords: RollChord[] = []
   private downbeats: number[] = []
@@ -102,7 +108,9 @@ export class PianoRenderer {
   private readonly tmp2: number[] = []
   private readonly pressed = new Map<number, Pressed>()
   private readonly unsubscribe: () => void
-  readonly info: FrameInfo = { time: 0, playing: false, keys: [], range: this.range }
+  private readonly sung = new Set<number>()
+  private readonly tmp3: number[] = []
+  readonly info: FrameInfo = { time: 0, playing: false, keys: [], vocals: [], range: this.range }
 
   constructor(canvas: HTMLCanvasElement, palette: Palette, opts: RendererOptions = {}) {
     this.canvas = canvas
@@ -132,6 +140,13 @@ export class PianoRenderer {
   setNotes(index: NoteIndex | null): void {
     if (this.index === index) return
     this.index = index
+    this.refit()
+  }
+
+  /** The sung melody to overlay (null = none). */
+  setVocals(index: NoteIndex | null): void {
+    if (this.vocals === index) return
+    this.vocals = index
     this.refit()
   }
 
@@ -219,8 +234,9 @@ export class PianoRenderer {
   private refit(): void {
     if (!this.cssW) return
     const weights = new Float64Array(128)
-    if (this.index) {
-      const raw = this.index.pitchWeights()
+    for (const idx of [this.index, this.vocals]) {
+      if (!idx) continue
+      const raw = idx.pitchWeights()
       for (let m = 0; m < 128; m++) {
         const t = m + this.transpose
         if (t >= 0 && t < 128) weights[t] += raw[m]
@@ -310,6 +326,15 @@ export class PianoRenderer {
       }
     }
     for (const n of this.previews) if (n.start <= previewNow && previewNow < n.end) put(n.midi, Math.min(1, Math.max(0.15, n.velocity)), previewNow - n.start)
+    this.sung.clear()
+    const v = this.vocals
+    if (v) {
+      const list = playing ? v.activeAt(t, this.tmp3) : v.inRange(t, t + PAUSED_REACH, this.tmp3)
+      for (const i of list) {
+        const m = v.notes.midi[i] + this.transpose
+        if (m >= 0 && m <= 127) this.sung.add(foldNote(m, this.range).key)
+      }
+    }
   }
 
   private draw(t: number, playing: boolean, rate: number, previewNow: number): void {
@@ -329,6 +354,7 @@ export class PianoRenderer {
     this.drawFelt(W, hitY)
     if (!this.reduced) this.drawGlows(layout, hitY)
     this.drawKeys(layout, hitY + FELT)
+    if (this.sung.size) this.drawSung(layout, hitY + FELT)
 
     // frame info (screen-reader summary, tests)
     const keys = [...this.pressed.keys()].sort((a, b) => a - b)
@@ -336,6 +362,7 @@ export class PianoRenderer {
     this.info.time = t
     this.info.playing = playing
     this.info.keys = keys
+    this.info.vocals = [...this.sung].sort((a, b) => a - b)
     if (sig !== this.lastKeys) {
       this.lastKeys = sig
       this.opts.onKeys?.(keys)
@@ -426,7 +453,55 @@ export class PianoRenderer {
         if (f.fold && yBottom - yTop > 8) this.foldMark(x + w / 2, yBottom - 6, f.fold, dark)
       }
     }
+    this.drawVocalRoll(t, layout, yOf)
     this.drawChordLabels(first, last, yOf, fadeAt)
+  }
+
+  /** Sung notes: outlined bars in the ink colour, over the instruments' notes. */
+  private drawVocalRoll(t: number, layout: KeyboardLayout, yOf: (time: number) => number): void {
+    const v = this.vocals
+    if (!v) return
+    const { ctx, palette: p } = this
+    const H = this.rollH
+    const ink = p.text
+    const list = v.inRange(t, t + LOOKAHEAD, this.tmp3)
+    const { start, end, midi } = v.notes
+    ctx.lineWidth = 1.5
+    for (const i of list) {
+      const f = foldNote(midi[i] + this.transpose, this.range)
+      const yBottom = Math.min(H, yOf(start[i]))
+      const yTop = Math.max(-2, yOf(end[i]))
+      if (yBottom - yTop < 1) continue
+      const [x, w] = layout.lane(f.key)
+      const r = Math.min(5, w / 2.5, (yBottom - yTop) / 2)
+      const sounding = start[i] <= t
+      ctx.fillStyle = rgba(ink, sounding ? 0.3 : 0.14)
+      this.roundRect(x - 1, yTop, w + 2, yBottom - yTop, r)
+      ctx.fill()
+      ctx.strokeStyle = rgba(ink, sounding ? 1 : 0.85)
+      ctx.stroke()
+    }
+  }
+
+  /** A dot in the ink colour on each key the singer is on. */
+  private drawSung(layout: KeyboardLayout, y0: number): void {
+    const { ctx, palette: p } = this
+    for (const key of this.sung) {
+      const k = layout.keys[key]
+      if (!k) continue
+      const black = BLACK_PC.has(key % 12)
+      const cx = k.x + k.w / 2
+      const cy = y0 + k.h - (black ? Math.max(7, k.h * 0.18) : Math.max(9, k.h * 0.14))
+      const rad = Math.max(3, Math.min(5.5, k.w * (black ? 0.3 : 0.22)))
+      ctx.beginPath()
+      ctx.arc(cx, cy, rad + 1.5, 0, Math.PI * 2)
+      ctx.fillStyle = black ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.55)'
+      ctx.fill()
+      ctx.beginPath()
+      ctx.arc(cx, cy, rad, 0, Math.PI * 2)
+      ctx.fillStyle = rgba(black ? p.keyBlack : p.dark ? [20, 20, 23] : p.text)
+      ctx.fill()
+    }
   }
 
   private drawChordLabels(first: number, last: number, yOf: (time: number) => number, fadeAt: (y: number) => number): void {

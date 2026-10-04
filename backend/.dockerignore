@@ -1,0 +1,9 @@
+# Docker build context = backend/: only what backend/Dockerfile copies.
+*
+!pyproject.toml
+!uv.lock
+!app
+!scripts/warmup.py
+**/__pycache__
+**/*.py[cod]
+**/.DS_Store

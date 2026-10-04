@@ -8,8 +8,12 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import re
 import shutil
+import threading
+import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Annotated, Any, AsyncIterator, Callable, Optional
 
 from fastapi import APIRouter, Body, FastAPI, Request, Response
@@ -23,6 +27,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.engine import engine_info
 
+from .auth import AuthMiddleware, FirebaseTokenVerifier, MediaSigner
+from .gcs import UploadBucket
 from .jobs import Analyzer, JobManager, too_long_message
 from .models import (
     AnalysisOptions,
@@ -33,10 +39,14 @@ from .models import (
     Job,
     ReanalyzeRequest,
     Settings,
+    StorageJobRequest,
     Track,
     TrackNotes,
     TrackPatch,
     TrackSummary,
+    UserInfo,
+    VocalNotes,
+    VocalsRequest,
     normalize_origin,
 )
 from .sources import (
@@ -51,6 +61,7 @@ from .sources import (
     ytdlp_version,
 )
 from .storage import TrackNotFound, TrackStore
+from .users import current_uid
 
 log = logging.getLogger("chords.api")
 
@@ -63,6 +74,10 @@ STATUS_BY_CODE: dict[str, int] = {
     "analysis_failed": 500,
     "not_found": 404,
     "internal": 500,
+    "unauthorized": 401,
+    "quota_exceeded": 429,
+    "download_blocked": 502,
+    "unavailable": 501,
 }
 
 
@@ -103,21 +118,33 @@ class LocalOnlyMiddleware:
 
     Pages on a local host (any port) and the explicitly ``allowed_origins`` (e.g. the GitHub Pages build of
     the UI) may use the API; CORS (configured in ``create_app``) mirrors the same list.
+
+    Cloud mode (``cloud=True``): the host patterns (``*.run.app``) don't make an origin trusted - only the
+    listed origins, local pages and same-origin requests (e.g. /api/docs) pass the cross-site check.
     """
 
     def __init__(
-        self, app: ASGIApp, allowed_hosts: tuple[str, ...], allowed_origins: tuple[str, ...] = ()
+        self,
+        app: ASGIApp,
+        allowed_hosts: tuple[str, ...],
+        allowed_origins: tuple[str, ...] = (),
+        cloud: bool = False,
     ) -> None:
         self.app = app
         self.allowed = allowed_hosts
         self.origins = frozenset(normalize_origin(o) for o in allowed_origins)
+        self.cloud = cloud
 
-    def origin_allowed(self, origin: str) -> bool:
+    def origin_allowed(self, origin: str, host: str = "") -> bool:
         if not origin or origin == "null":
             return False
         if normalize_origin(origin) in self.origins:
             return True
         origin_host = _split_host(origin.split("://", 1)[-1].split("/", 1)[0])
+        if self.cloud:
+            return bool(re.fullmatch(LOCAL_ORIGIN_REGEX, origin.lower())) or (
+                bool(origin_host) and origin_host.lower() == host.lower()
+            )
         return bool(origin_host) and _host_matches(origin_host, self.allowed)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -137,7 +164,7 @@ class LocalOnlyMiddleware:
             origin
             and scope.get("method") not in ("GET", "HEAD", "OPTIONS")
             and scope.get("path", "").startswith("/api")
-            and not self.origin_allowed(origin)
+            and not self.origin_allowed(origin, host)
         ):
             await error_response(403, "internal", "Cross-site requests are not allowed")(scope, receive, send)
             return
@@ -157,19 +184,40 @@ def create_app(
     analyzer: Optional[Analyzer] = None,
     fetcher: Optional[UrlFetcher] = None,
     engine_info_fn: Optional[Callable[[], dict]] = None,
+    token_verifier: Any = None,
+    gcs_client_factory: Optional[Callable[[], Any]] = None,
+    vocal_transcriber: Optional[Callable[..., dict]] = None,
 ) -> FastAPI:
+    """``token_verifier`` (``.verify(token) -> uid``) and ``gcs_client_factory`` replace the Firebase token
+    check and the google-cloud-storage client (tests); ``vocal_transcriber`` replaces app.vocals.transcribe."""
     settings = settings or Settings.from_env()
     ensure_tool_path()
     if not logging.getLogger().handlers:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    store = TrackStore(settings)
-    jobs = JobManager(settings, store, fetcher or YtDlpFetcher(settings.max_upload_bytes), analyzer)
+    signer: Optional[MediaSigner] = None
+    if settings.cloud:
+        if settings.signing_key:
+            signer = MediaSigner(settings.signing_key, ttl_s=settings.media_url_ttl_s)
+        else:
+            log.warning("CHORDS_SIGNING_KEY is not set: media links stop working when the server restarts")
+            signer = MediaSigner.random(ttl_s=settings.media_url_ttl_s)
+    store = TrackStore(settings, signer=signer)
+    jobs = JobManager(
+        settings, store, fetcher or YtDlpFetcher(settings.max_upload_bytes), analyzer, vocal_transcriber=vocal_transcriber
+    )
+    bucket = (
+        UploadBucket(settings.upload_bucket, project=settings.firebase_project, client_factory=gcs_client_factory)
+        if settings.cloud and settings.upload_bucket
+        else None
+    )
     get_engine_info = engine_info_fn or engine_info
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         store.init()
-        log.info("data dir: %s", settings.data_dir)
+        log.info("data dir: %s (auth: %s)", settings.data_dir, settings.auth)
+        if settings.cloud:
+            _start_cloud_background_tasks(preload_engine=analyzer is None, bucket=bucket, work_dir=settings.work_dir)
         try:
             yield
         finally:
@@ -186,7 +234,15 @@ def create_app(
     app.state.settings = settings
     app.state.store = store
     app.state.jobs = jobs
+    app.state.bucket = bucket
 
+    if settings.cloud:  # innermost: CORS (below) also decorates its 401 responses
+        app.add_middleware(
+            AuthMiddleware,
+            verifier=token_verifier or FirebaseTokenVerifier(settings.firebase_project),
+            signer=signer,
+            smoke_key=settings.smoke_key,
+        )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(settings.allowed_origins),
@@ -194,18 +250,75 @@ def create_app(
         # Private Network Access: an https page (GitHub Pages) calling http://localhost gets a preflight
         # with "Access-Control-Request-Private-Network: true"; allowed origins get "...-Allow-Private-Network".
         allow_private_network=True,
+        # Cloud API calls carry an Authorization header, so every request is preflighted; let browsers
+        # cache the preflight instead of repeating it on each job poll.
+        max_age=600,
         allow_methods=["*"],
         allow_headers=["*"],
         expose_headers=["Content-Range", "Accept-Ranges", "Content-Length"],
     )
     app.add_middleware(
-        LocalOnlyMiddleware, allowed_hosts=settings.allowed_hosts, allowed_origins=settings.allowed_origins
+        LocalOnlyMiddleware,
+        allowed_hosts=settings.allowed_hosts,
+        allowed_origins=settings.allowed_origins,
+        cloud=settings.cloud,
     )
 
     _install_error_handlers(app)
-    app.include_router(_api_router(settings, store, jobs, get_engine_info))
+    app.include_router(_api_router(settings, store, jobs, get_engine_info, bucket))
     _install_frontend(app, settings)
     return app
+
+
+def _warm_analysis(work_dir: Path) -> None:
+    """Analyze 8 s of synthetic chords once, so every import, model and numba kernel is ready before the
+    first real job (the kernels come from the image's cache when the CPU target matches)."""
+    import numpy as np
+    import soundfile as sf
+
+    from app.engine import analyze
+
+    sr = 44100
+    t = np.arange(sr * 2) / sr
+    chords = [(261.63, 329.63, 392.0), (220.0, 261.63, 329.63), (174.61, 220.0, 261.63), (196.0, 246.94, 293.66)]
+    y = np.concatenate([sum(np.sin(2 * np.pi * f * t) * np.exp(-1.2 * t) for f in c) for c in chords]) * 0.25
+    work_dir.mkdir(parents=True, exist_ok=True)
+    path = work_dir / "engine-warmup.wav"  # one preload per process; scratch is wiped at start-up
+    try:
+        sf.write(path, y.astype(np.float32), sr)
+        analyze(str(path))
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def _start_cloud_background_tasks(*, preload_engine: bool, bucket: Optional[UploadBucket], work_dir: Path) -> None:
+    """Cloud start-up: load the chord models (and run one tiny analysis) while the first request is still
+    on its way, and remove uploads abandoned by clients (older than a day)."""
+
+    def preload() -> None:
+        try:
+            from app.engine import neural
+
+            started = time.monotonic()
+            if neural.available():
+                neural.ensure_loaded()
+            log.info("engine models preloaded in %.1fs", time.monotonic() - started)
+            _warm_analysis(work_dir)
+            log.info("engine warm in %.1fs", time.monotonic() - started)
+        except Exception:  # pragma: no cover - the first job loads them anyway
+            log.warning("engine preload failed", exc_info=True)
+
+    def sweep() -> None:
+        try:
+            assert bucket is not None
+            bucket.sweep()
+        except Exception as exc:  # pragma: no cover - best effort
+            log.warning("stale upload sweep failed: %s", exc)
+
+    if preload_engine:
+        threading.Thread(target=preload, name="chords-preload", daemon=True).start()
+    if bucket is not None:
+        threading.Thread(target=sweep, name="chords-upload-sweep", daemon=True).start()
 
 
 def _install_error_handlers(app: FastAPI) -> None:
@@ -257,6 +370,13 @@ async def _read_body_limited(request: Request, limit: int) -> bytes:
     return b"".join(chunks)
 
 
+def _cloud_too_large(settings: Settings) -> str:
+    return (
+        f"Files over {settings.max_request_mb:g} MB can't be sent in one request to the cloud server - "
+        "upload them to cloud storage and use POST /api/jobs/storage"
+    )
+
+
 def _validation_message(exc: ValidationError) -> str:
     first = exc.errors()[0] if exc.errors() else {}
     where = ".".join(str(p) for p in first.get("loc", ()))
@@ -275,8 +395,26 @@ def _options(raw: Optional[AnalysisOptions | dict[str, Any]]) -> dict[str, Any]:
     return raw.to_engine()
 
 
+_UPLOAD_SEGMENT_RE = re.compile(r"^[^/\\\x00-\x1f\x7f]{1,255}$")
+
+
+def _upload_path(raw: str, prefix: str) -> str:
+    """Validate a client upload path: ``users/<uid>/uploads/<...>/<filename>`` of the caller."""
+    path = raw.strip()
+    if not path.startswith(prefix):
+        raise ApiException("unauthorized", f"The upload path must start with {prefix}", status=403)
+    rest = path[len(prefix):].split("/")
+    if not rest or any(seg in ("", ".", "..") or not _UPLOAD_SEGMENT_RE.fullmatch(seg) for seg in rest):
+        raise ApiException("not_found", "Invalid upload path")
+    return path
+
+
 def _api_router(
-    settings: Settings, store: TrackStore, jobs: JobManager, get_engine_info: Callable[[], dict]
+    settings: Settings,
+    store: TrackStore,
+    jobs: JobManager,
+    get_engine_info: Callable[[], dict],
+    bucket: Optional[UploadBucket] = None,
 ) -> APIRouter:
     api = APIRouter(prefix="/api")
 
@@ -288,6 +426,7 @@ def _api_router(
         except Exception:
             log.exception("engine_info() failed")
             info, ok = EngineInfo(name="unavailable", version="", features={}), False
+        info.features["vocals"] = jobs.vocals_available()
         has_ffmpeg = ffmpeg_available()
         return Health(ok=ok and has_ffmpeg, engine=info, ytdlp=ytdlp_version(), ffmpeg=has_ffmpeg)
 
@@ -321,10 +460,17 @@ def _api_router(
         },
     )
     async def upload_job(request: Request) -> Job:
-        """Multipart upload streamed straight to disk; deduplicated by content sha1."""
+        """Multipart upload streamed straight to disk; deduplicated by content sha1. Cloud mode caps the
+        body at ~30 MB (Cloud Run allows 32 MiB per request): bigger files go through POST /jobs/storage."""
+        limit = min(settings.max_upload_bytes, settings.max_request_bytes) if settings.cloud else settings.max_upload_bytes
         work = store.new_work_dir("upload")
         try:
-            upload = await receive_upload(request, work, settings.max_upload_bytes)
+            try:
+                upload = await receive_upload(request, work, limit)
+            except SourceError as exc:
+                if settings.cloud and exc.code == "too_large":
+                    raise SourceError("too_large", _cloud_too_large(settings)) from exc
+                raise
             probe = await run_in_threadpool(probe_media, upload.path)
             if not probe.has_audio:
                 raise SourceError("unsupported_format", "This file has no audio track")
@@ -334,6 +480,64 @@ def _api_router(
             shutil.rmtree(work, ignore_errors=True)
             raise
         return await run_in_threadpool(jobs.submit_upload, upload, probe, _options(upload.options))
+
+    @api.post(
+        "/jobs/storage",
+        response_model=Job,
+        status_code=201,
+        responses={501: {"description": "Not a cloud server (code unavailable)"}},
+    )
+    def storage_job(body: StorageJobRequest) -> Job:
+        """Cloud mode: analyze a file the client uploaded to ``users/<uid>/uploads/...`` in the upload bucket
+        (big files, tab recordings). The object is deleted once read."""
+        if bucket is None:
+            raise ApiException("unavailable", "Cloud storage uploads are not enabled on this server")
+        path = _upload_path(body.path, store.upload_prefix())
+        info = bucket.stat(path)
+        if info is None:
+            raise ApiException("not_found", "The upload was not found (it may have been processed already)")
+        if info.size > settings.max_upload_bytes:
+            bucket.delete(path)
+            raise ApiException("too_large", f"The file is larger than the {settings.max_upload_mb:g} MB limit")
+        if info.size == 0:
+            bucket.delete(path)
+            raise ApiException("unsupported_format", "The uploaded file is empty")
+        video_id = None
+        if body.source is not None and body.source.type == "youtube":
+            video_id = body.source.video_id
+            if not video_id and body.source.url:
+                video_id = normalize_url(body.source.url).youtube_id
+            if not video_id:
+                raise ApiException("invalid_url", "source.videoId is required for a YouTube recording")
+        return jobs.submit_storage(
+            path,
+            bucket,
+            size=info.size,
+            title=body.title,
+            video_id=video_id,
+            start_offset=float(body.start_offset or 0.0),
+            options=_options(body.options),
+        )
+
+    @api.get("/me", response_model=UserInfo)
+    def me() -> UserInfo:
+        """The signed-in user (cloud mode) and their quotas for today (UTC)."""
+        uid = current_uid()
+        if not settings.cloud or not uid:
+            return UserInfo(uid=None, cloud=settings.cloud, quotas=None)
+        usage = jobs.quotas.usage(uid)
+        return UserInfo.model_validate(
+            {
+                "uid": uid,
+                "cloud": True,
+                "quotas": {
+                    "day": usage["day"],
+                    "analyses": usage["analyses"],
+                    "vocals": usage["vocals"],
+                    "jobs": {"used": jobs.running_count(uid), "limit": settings.max_user_jobs},
+                },
+            }
+        )
 
     @api.get("/jobs", response_model=list[Job])
     def list_jobs() -> list[Job]:
@@ -424,6 +628,48 @@ def _api_router(
             path,
             media_type="audio/mpeg",
             headers={"Cache-Control": "private, max-age=3600", "Accept-Ranges": "bytes"},
+        )
+
+    # ------------------------------------------------------------------ vocal melody + stems (optional extra)
+
+    @api.post(
+        "/tracks/{track_id}/vocals",
+        response_model=Job,
+        status_code=201,
+        responses={501: {"description": "Vocal transcription is not installed on this server (code unavailable)"}},
+    )
+    def transcribe_vocals(track_id: str, body: Annotated[Optional[VocalsRequest], Body()] = None) -> Job:
+        """Separate the vocals (Demucs) and transcribe the sung melody: a job with ``kind: "vocals"``. It is
+        done at once when the track already has them, unless ``{"force": true}``."""
+        force = bool(body and body.force)
+        if not store.exists(track_id):
+            raise _not_found()
+        if (force or not store.has_vocals(track_id)) and not jobs.vocals_available():
+            raise ApiException("unavailable", "Vocal transcription is not installed on this server")
+        return jobs.submit_vocals(track_id, force=force)
+
+    @api.get(
+        "/tracks/{track_id}/vocals",
+        response_model=VocalNotes,
+        responses={404: {"description": "Unknown track, or its vocals were not transcribed yet (code not_found)"}},
+    )
+    def get_vocals(track_id: str) -> Response:
+        raw = store.read_vocals(track_id)  # unknown track -> 404 not_found
+        if raw is None:
+            raise ApiException("not_found", "The vocals were not transcribed for this track yet")
+        return Response(content=raw, media_type="application/json", headers={"Cache-Control": "no-cache"})
+
+    @api.api_route("/tracks/{track_id}/stems/{name}", methods=["GET", "HEAD"], response_class=FileResponse)
+    def track_stem(track_id: str, name: str) -> FileResponse:
+        """A separated stem (``vocals`` or ``instruments`` = bass + other) as mp3, with HTTP Range support."""
+        try:
+            path = store.stem_path(track_id, name)
+        except TrackNotFound:
+            raise ApiException("not_found", f"No {name!r} stem for this track") from None
+        return FileResponse(
+            path,
+            media_type="audio/mpeg",
+            headers={"Cache-Control": "private, no-cache", "Accept-Ranges": "bytes"},  # may be recomputed
         )
 
     @api.api_route("/{rest:path}", methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"], include_in_schema=False)

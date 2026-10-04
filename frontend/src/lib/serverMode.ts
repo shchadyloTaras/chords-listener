@@ -1,8 +1,9 @@
-// Where the chord server is, if anywhere:
-//  · same origin — the page is served by the backend (http://localhost:8765) or proxied by Vite: API at "/api";
-//  · remote — the page lives elsewhere (GitHub Pages) and talks to the user's own server at `serverUrl`
-//    (default http://localhost:8765, started with ./start.sh);
-//  · none — "browser mode": files and mic recordings are analyzed in the page and kept in IndexedDB.
+// Where the chord server is, if anywhere (docs/CLOUD.md "Frontend config"), in this order:
+//  1. same origin — the page is served by the backend (./start.sh, http://localhost:8765) or proxied by Vite;
+//  2. cloud — the signed-in user's cloud API (Cloud Run, `CLOUD_API_URL`); every call carries the
+//     Firebase ID token (lib/api.ts). Selected right away: a cold start only delays the first answer;
+//  3. remote — the user's own server at `serverUrl` (advanced, opt-in `useServerPrefs.localServer`);
+//  4. none — "browser mode": files and recordings are analyzed in the page and kept in IndexedDB.
 //
 // Chrome's Local Network Access (Chrome 142+): a public https page needs the user's permission
 // ("loopback-network" / "local-network", formerly "local-network-access") before it may reach
@@ -12,8 +13,11 @@
 // LAN host names need fetch(..., { targetAddressSpace: 'local' }) to be exempt from mixed-content checks.
 import { useEffect } from 'react'
 import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
+import { CLOUD_API_URL } from '../config'
 import { useApp } from '../store'
 import type { Health } from '../types'
+import { useAuth } from './auth'
 
 /** Static build hosted away from the backend (GitHub Pages, base "/chords-listener/"). */
 export const HOSTED = import.meta.env.BASE_URL !== '/'
@@ -22,6 +26,8 @@ export const SAME_ORIGIN_API = '/api'
 export const PROJECT_REPO = 'https://github.com/shchadyloTaras/chords-listener.git'
 
 export type ConnectionStatus = 'checking' | 'server' | 'browser'
+/** who answers while `status === 'server'`: a local server (same origin or the user's own) or the cloud API */
+export type Backend = 'local' | 'cloud'
 export type NetworkPermission = 'granted' | 'prompt' | 'denied' | 'unsupported'
 /** why the last probe did not reach a server */
 export type ProbeFailure = 'unreachable' | 'permission' | 'blocked' | 'invalid-url' | 'not-chords'
@@ -29,6 +35,7 @@ export type AddressSpace = 'loopback' | 'local' | 'public'
 
 export interface ConnectionState {
   status: ConnectionStatus
+  backend: Backend | null
   /** API base of the connected server: "/api" or "http://localhost:8765/api" */
   apiBase: string | null
   /** origin of the connected server (absolute), used to resolve URLs it returns */
@@ -43,19 +50,61 @@ export interface ConnectionState {
   checkedAt: number
 }
 
-export const useConnection = create<ConnectionState>()(() => ({
-  status: 'checking',
-  apiBase: null,
-  serverOrigin: null,
-  remote: false,
-  health: null,
-  permission: 'unsupported',
-  probing: false,
-  failure: null,
-  checkedAt: 0,
-}))
+const createConnectionStore = () =>
+  create<ConnectionState>()(() => ({
+    status: 'checking',
+    backend: null,
+    apiBase: null,
+    serverOrigin: null,
+    remote: false,
+    health: null,
+    permission: 'unsupported',
+    probing: false,
+    failure: null,
+    checkedAt: 0,
+  }))
+
+// Dev only: keep the one store across hot reloads of this module (components and lib/api must agree).
+export const useConnection: ReturnType<typeof createConnectionStore> =
+  import.meta.hot?.data.useConnection ?? createConnectionStore()
+if (import.meta.hot) import.meta.hot.data.useConnection = useConnection
+
+interface ServerPrefs {
+  /** use the user's own server at `serverUrl` (opt-in on the hosted site, always on in local builds) */
+  localServer: boolean
+}
+
+export const useServerPrefs = create<ServerPrefs>()(
+  persist(() => ({ localServer: !HOSTED }), { name: 'chords-listener-server', version: 1 }),
+)
+
+export function setLocalServerEnabled(on: boolean): void {
+  useServerPrefs.setState({ localServer: on })
+}
 
 // ------------------------------------------------------------------ addresses
+
+/**
+ * Cloud API prefix ("https://chords-api-….run.app", no trailing "/" or "/api"), or null when not
+ * configured / not a valid http(s) URL.
+ */
+export function normalizeCloudUrl(raw: string | null | undefined): string | null {
+  const text = (raw ?? '').trim().replace(/\/+$/, '').replace(/\/api$/, '')
+  if (!text) return null
+  let u: URL
+  try {
+    u = new URL(text)
+  } catch {
+    return null
+  }
+  if ((u.protocol !== 'http:' && u.protocol !== 'https:') || !u.hostname || u.username || u.password) return null
+  return `${u.origin}${u.pathname.replace(/\/+$/, '')}`
+}
+
+/** The configured cloud API prefix (null = this build has no cloud). */
+export function cloudPrefix(): string | null {
+  return normalizeCloudUrl(CLOUD_API_URL)
+}
 
 /** "localhost:8765", "http://127.0.0.1:8765/api/" → "http://localhost:8765"-style origin, or null. */
 export function normalizeServerUrl(raw: string): string | null {
@@ -155,7 +204,10 @@ export function needsFetchUpload(url: string): boolean {
   return addressHint(url) !== null
 }
 
-/** Resolves a path the server returned ("/api/tracks/…/audio") against the connected server. */
+/**
+ * Resolves a path the server returned ("/api/tracks/…/audio", signed "…/audio?u=…&exp=…&sig=…" in the
+ * cloud) against the connected server.
+ */
 export function resolveServerUrl(path: string): string {
   const { remote, serverOrigin } = useConnection.getState()
   if (!path || !remote || !serverOrigin || !path.startsWith('/') || path.startsWith('//')) return path
@@ -189,21 +241,76 @@ async function queryPermission(space: 'loopback' | 'local'): Promise<NetworkPerm
 
 // ------------------------------------------------------------------ probing
 
-interface Candidate {
+export interface Candidate {
   base: string
+  /** prefix that server-relative URLs ("/api/…") are resolved against */
   origin: string
   remote: boolean
+  backend: Backend
 }
 
-function candidates(): Candidate[] | null {
-  const out: Candidate[] = []
-  const here = typeof location !== 'undefined' ? location.origin : ''
-  if (!HOSTED && here) out.push({ base: SAME_ORIGIN_API, origin: here, remote: false })
-  const origin = normalizeServerUrl(useApp.getState().serverUrl)
-  if (!origin) return out.length ? out : null
-  if (HOSTED || origin !== here) out.push({ base: `${origin}/api`, origin, remote: true })
-  return out
+export interface CandidateInput {
+  /** static build hosted away from the backend (GitHub Pages) */
+  hosted: boolean
+  /** the page's origin */
+  here: string
+  signedIn: boolean
+  /** CLOUD_API_URL ('' = none) */
+  cloudUrl: string
+  /** the user opted into their own server */
+  localServer: boolean
+  serverUrl: string
 }
+
+/**
+ * API bases to try, in the order of docs/CLOUD.md: same-origin server → cloud (signed in) →
+ * the user's own server (opt-in). Empty = browser mode. `invalidServerUrl` flags an unusable address.
+ */
+export function candidateList(i: CandidateInput): { list: Candidate[]; invalidServerUrl: boolean } {
+  const list: Candidate[] = []
+  if (!i.hosted && i.here) list.push({ base: SAME_ORIGIN_API, origin: i.here, remote: false, backend: 'local' })
+  const cloud = normalizeCloudUrl(i.cloudUrl)
+  if (i.signedIn && cloud) list.push({ base: `${cloud}/api`, origin: new URL(cloud).origin, remote: true, backend: 'cloud' })
+  let invalidServerUrl = false
+  if (i.localServer) {
+    const origin = normalizeServerUrl(i.serverUrl)
+    if (!origin) invalidServerUrl = true
+    else if (i.hosted || origin !== i.here) list.push({ base: `${origin}/api`, origin, remote: true, backend: 'local' })
+  }
+  return { list, invalidServerUrl }
+}
+
+function currentCandidates() {
+  return candidateList({
+    hosted: HOSTED,
+    here: typeof location !== 'undefined' ? location.origin : '',
+    signedIn: !!useAuth.getState().user,
+    cloudUrl: CLOUD_API_URL,
+    localServer: useServerPrefs.getState().localServer,
+    serverUrl: useApp.getState().serverUrl,
+  })
+}
+
+/** Waits (bounded) until Firebase has restored or ruled out a saved session. */
+function authSettled(timeoutMs: number): Promise<void> {
+  if (useAuth.getState().ready) return Promise.resolve()
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer)
+      unsubscribe()
+      resolve()
+    }
+    const timer = setTimeout(done, timeoutMs)
+    const unsubscribe = useAuth.subscribe((s) => {
+      if (s.ready) done()
+    })
+  })
+}
+
+/** How long the first selection waits for Firebase to restore a session before going without it. */
+const AUTH_WAIT_MS = 8000
+/** Cloud Run scales to zero: the first health check may wait for an instance to start. */
+const CLOUD_HEALTH_TIMEOUT_MS = 60_000
 
 function isHealth(v: unknown): v is Health {
   if (!v || typeof v !== 'object') return false
@@ -234,13 +341,29 @@ async function fetchHealth(base: string, timeoutMs: number): Promise<HealthResul
 
 let inflight: Promise<boolean> | null = null
 let pendingInteractive: Promise<boolean> | null = null
+/** a probe was asked for while one was running (e.g. the user signed in meanwhile): run again after it */
+let rerun = false
 
 /**
- * Looks for a server (same origin first, then `serverUrl`) and updates the connection state.
+ * Picks the API (same origin → cloud → `serverUrl` → browser mode) and updates the connection state.
  * `interactive` = the user asked for it (a click): may show the browser's local-network prompt and waits for it.
  */
 export function probeServer(opts: { interactive?: boolean } = {}): Promise<boolean> {
-  if (!opts.interactive) return inflight ?? (inflight = run(false).finally(() => (inflight = null)))
+  if (!opts.interactive) {
+    if (inflight) {
+      rerun = true
+      return inflight
+    }
+    inflight = (async () => {
+      let ok = await run(false)
+      while (rerun) {
+        rerun = false
+        ok = await run(false)
+      }
+      return ok
+    })().finally(() => (inflight = null))
+    return inflight
+  }
   if (pendingInteractive) return pendingInteractive
   const prev = inflight ?? Promise.resolve(false)
   pendingInteractive = prev
@@ -250,12 +373,72 @@ export function probeServer(opts: { interactive?: boolean } = {}): Promise<boole
   return pendingInteractive
 }
 
+let cloudHealth: { base: string; promise: Promise<void> } | null = null
+
+/** Fetches the cloud's /health in the background (no polling: an idle tab must let Cloud Run scale to zero). */
+export function refreshCloudHealth(): Promise<void> {
+  const { backend, apiBase } = useConnection.getState()
+  if (backend !== 'cloud' || !apiBase) return Promise.resolve()
+  if (cloudHealth?.base === apiBase) return cloudHealth.promise
+  const base = apiBase
+  const promise = fetchHealth(base, CLOUD_HEALTH_TIMEOUT_MS)
+    .then((result) => {
+      const now = useConnection.getState()
+      if (now.backend !== 'cloud' || now.apiBase !== base) return
+      if ('health' in result) useConnection.setState({ health: result.health, failure: null, checkedAt: Date.now() })
+      else useConnection.setState({ failure: result.failure, checkedAt: Date.now() })
+    })
+    .finally(() => {
+      if (cloudHealth?.base === base) cloudHealth = null
+    })
+  cloudHealth = { base, promise }
+  return promise
+}
+
+/** The cloud answers for the signed-in user from now on (its health arrives in the background). */
+function selectCloud(c: Candidate): void {
+  const prev = useConnection.getState()
+  const same = prev.status === 'server' && prev.backend === 'cloud' && prev.apiBase === c.base
+  useConnection.setState({
+    status: 'server',
+    backend: 'cloud',
+    apiBase: c.base,
+    serverOrigin: c.origin,
+    remote: true,
+    health: same ? prev.health : null,
+    permission: 'unsupported',
+    probing: false,
+    failure: same ? prev.failure : null,
+    checkedAt: Date.now(),
+  })
+  if (!same || !prev.health) void refreshCloudHealth()
+}
+
 async function run(interactive: boolean): Promise<boolean> {
   useConnection.setState({ probing: true })
-  const list = candidates()
-  let failure: ProbeFailure | null = list ? 'unreachable' : 'invalid-url'
+  let { list, invalidServerUrl } = currentCandidates()
+  let failure: ProbeFailure | null = null
   let permission: NetworkPermission = 'unsupported'
-  for (const c of list ?? []) {
+  // Everything after the same-origin server depends on the session: wait (once) for Firebase to
+  // restore it before choosing between the cloud and the user's own server.
+  let authChecked = !cloudPrefix() || useAuth.getState().ready
+  const settleAuth = async () => {
+    authChecked = true
+    await authSettled(AUTH_WAIT_MS)
+    const fresh = currentCandidates()
+    invalidServerUrl = fresh.invalidServerUrl
+    return fresh.list.filter((f) => f.base !== SAME_ORIGIN_API)
+  }
+  for (let i = 0; i < list.length; i++) {
+    if (!authChecked && list[i].remote) {
+      list = [...list.slice(0, i), ...(await settleAuth())]
+      if (i >= list.length) break
+    }
+    const c = list[i]
+    if (c.backend === 'cloud') {
+      selectCloud(c)
+      return true
+    }
     const gated = c.remote ? gatedSpace(c.origin) : null
     let timeout = interactive ? 8000 : 4000
     if (gated) {
@@ -276,6 +459,7 @@ async function run(interactive: boolean): Promise<boolean> {
     if ('health' in result) {
       useConnection.setState({
         status: 'server',
+        backend: 'local',
         apiBase: c.base,
         serverOrigin: c.origin,
         remote: c.remote,
@@ -294,22 +478,31 @@ async function run(interactive: boolean): Promise<boolean> {
       if (permission === 'denied') failure = 'blocked'
     }
   }
+  if (!authChecked) {
+    // nothing else was tried: a restored session may still bring in the cloud
+    const cloud = (await settleAuth()).find((c) => c.backend === 'cloud')
+    if (cloud) {
+      selectCloud(cloud)
+      return true
+    }
+  }
   useConnection.setState({
     status: 'browser',
+    backend: null,
     apiBase: null,
     serverOrigin: null,
     remote: false,
     health: null,
     permission,
     probing: false,
-    failure,
+    failure: failure ?? (invalidServerUrl ? 'invalid-url' : null),
     checkedAt: Date.now(),
   })
   return false
 }
 
 /** Resolves once the first probe has finished (or after `timeoutMs`). */
-export function whenSettled(timeoutMs = 6000): Promise<ConnectionState> {
+export function whenSettled(timeoutMs = 10_000): Promise<ConnectionState> {
   const now = useConnection.getState()
   if (now.status !== 'checking') return Promise.resolve(now)
   return new Promise((resolve) => {
@@ -336,28 +529,40 @@ export function noteServerTrouble(): void {
   }, 300)
 }
 
-/** Probes on start, when the address changes, on focus, and periodically (every 10 s while not connected). */
+/**
+ * Probes on start, when the session / address / opt-in changes, on focus, and periodically (every 10 s while
+ * not connected). The cloud is never polled: an idle tab must let Cloud Run scale to zero.
+ */
 export function useConnectionPolling(): void {
   const status = useConnection((s) => s.status)
+  const backend = useConnection((s) => s.backend)
   const serverUrl = useApp((s) => s.serverUrl)
+  const localServer = useServerPrefs((s) => s.localServer)
+  const uid = useAuth((s) => s.user?.uid ?? null)
+  const authReady = useAuth((s) => s.ready)
 
   useEffect(() => {
     void probeServer()
-  }, [serverUrl])
+  }, [serverUrl, localServer, uid, authReady])
 
   useEffect(() => {
-    const onFocus = () => void probeServer()
+    const onFocus = () => {
+      const now = useConnection.getState()
+      if (now.backend !== 'cloud') void probeServer()
+      else if (!now.health) void refreshCloudHealth()
+    }
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
   }, [])
 
   useEffect(() => {
+    if (backend === 'cloud') return
     const every = status === 'server' ? 30_000 : HOSTED ? 10_000 : 3_000
     const id = window.setInterval(() => {
       if (!document.hidden) void probeServer()
     }, every)
     return () => window.clearInterval(id)
-  }, [status])
+  }, [status, backend])
 }
 
 // ------------------------------------------------------------------ "this needs the server" hand-off

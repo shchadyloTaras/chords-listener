@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -22,6 +22,11 @@ ErrorCode = Literal[
     "analysis_failed",
     "not_found",
     "internal",
+    # cloud (docs/CLOUD.md)
+    "unauthorized",  # missing/invalid Firebase ID token or media signature (401)
+    "quota_exceeded",  # per-user daily limit or concurrent-job limit (429)
+    "download_blocked",  # YouTube refused the server (bot check / sign-in wall / 403)
+    "unavailable",  # feature not installed / not enabled on this server (501)
 ]
 SourceType = Literal["youtube", "url", "file"]
 
@@ -39,6 +44,31 @@ def _env_float(name: str, default: float) -> float:
         return default
     return value if value > 0 else default
 
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    try:
+        return int(raw) if raw else default
+    except ValueError:
+        return default
+
+
+AuthMode = Literal["off", "firebase"]
+
+
+def _env_auth() -> AuthMode:
+    """CHORDS_AUTH: "off" (default, local single-user) or "firebase" (cloud). Anything else is an error,
+    so a typo can't silently turn authentication off."""
+    raw = os.environ.get("CHORDS_AUTH", "").strip().lower()
+    if raw in ("", "off", "none", "local"):
+        return "off"
+    if raw == "firebase":
+        return "firebase"
+    raise ValueError(f"CHORDS_AUTH must be 'off' or 'firebase', not {raw!r}")
+
+
+# Cloud mode answers on the Cloud Run host (and local names, for testing the cloud mode locally).
+CLOUD_ALLOWED_HOSTS: tuple[str, ...] = ("*.run.app", "localhost", "127.0.0.1", "::1")
 
 DEFAULT_ALLOWED_ORIGINS: tuple[str, ...] = (
     "https://shchadylotaras.github.io",
@@ -85,6 +115,30 @@ class Settings:
     # Live-piano notes uploaded by the UI (PUT /api/tracks/{id}/notes)
     max_notes: int = 300_000
     max_notes_mb: float = 25.0
+    # ---- cloud mode (docs/CLOUD.md); the defaults keep the local single-user behaviour
+    auth: AuthMode = "off"  # CHORDS_AUTH
+    firebase_project: str = "build-chords-listener"  # CHORDS_FIREBASE_PROJECT
+    signing_key: str = field(default="", repr=False)  # CHORDS_SIGNING_KEY (media URL signatures)
+    smoke_key: str = field(default="", repr=False)  # CHORDS_SMOKE_KEY (X-Smoke-Key -> uid "smoke-test")
+    upload_bucket: str = ""  # CHORDS_UPLOAD_BUCKET (client uploads for POST /api/jobs/storage)
+    scratch_dir: Optional[Path] = None  # CHORDS_WORK_DIR: job scratch space (default <data>/.work)
+    quota_analyses: int = 40  # CHORDS_QUOTA_ANALYSES: analyses per user per UTC day
+    quota_vocals: int = 15  # CHORDS_QUOTA_VOCALS: vocal transcriptions per user per UTC day
+    max_user_jobs: int = 2  # CHORDS_QUOTA_JOBS: running jobs per user
+    max_request_mb: float = 30.0  # CHORDS_MAX_REQUEST_MB: multipart upload cap (Cloud Run: 32 MiB/request)
+    media_url_ttl_s: int = 12 * 3600
+
+    @property
+    def cloud(self) -> bool:
+        return self.auth == "firebase"
+
+    @property
+    def users_dir(self) -> Path:
+        return self.data_dir / "users"
+
+    @property
+    def max_request_bytes(self) -> int:
+        return int(self.max_request_mb * 1024 * 1024)
 
     @property
     def max_duration_s(self) -> float:
@@ -104,13 +158,25 @@ class Settings:
 
     @property
     def work_dir(self) -> Path:
-        return self.data_dir / ".work"
+        return self.scratch_dir or self.data_dir / ".work"
 
     @classmethod
     def from_env(cls) -> Settings:
         data_dir = os.environ.get("CHORDS_DATA_DIR", "").strip()
         hosts = os.environ.get("CHORDS_ALLOWED_HOSTS", "").strip()
+        host_list = tuple(h.strip() for h in hosts.split(",") if h.strip())
+        scratch = os.environ.get("CHORDS_WORK_DIR", "").strip()
         defaults = cls()
+        auth = _env_auth()
+        cloud = auth == "firebase"
+        if cloud:  # cloud: the env lists are added to the defaults (docs/CLOUD.md → CORS / hosts)
+            allowed_hosts = tuple(dict.fromkeys(CLOUD_ALLOWED_HOSTS + host_list))
+            allowed_origins = tuple(
+                dict.fromkeys(defaults.allowed_origins + _env_origins("CHORDS_ALLOWED_ORIGINS", ()))
+            )
+        else:
+            allowed_hosts = host_list or defaults.allowed_hosts
+            allowed_origins = _env_origins("CHORDS_ALLOWED_ORIGINS", defaults.allowed_origins)
         return cls(
             data_dir=Path(data_dir).expanduser().resolve() if data_dir else defaults.data_dir,
             frontend_dist=Path(os.environ["CHORDS_FRONTEND_DIST"]).expanduser().resolve()
@@ -118,8 +184,20 @@ class Settings:
             else defaults.frontend_dist,
             max_duration_min=_env_float("CHORDS_MAX_DURATION_MIN", defaults.max_duration_min),
             max_upload_mb=_env_float("CHORDS_MAX_UPLOAD_MB", defaults.max_upload_mb),
-            allowed_hosts=tuple(h.strip() for h in hosts.split(",") if h.strip()) if hosts else defaults.allowed_hosts,
-            allowed_origins=_env_origins("CHORDS_ALLOWED_ORIGINS", defaults.allowed_origins),
+            max_workers=max(1, _env_int("CHORDS_MAX_WORKERS", defaults.max_workers)),
+            max_finished_jobs=500 if cloud else defaults.max_finished_jobs,
+            allowed_hosts=allowed_hosts,
+            allowed_origins=allowed_origins,
+            auth=auth,
+            firebase_project=os.environ.get("CHORDS_FIREBASE_PROJECT", "").strip() or defaults.firebase_project,
+            signing_key=os.environ.get("CHORDS_SIGNING_KEY", "").strip(),
+            smoke_key=os.environ.get("CHORDS_SMOKE_KEY", "").strip(),
+            upload_bucket=os.environ.get("CHORDS_UPLOAD_BUCKET", "").strip(),
+            scratch_dir=Path(scratch).expanduser().resolve() if scratch else None,
+            quota_analyses=max(0, _env_int("CHORDS_QUOTA_ANALYSES", defaults.quota_analyses)),
+            quota_vocals=max(0, _env_int("CHORDS_QUOTA_VOCALS", defaults.quota_vocals)),
+            max_user_jobs=max(1, _env_int("CHORDS_QUOTA_JOBS", defaults.max_user_jobs)),
+            max_request_mb=_env_float("CHORDS_MAX_REQUEST_MB", defaults.max_request_mb),
         )
 
 
@@ -191,6 +269,10 @@ class TrackSummary(CamelModel):
     tempo: Optional[float] = None
     chord_count: Optional[int] = None
     edited: bool = False
+    # vocal melody transcribed (GET /api/tracks/{id}/vocals) and its separated stems
+    # (GET /api/tracks/{id}/stems/{name}; names: "vocals", "instruments")
+    vocals: bool = False
+    stems: list[str] = Field(default_factory=list)
     created_at: str
 
 
@@ -202,6 +284,11 @@ class Track(TrackSummary):
     chords: list[ChordSegment] = Field(default_factory=list)
     waveform: list[float] = Field(default_factory=list)
     engine: str = ""
+    # Set for recordings linked to a video (POST /api/jobs/storage with startOffset): every time above is
+    # in video time; the audio file starts at this video time (audio time = track time - startOffset).
+    start_offset: Optional[float] = None
+    # playable URLs of the stems listed in ``stems`` (signed like ``audioUrl`` in cloud mode)
+    stem_urls: dict[str, str] = Field(default_factory=dict)
 
 
 class EngineInfo(CamelModel):
@@ -219,6 +306,7 @@ class Health(CamelModel):
 
 class Job(CamelModel):
     id: str
+    kind: Literal["analysis", "vocals"] = "analysis"
     status: JobStatus
     progress: float
     message: str
@@ -257,6 +345,45 @@ class CreateJobRequest(CamelModel):
 
 class ReanalyzeRequest(CamelModel):
     options: Optional[AnalysisOptions] = None
+
+
+class StorageSource(CamelModel):
+    """What a cloud upload is: a plain file, or a recording of a YouTube video (tab capture)."""
+
+    type: Literal["youtube", "file"]
+    video_id: Optional[str] = Field(default=None, pattern=r"^[A-Za-z0-9_-]{11}$")
+    url: Optional[str] = Field(default=None, max_length=4096)
+    filename: Optional[str] = Field(default=None, max_length=255)
+
+
+class StorageJobRequest(CamelModel):
+    """POST /api/jobs/storage: ingest ``users/<uid>/uploads/...`` from the upload bucket (cloud mode)."""
+
+    path: str = Field(min_length=1, max_length=1024)
+    title: Optional[str] = Field(default=None, max_length=300)
+    source: Optional[StorageSource] = None
+    start_offset: Optional[float] = Field(default=None, ge=0, le=24 * 3600)
+    options: Optional[AnalysisOptions] = None
+
+
+class QuotaUsage(CamelModel):
+    used: int
+    limit: int
+
+
+class UserQuotas(CamelModel):
+    day: str
+    analyses: QuotaUsage
+    vocals: QuotaUsage
+    jobs: QuotaUsage
+
+
+class UserInfo(CamelModel):
+    """GET /api/me: who the server thinks the caller is, and their limits (cloud mode)."""
+
+    uid: Optional[str] = None
+    cloud: bool = False
+    quotas: Optional[UserQuotas] = None
 
 
 class TrackPatch(CamelModel):
@@ -306,6 +433,76 @@ class TrackNotes(BaseModel):
 
     def latest_end(self) -> float:
         return max((r[1] for r in self.notes), default=0.0)
+
+
+# --------------------------------------------------------------------------- vocal melody (optional extra)
+
+VOCALS_VERSION = 1
+
+
+class VocalsRequest(CamelModel):
+    """POST /api/tracks/{id}/vocals: ``force`` recomputes even when the vocals are already there."""
+
+    force: bool = False
+
+
+class VocalContour(CamelModel):
+    start: float
+    hop: float
+    midi: list[Optional[float]]
+
+
+class VocalRange(CamelModel):
+    low: int
+    high: int
+
+
+class VocalNotes(CamelModel):
+    """The sung melody (vocals.json): ``notes`` rows are ``[start s, end s, MIDI, velocity 0..1]`` (MIDI after
+    removing the singer's global tuning offset ``tuningCents``); ``contour`` is the raw f0 (fractional
+    MIDI, not tuning-corrected; null = unvoiced) for drawing. Times are track times."""
+
+    version: Literal[1] = VOCALS_VERSION
+    engine: str = Field(min_length=1, max_length=200)
+    tuning_cents: float = 0.0
+    notes: list[NoteRow] = Field(default_factory=list)
+    contour: Optional[VocalContour] = None
+    range: Optional[VocalRange] = None
+
+    @classmethod
+    def from_pipeline(cls, raw: Any, offset: float = 0.0) -> VocalNotes:
+        """Validate the pipeline's result leniently (bad rows dropped, values clamped) and move it into
+        track time (``offset`` = the track's startOffset for recordings linked to a video)."""
+        data = to_builtin(raw)
+        if not isinstance(data, dict):
+            raise ValueError("the vocal pipeline returned a non-object result")
+        offset = float(offset) if isinstance(offset, (int, float)) and math.isfinite(offset) and offset > 0 else 0.0
+        rows: list[NoteRow] = []
+        for row in data.get("notes") or []:
+            try:
+                start, end, midi, velocity = (float(row[0]), float(row[1]), int(row[2]), float(row[3]))
+            except (TypeError, ValueError, IndexError):
+                continue
+            if not (math.isfinite(start) and math.isfinite(end) and 0 <= start < end):
+                continue
+            if not NOTES_MIDI_MIN <= midi <= NOTES_MIDI_MAX:
+                continue
+            velocity = min(1.0, max(0.0, velocity)) if math.isfinite(velocity) else 0.5
+            rows.append((round(start + offset, 3), round(end + offset, 3), midi, round(velocity, 3)))
+        rows.sort(key=lambda r: (r[0], r[2]))
+        data["notes"] = rows
+        contour = data.get("contour")
+        if isinstance(contour, dict) and isinstance(contour.get("start"), (int, float)):
+            contour["start"] = round(float(contour["start"]) + offset, 3)
+        else:
+            data["contour"] = None
+        if rows:
+            data["range"] = {"low": min(r[2] for r in rows), "high": max(r[2] for r in rows)}
+        else:
+            data["range"] = None
+        tuning = data.get("tuningCents")
+        data["tuningCents"] = round(float(tuning), 1) if isinstance(tuning, (int, float)) and math.isfinite(tuning) else 0.0
+        return cls.model_validate(data)
 
 
 # --------------------------------------------------------------------------- engine output
@@ -378,6 +575,36 @@ class AnalysisResult(CamelModel):
         if not isinstance(data.get("engine"), str):
             data["engine"] = str(data.get("engine") or "")
         return cls.model_validate(data)
+
+    def shifted(self, offset: float) -> AnalysisResult:
+        """The same analysis in the time base of a video whose recording started at ``offset`` seconds:
+        every time moves by ``offset``, an "N" chord covers 0..offset (chords stay contiguous from 0) and
+        the waveform is padded with silence so it still spans 0..duration."""
+        if not (offset and math.isfinite(offset) and offset > 0):
+            return self
+        offset = round(offset, 4)
+
+        def move(t: float) -> float:
+            return round(t + offset, 4)
+
+        chords = [c.model_copy(update={"start": move(c.start), "end": move(c.end)}) for c in self.chords]
+        if chords and chords[0].label == "N":  # the recording starts silent: extend that segment back to 0
+            chords[0] = chords[0].model_copy(update={"start": 0.0})
+        elif chords and chords[0].start > 0:
+            chords.insert(
+                0,
+                ChordSegment(start=0.0, end=chords[0].start, label="N", root=None, quality=None, bass=None, confidence=1.0),
+            )
+        pad = round(len(self.waveform) * offset / self.duration) if self.duration > 0 else 0
+        return self.model_copy(
+            update={
+                "duration": move(self.duration),
+                "beats": [move(t) for t in self.beats],
+                "downbeats": [move(t) for t in self.downbeats],
+                "chords": chords,
+                "waveform": [0.0] * pad + list(self.waveform),
+            }
+        )
 
 
 def to_builtin(value: Any) -> Any:

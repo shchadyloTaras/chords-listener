@@ -1,7 +1,8 @@
 // Firebase Auth (email/password): session state for the UI + account actions.
-// Signing in is optional and only syncs settings (lib/settingsSync.ts); the /api backend
-// never sees the account. Firebase is loaded on demand into separate chunks, so a blocked
-// or unreachable Firebase only disables the account button's features, never the app.
+// Signing in syncs settings (lib/settingsSync.ts) and, on the hosted site, switches the API to the
+// cloud (lib/serverMode.ts), which gets the user's ID token with every request (lib/api.ts).
+// Firebase is loaded on demand into separate chunks, so a blocked or unreachable Firebase only
+// disables the account features, never the app.
 import type { Auth } from 'firebase/auth'
 import { create } from 'zustand'
 import { useApp } from '../store'
@@ -115,4 +116,68 @@ export async function sendPasswordReset(email: string) {
 export async function signOut() {
   const { auth, sdk } = await loadAuth()
   await sdk.signOut(auth)
+}
+
+/**
+ * The signed-in user's Firebase ID token for the cloud API: cached by Firebase and refreshed
+ * before it expires (`forceRefresh` = fetch a new one now). Null while signed out.
+ */
+export async function getIdToken(forceRefresh = false): Promise<string | null> {
+  const { auth } = await loadAuth()
+  const user = auth.currentUser
+  return user ? user.getIdToken(forceRefresh) : null
+}
+
+// ------------------------------------------------------------------ account dialog
+
+export type AuthDialogMode = 'signIn' | 'signUp'
+/** why the app itself opened the dialog: the session ran out, or the action needs an account */
+export type AuthDialogReason = 'expired' | 'required' | null
+
+interface AuthDialogState {
+  open: boolean
+  mode: AuthDialogMode
+  reason: AuthDialogReason
+  /** bumps on every open, so each open starts with a fresh form */
+  session: number
+}
+
+const createDialogStore = () =>
+  create<AuthDialogState>()(() => ({ open: false, mode: 'signIn', reason: null, session: 0 }))
+
+/** The one account dialog of the app (rendered by components/account/AuthDialogHost). */
+export const useAuthDialog: ReturnType<typeof createDialogStore> = import.meta.hot?.data.useAuthDialog ?? createDialogStore()
+if (import.meta.hot) import.meta.hot.data.useAuthDialog = useAuthDialog
+
+let signInWaiters: Array<(signedIn: boolean) => void> = []
+
+/** Opens the account dialog (sign in or sign up). An open dialog stays as it is. */
+export function openAuthDialog(mode: AuthDialogMode = 'signIn', reason: AuthDialogReason = null): void {
+  const s = useAuthDialog.getState()
+  if (s.open) {
+    if (reason && !s.reason) useAuthDialog.setState({ reason })
+    return
+  }
+  useAuthDialog.setState({ open: true, mode, reason, session: s.session + 1 })
+}
+
+/**
+ * Closes the dialog. Callers waiting in `requestSignIn` learn whether someone is signed in now
+ * (`signedIn` = the dialog just signed someone in; otherwise the current session decides).
+ */
+export function closeAuthDialog(signedIn?: boolean): void {
+  if (useAuthDialog.getState().open) useAuthDialog.setState({ open: false, reason: null })
+  const waiters = signInWaiters
+  signInWaiters = []
+  const result = signedIn ?? !!useAuth.getState().user
+  waiters.forEach((resolve) => resolve(result))
+}
+
+/**
+ * Asks the user to sign in (e.g. the cloud rejected the session) and waits: true once signed in,
+ * false when the dialog was dismissed.
+ */
+export function requestSignIn(reason: Exclude<AuthDialogReason, null> = 'required'): Promise<boolean> {
+  openAuthDialog('signIn', reason)
+  return new Promise((resolve) => signInWaiters.push(resolve))
 }

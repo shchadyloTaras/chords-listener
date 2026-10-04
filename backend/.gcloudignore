@@ -1,0 +1,14 @@
+# Source uploaded to Cloud Build by scripts/deploy_cloud.sh (gcloud builds submit backend ...):
+# only what backend/Dockerfile needs. Same syntax as .gitignore.
+/*
+!/Dockerfile
+!/.dockerignore
+!/pyproject.toml
+!/uv.lock
+!/app/
+!/scripts/
+/scripts/*
+!/scripts/warmup.py
+__pycache__/
+*.py[cod]
+.DS_Store

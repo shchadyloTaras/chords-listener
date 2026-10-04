@@ -8,14 +8,25 @@ Layout (under ``Settings.data_dir``)::
     tracks/<trackId>/edits.json      user chord edits (optional; dropped by "reset")
     tracks/<trackId>/notes.json      live-piano notes transcribed in the browser (optional; kept on
                                      re-analysis since the audio does not change)
+    tracks/<trackId>/vocals.json     sung melody (app.vocals; optional, kept on re-analysis)
+    tracks/<trackId>/stems/<name>.mp3  separated stems: vocals, instruments (= bass + other)
     .work/<jobId>/                   scratch space for running jobs (wiped on startup)
 
 A track directory is assembled completely inside ``.work`` and then moved into ``tracks/`` with a
 single atomic rename, so readers never observe half-written tracks. JSON files are written
 atomically (temp file + ``os.replace``).
+
+Cloud mode (``CHORDS_AUTH=firebase``, docs/CLOUD.md): every path above lives under
+``users/<uid>/`` for the *current user* (``app.users.current_uid()``), e.g.
+``<data>/users/<uid>/tracks/<trackId>/``. Feature code always goes through the helpers
+(``track_dir``, ``audio_path``, ``user_dir``, ``uploads_dir``, ``media_url`` ...) and never builds user
+paths itself. Scratch space (``CHORDS_WORK_DIR``) may then be on another file system than the
+library (Cloud Run: /tmp vs. the bucket mount); tracks are installed by copying with ``meta.json``
+last, and a track only "exists" once its meta.json is there.
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import os
@@ -25,17 +36,23 @@ import shutil
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from .models import (
     NOTES_VERSION,
+    VOCALS_VERSION,
     AnalysisResult,
     Settings,
     Track,
     TrackNotes,
     TrackPatch,
     TrackSummary,
+    VocalNotes,
 )
+from .users import NoUserContext, current_uid, valid_uid
+
+if TYPE_CHECKING:
+    from .auth import MediaSigner
 
 log = logging.getLogger("chords.storage")
 
@@ -45,6 +62,9 @@ META_FILE = "meta.json"
 EDITS_FILE = "edits.json"
 EDITS_BACKUP_FILE = "edits.prev.json"
 NOTES_FILE = "notes.json"
+VOCALS_FILE = "vocals.json"
+STEMS_DIR = "stems"
+STEM_NAMES = ("vocals", "instruments")
 
 _TRACK_ID_RE = re.compile(r"^[0-9a-f]{6,64}$")
 
@@ -77,17 +97,54 @@ class TrackNotFound(Exception):
 
 
 class TrackStore:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, signer: Optional[MediaSigner] = None) -> None:
         self.settings = settings
-        self.root = settings.tracks_dir
         self.work_root = settings.work_dir
+        self.signer = signer
         self._lock = threading.RLock()
+
+    # ------------------------------------------------------------------ per-user roots
+
+    def user_dir(self, uid: Optional[str] = None) -> Path:
+        """Root of the current (or given) user's files: ``<data>/users/<uid>`` in cloud mode, ``<data>``
+        itself in local mode. Raises NoUserContext in cloud mode without an authenticated user."""
+        if not self.settings.cloud:
+            return self.settings.data_dir
+        uid = uid or current_uid()
+        if not valid_uid(uid):
+            raise NoUserContext("no authenticated user for this operation")
+        return self.settings.users_dir / str(uid)
+
+    @property
+    def root(self) -> Path:
+        """The current user's track library (local mode: ``<data>/tracks``)."""
+        return self.user_dir() / "tracks"
+
+    def uploads_dir(self) -> Path:
+        """``<data>/users/<uid>/uploads`` — where clients upload big files (cloud mode)."""
+        return self.user_dir() / "uploads"
+
+    def upload_prefix(self) -> str:
+        """Bucket object prefix of the current user's uploads: ``users/<uid>/uploads/``."""
+        return self.uploads_dir().relative_to(self.settings.data_dir).as_posix() + "/"
+
+    def media_url(self, track_id: str, name: str = "audio") -> str:
+        """URL of a track's media file for ``<audio>``: ``/api/tracks/<id>/<name>`` (e.g. ``audio``,
+        ``stems/vocals``), signed for the current user in cloud mode (docs/CLOUD.md → Media URLs)."""
+        path = f"/api/tracks/{track_id}/{name}"
+        uid = current_uid()
+        if not self.settings.cloud or self.signer is None or not uid:
+            return path
+        return self.signer.sign(uid, path)
 
     # ------------------------------------------------------------------ lifecycle
 
     def init(self) -> None:
         """Create the directory layout and wipe scratch space left over from a previous run."""
-        self.root.mkdir(parents=True, exist_ok=True)
+        if self.settings.cloud:
+            self.settings.users_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            self.root.mkdir(parents=True, exist_ok=True)
         if self.work_root.exists():
             for child in self.work_root.iterdir():
                 if child.is_dir():
@@ -185,6 +242,74 @@ class TrackStore:
             d = self._require(track_id)
             write_json_atomic(d / NOTES_FILE, notes.model_dump(mode="json"))
 
+    # ------------------------------------------------------------------ vocal melody + stems (app.vocals)
+
+    def read_vocals(self, track_id: str) -> Optional[bytes]:
+        """The stored vocals.json (compact JSON bytes), or None when not transcribed yet (or unreadable)."""
+        path = self._require(track_id) / VOCALS_FILE
+        try:
+            raw = path.read_bytes()
+        except FileNotFoundError:
+            return None
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            log.warning("ignoring unreadable %s", path)
+            return None
+        if not isinstance(data, dict) or data.get("version") != VOCALS_VERSION or not isinstance(data.get("notes"), list):
+            log.warning("ignoring %s with an unknown format", path)
+            return None
+        return raw
+
+    def has_vocals(self, track_id: str) -> bool:
+        """The vocals were transcribed and every stem is in place (a usable cached result)."""
+        if self.read_vocals(track_id) is None:
+            return False
+        stems = self.track_dir(track_id) / STEMS_DIR
+        return all((stems / f"{name}.mp3").is_file() for name in STEM_NAMES)
+
+    def stem_path(self, track_id: str, name: str) -> Path:
+        if name not in STEM_NAMES:
+            raise TrackNotFound(track_id)
+        path = self.track_dir(track_id) / STEMS_DIR / f"{name}.mp3"
+        if not path.is_file():
+            raise TrackNotFound(track_id)
+        return path
+
+    def install_vocals(self, track_id: str, staged_stems: Path, vocals: VocalNotes) -> None:
+        """Move the separated stems (``<name>.mp3`` in ``staged_stems``) into the track, then write
+        vocals.json and the summary fields in meta.json (readers see ``vocals`` only when all is there)."""
+        dest = self._require(track_id) / STEMS_DIR
+        dest.mkdir(exist_ok=True)
+        staged: list[tuple[Path, Path]] = []
+        try:
+            for name in STEM_NAMES:  # copy next to the destination first (scratch may be another FS)
+                src = staged_stems / f"{name}.mp3"
+                if src.is_file():
+                    tmp = dest / f".{name}.{secrets.token_hex(4)}.tmp"
+                    try:
+                        os.replace(src, tmp)
+                    except OSError:
+                        shutil.copyfile(src, tmp)
+                    staged.append((tmp, dest / f"{name}.mp3"))
+            with self._lock:
+                d = self._require(track_id)
+                for tmp, final in staged:
+                    os.replace(tmp, final)
+                write_json_atomic(d / VOCALS_FILE, vocals.model_dump(mode="json"))
+                meta = read_json(d / META_FILE)
+                meta.update({
+                    "vocals": True,
+                    "stems": [final.stem for _, final in staged],
+                    "vocalsEngine": vocals.engine,
+                    "vocalsAt": utc_now(),
+                })
+                write_json_atomic(d / META_FILE, meta, pretty=True)
+        finally:
+            for tmp, _ in staged:
+                tmp.unlink(missing_ok=True)
+        log.info("track %s: vocals installed (%d notes)", track_id, len(vocals.notes))
+
     # ------------------------------------------------------------------ create / update
 
     def install_track(self, staged_dir: Path, track_id: str, meta: dict[str, Any], analysis: AnalysisResult) -> bool:
@@ -200,7 +325,11 @@ class TrackStore:
             if dest.exists():  # incomplete leftover (e.g. crash) — replace it
                 self._discard_dir(dest)
             self.root.mkdir(parents=True, exist_ok=True)
-            os.replace(staged_dir, dest)
+            try:
+                os.replace(staged_dir, dest)
+            except OSError:  # scratch on another file system (cloud: /tmp -> bucket mount)
+                _copy_tree_meta_last(staged_dir, dest)
+                shutil.rmtree(staged_dir, ignore_errors=True)
         log.info("track %s installed (%s)", track_id, meta.get("title"))
         return True
 
@@ -284,36 +413,49 @@ class TrackStore:
                 "duration": duration,
                 "key": analysis.get("key"),
                 "tempo": analysis.get("tempo"),
-                "audioUrl": f"/api/tracks/{track_id}/audio",
+                "audioUrl": self.media_url(track_id, "audio"),
                 "timeSignature": analysis.get("timeSignature") or 4,
                 "beats": analysis.get("beats") or [],
                 "downbeats": analysis.get("downbeats") or [],
                 "chords": chords,
                 "waveform": analysis.get("waveform") or [],
                 "engine": analysis.get("engine") or meta.get("engine") or "",
+                "startOffset": meta.get("startOffset") or None,
+                "stemUrls": {name: self.media_url(track_id, f"{STEMS_DIR}/{name}") for name in _stems(meta)},
             }
         )
 
     def list_tracks(self) -> list[TrackSummary]:
         if not self.root.is_dir():
             return []
-        out: list[TrackSummary] = []
-        for d in self.root.iterdir():
-            if not d.is_dir() or not self.exists(d.name):
-                continue
-            try:
-                meta = read_json(d / META_FILE)
-                edits = self.read_edits(d.name)
-                chord_count = len(edits["chords"]) if edits else meta.get("chordCount")
-                out.append(
-                    TrackSummary.model_validate(
-                        self._summary_dict(d.name, meta, edited=edits is not None, chord_count=chord_count)
-                    )
-                )
-            except (OSError, ValueError):
-                log.warning("skipping unreadable track %s", d.name, exc_info=True)
+        dirs = list(self.root.iterdir())
+        if self.settings.cloud and len(dirs) > 1:
+            # On the bucket mount every stat/read is a network round trip: read the tracks in parallel
+            # (each worker gets its own copy of this request's context, i.e. the same user).
+            from concurrent.futures import ThreadPoolExecutor
+
+            contexts = [contextvars.copy_context() for _ in dirs]  # copied here, in the request's thread
+            with ThreadPoolExecutor(max_workers=min(16, len(dirs)), thread_name_prefix="chords-list") as pool:
+                found = list(pool.map(lambda pair: pair[0].run(self._summary_of, pair[1]), zip(contexts, dirs)))
+        else:
+            found = [self._summary_of(d) for d in dirs]
+        out = [t for t in found if t is not None]
         out.sort(key=lambda t: (t.created_at, t.id), reverse=True)
         return out
+
+    def _summary_of(self, d: Path) -> Optional[TrackSummary]:
+        if not d.is_dir() or not self.exists(d.name):
+            return None
+        try:
+            meta = read_json(d / META_FILE)
+            edits = self.read_edits(d.name)
+            chord_count = len(edits["chords"]) if edits else meta.get("chordCount")
+            return TrackSummary.model_validate(
+                self._summary_dict(d.name, meta, edited=edits is not None, chord_count=chord_count)
+            )
+        except (OSError, ValueError):
+            log.warning("skipping unreadable track %s", d.name, exc_info=True)
+            return None
 
     @staticmethod
     def _summary_dict(track_id: str, meta: dict[str, Any], *, edited: bool, chord_count: Optional[int]) -> dict[str, Any]:
@@ -328,8 +470,31 @@ class TrackStore:
             "tempo": meta.get("tempo"),
             "chordCount": chord_count,
             "edited": edited,
+            "vocals": bool(meta.get("vocals")),
+            "stems": _stems(meta),
             "createdAt": meta.get("createdAt") or utc_now(),
         }
+
+
+def _stems(meta: dict[str, Any]) -> list[str]:
+    stems = meta.get("stems") if meta.get("vocals") else None
+    return [s for s in stems if s in STEM_NAMES] if isinstance(stems, list) else []
+
+
+def _copy_tree_meta_last(src: Path, dest: Path) -> None:
+    """Copy a staged track directory into place; meta.json goes last, so ``exists()`` (which needs it)
+    never sees a partially copied track."""
+    dest.mkdir(parents=True, exist_ok=True)
+    meta: Optional[Path] = None
+    for item in sorted(src.iterdir()):
+        if item.name == META_FILE:
+            meta = item
+        elif item.is_dir():
+            shutil.copytree(item, dest / item.name, dirs_exist_ok=True)
+        else:
+            shutil.copyfile(item, dest / item.name)
+    if meta is not None:
+        shutil.copyfile(meta, dest / META_FILE)
 
 
 def summary_fields(analysis: AnalysisResult) -> dict[str, Any]:

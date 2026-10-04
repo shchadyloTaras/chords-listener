@@ -18,6 +18,9 @@ coverage/
 .env
 .env.*
 *.log
+# cloud deploy secrets (scripts/deploy_cloud.sh) and minted access tokens
+.cloud.env
+.gcloud-token*
 
 # Media and test recordings (songs live in data/, synthetic test songs are generated on demand)
 *.wav

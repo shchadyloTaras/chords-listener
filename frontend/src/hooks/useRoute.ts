@@ -1,11 +1,17 @@
 import { useSyncExternalStore } from 'react'
 
-/** Hash-based routes: #/ · #/job/<id> · #/track/<id> · #/demo */
+/**
+ * Hash-based routes: #/ · #/job/<id> · #/track/<id> · #/demo ·
+ * #/listen[?src=mic|tab] (live chords from the microphone / a tab) ·
+ * #/listen/youtube/<videoId>[?blocked=1] (play a YouTube video here and listen to this tab)
+ */
 export type Route =
   | { name: 'home' }
   | { name: 'job'; id: string }
   | { name: 'track'; id: string }
   | { name: 'demo' }
+  | { name: 'listen'; source: 'mic' | 'tab' | null }
+  | { name: 'capture'; videoId: string; blocked: boolean }
   | { name: 'notFound' }
 
 export const paths = {
@@ -13,12 +19,34 @@ export const paths = {
   job: (id: string) => `/job/${encodeURIComponent(id)}`,
   track: (id: string) => `/track/${encodeURIComponent(id)}`,
   demo: () => '/demo',
+  listen: (source?: 'mic' | 'tab') => (source ? `/listen?src=${source}` : '/listen'),
+  capture: (videoId: string, opts: { blocked?: boolean } = {}) =>
+    `/listen/youtube/${encodeURIComponent(videoId)}${opts.blocked ? '?blocked=1' : ''}`,
 }
 
+const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/
+
 export function parseHash(hash: string): Route {
-  const path = hash.replace(/^#/, '').replace(/\/+$/, '') || '/'
+  const raw = hash.replace(/^#/, '')
+  const q = raw.indexOf('?')
+  const query = new URLSearchParams(q >= 0 ? raw.slice(q + 1) : '')
+  const path = (q >= 0 ? raw.slice(0, q) : raw).replace(/\/+$/, '') || '/'
   if (path === '/' || path === '') return { name: 'home' }
   if (path === '/demo') return { name: 'demo' }
+  if (path === '/listen') {
+    const src = query.get('src')
+    return { name: 'listen', source: src === 'mic' || src === 'tab' ? src : null }
+  }
+  const yt = /^\/listen\/youtube\/([^/?#]+)$/.exec(path)
+  if (yt) {
+    let id = yt[1]
+    try {
+      id = decodeURIComponent(id)
+    } catch {
+      /* keep raw */
+    }
+    return VIDEO_ID_RE.test(id) ? { name: 'capture', videoId: id, blocked: query.get('blocked') === '1' } : { name: 'notFound' }
+  }
   const m = /^\/(job|track)\/([^/?#]+)$/.exec(path)
   if (m) {
     let id = m[2]

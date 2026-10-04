@@ -1,4 +1,5 @@
 import type { ClientErrorCode } from '../../lib/api'
+import { useConnection } from '../../lib/serverMode'
 import { translate } from '../../i18n'
 import type { Lang } from '../../store'
 import { useApp } from '../../store'
@@ -17,16 +18,26 @@ const KNOWN: ReadonlySet<string> = new Set<ClientErrorCode>([
   'http',
 ])
 
+/** Codes of the cloud service (docs/CLOUD.md), worded in i18n/cloud.ts. */
+const CLOUD: ReadonlySet<string> = new Set<ClientErrorCode>(['unauthorized', 'quota_exceeded', 'download_blocked', 'unavailable'])
+
+/** Failures whose generic wording talks about "your server": the cloud gets its own. */
+const CLOUD_WORDING: ReadonlySet<string> = new Set(['network', 'internal'])
+
+function keyFor(kind: 'error' | 'errorTitle', code: string | null | undefined): string {
+  if (code === 'server_required') return `web.${kind}.serverRequired`
+  if (code && CLOUD.has(code)) return `cloud.${kind}.${code}`
+  const key = code && KNOWN.has(code) ? code : 'internal'
+  if (CLOUD_WORDING.has(key) && useConnection.getState().backend === 'cloud') return `cloud.${kind}.${key}`
+  return `core.${kind}.${key}`
+}
+
 /** Localized, user-facing explanation for an error code (falls back to a generic message). */
 export function errorText(code: string | null | undefined, lang: Lang = useApp.getState().lang): string {
-  if (code === 'server_required') return translate(lang, 'web.error.serverRequired')
-  const key = code && KNOWN.has(code) ? code : 'internal'
-  return translate(lang, `core.error.${key}`)
+  return translate(lang, keyFor('error', code))
 }
 
 /** Short localized headline for an error code. */
 export function errorTitle(code: string | null | undefined, lang: Lang = useApp.getState().lang): string {
-  if (code === 'server_required') return translate(lang, 'web.errorTitle.serverRequired')
-  const key = code && KNOWN.has(code) ? code : 'internal'
-  return translate(lang, `core.errorTitle.${key}`)
+  return translate(lang, keyFor('errorTitle', code))
 }

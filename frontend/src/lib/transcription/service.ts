@@ -1,8 +1,12 @@
-// Notes of the loaded track for the live piano: memory cache → saved notes (server notes.json or the
-// browser's IndexedDB) → transcription in the page (worker), saved afterwards so it runs once per track.
-// One transcription at a time; it stops when its track is no longer shown.
+// Notes of the loaded track for the live piano and the score: memory cache → saved notes (server
+// notes.json or the browser's IndexedDB) → transcription in the page (worker), saved afterwards so it
+// runs once per track. One transcription at a time; it stops when its track is no longer shown.
+//
+// Source: the full mix (default), or a separated stem — 'instruments' (bass + other, from the server's
+// vocal separation, see lib/vocals) so the piano part does not contain the singer. Each source is
+// cached on its own (stem notes stay on this device, lib/transcription/stemCache).
 import { create } from 'zustand'
-import { useEffect } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import * as api from '../api'
 import { toApiError } from '../api'
 import type { Track } from '../../types'
@@ -11,9 +15,14 @@ import { decodeNotes, encodeNotes, NotesFormatError, type NoteArrays } from './c
 import { NoteIndex } from './noteIndex'
 import type { TfBackend, TranscribeStats } from './protocol'
 import { createTranscriber, TranscriberError } from './runner'
+import { useConnection } from '../serverMode'
+import { getStemNotes, putStemNotes } from './stemCache'
 
 /** Transcription engine + settings recorded with the saved notes. */
 export const NOTES_ENGINE = 'basic-pitch 1.0.1 (tfjs 4.22; onset 0.5, frame 0.3, min 80 ms)'
+
+/** Which audio the notes are transcribed from. */
+export type NotesSource = 'mix' | 'instruments'
 
 export type NotesErrorCode = 'server' | 'audio' | 'decode' | 'model' | 'failed'
 
@@ -32,10 +41,26 @@ export type NotesState =
       found: number
       backend: TfBackend | null
     }
-  | { status: 'ready'; index: NoteIndex; engine: string; saved: boolean; stats: TranscribeStats | null }
+  | { status: 'ready'; index: NoteIndex; engine: string; saved: boolean; stats: TranscribeStats | null; source: NotesSource }
   | { status: 'error'; code: NotesErrorCode; message: string }
 
-type NotesTrack = Pick<Track, 'id' | 'audioUrl' | 'duration'>
+type NotesTrack = Pick<Track, 'id' | 'audioUrl' | 'duration'> & {
+  /** default 'mix' (the track's audio) */
+  notesSource?: NotesSource
+  /** loads the audio of a stem source */
+  loadAudio?: (signal: AbortSignal) => Promise<Blob>
+}
+
+/** Store / cache key of a track's notes from one source (the mix keeps the plain track id). */
+export function notesKey(id: string, source: NotesSource = 'mix'): string {
+  return source === 'mix' ? id : `${id}#${source}`
+}
+
+/** Where stem notes are kept on this device: per server (track ids are per server) and track. */
+function stemCacheKey(id: string, source: NotesSource): string {
+  const origin = useConnection.getState().serverOrigin ?? (typeof location !== 'undefined' ? location.origin : '')
+  return `${origin}|${id}|${source}`
+}
 
 const IDLE: NotesState = { status: 'idle' }
 /** finished results kept in memory (per track id) */
@@ -63,16 +88,16 @@ export function modelUrl(): string {
   return new URL(`${import.meta.env.BASE_URL}models/basic-pitch/model.json`, location.href).href
 }
 
-let current: { id: string; ctrl: AbortController } | null = null
+let current: { key: string; ctrl: AbortController } | null = null
 const holders = new Map<string, number>()
 const releaseTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
-function stop(id: string): void {
-  if (current?.id !== id) return
+function stop(key: string): void {
+  if (current?.key !== key) return
   current.ctrl.abort(new DOMException('Transcription stopped', 'AbortError'))
   current = null
-  const st = getState(id)
-  if (st.status === 'loading' || st.status === 'computing') setState(id, IDLE)
+  const st = getState(key)
+  if (st.status === 'loading' || st.status === 'computing') setState(key, IDLE)
 }
 
 function isAbort(err: unknown, signal: AbortSignal): boolean {
@@ -86,18 +111,20 @@ function failure(err: unknown): { code: NotesErrorCode; message: string } {
   return { code: 'failed', message }
 }
 
-function ready(id: string, arrays: NoteArrays, engine: string, saved: boolean, stats: TranscribeStats | null): void {
-  setState(id, { status: 'ready', index: new NoteIndex(arrays), engine, saved, stats })
-}
-
 async function run(track: NotesTrack, force: boolean, signal: AbortSignal): Promise<void> {
   const { id } = track
+  const source = track.notesSource ?? 'mix'
+  const key = notesKey(id, source)
+  const engine = source === 'mix' ? NOTES_ENGINE : `${NOTES_ENGINE}; ${source} stem`
+  const ready = (arrays: NoteArrays, eng: string, saved: boolean, stats: TranscribeStats | null) =>
+    setState(key, { status: 'ready', index: new NoteIndex(arrays), engine: eng, saved, stats, source })
   if (!force) {
-    setState(id, { status: 'loading' })
+    setState(key, { status: 'loading' })
     try {
-      const saved = await api.getTrackNotes(id, signal)
+      const saved = source === 'mix' ? await api.getTrackNotes(id, signal) : await getStemNotes(stemCacheKey(id, source))
+      if (signal.aborted) return
       if (saved) {
-        ready(id, decodeNotes(saved, track.duration), saved.engine, true, null)
+        ready(decodeNotes(saved, track.duration), saved.engine, true, null)
         return
       }
     } catch (err) {
@@ -108,7 +135,7 @@ async function run(track: NotesTrack, force: boolean, signal: AbortSignal): Prom
   }
 
   const progress = (stage: 'audio' | 'decode' | 'model' | 'notes', value: number, found = 0, backend: TfBackend | null = null) =>
-    setState(id, { status: 'computing', stage, progress: value, found, backend })
+    setState(key, { status: 'computing', stage, progress: value, found, backend })
   progress('audio', 0)
   // the worker loads TF.js and the model while the audio downloads and decodes
   const transcriber = createTranscriber(modelUrl(), signal)
@@ -118,13 +145,14 @@ async function run(track: NotesTrack, force: boolean, signal: AbortSignal): Prom
 
   let blob: Blob
   try {
-    blob = await api.fetchTrackAudio(track, signal)
+    if (source !== 'mix' && !track.loadAudio) throw new Error(`no audio for the ${source} stem`)
+    blob = source === 'mix' || !track.loadAudio ? await api.fetchTrackAudio(track, signal) : await track.loadAudio(signal)
   } catch (err) {
     release()
     if (isAbort(err, signal)) return
     const e = toApiError(err)
     if (e.code === 'aborted') return
-    setState(id, { status: 'error', code: e.code === 'network' ? 'server' : 'audio', message: e.message })
+    setState(key, { status: 'error', code: e.code === 'network' ? 'server' : 'audio', message: e.message })
     return
   }
   progress('decode', 0.04)
@@ -134,7 +162,7 @@ async function run(track: NotesTrack, force: boolean, signal: AbortSignal): Prom
   } catch (err) {
     release()
     if (isAbort(err, signal)) return
-    setState(id, { status: 'error', code: 'decode', message: err instanceof Error ? err.message : String(err) })
+    setState(key, { status: 'error', code: 'decode', message: err instanceof Error ? err.message : String(err) })
     return
   }
   if (signal.aborted) {
@@ -156,84 +184,105 @@ async function run(track: NotesTrack, force: boolean, signal: AbortSignal): Prom
     }
     if (signal.aborted) return
     progress('notes', 0.97, result.notes.length, t.backend)
-    const data = encodeNotes(result.notes, NOTES_ENGINE)
+    const data = encodeNotes(result.notes, engine)
     const arrays = decodeNotes(data)
     let saved = false
     try {
-      await api.saveTrackNotes(id, data)
+      if (source === 'mix') await api.saveTrackNotes(id, data)
+      else await putStemNotes(stemCacheKey(id, source), data)
       saved = true
     } catch (err) {
       // keep them for this session; next time the transcription runs again
       console.warn('[live piano] could not save the notes:', err)
     }
     if (signal.aborted) return
-    ready(id, arrays, NOTES_ENGINE, saved, result.stats)
+    ready(arrays, engine, saved, result.stats)
   } catch (err) {
     if (isAbort(err, signal)) return
     console.warn('[live piano] transcription failed:', err)
-    setState(id, { status: 'error', ...failure(err) })
+    setState(key, { status: 'error', ...failure(err) })
   }
 }
 
 /**
  * Makes the track's notes available: from memory, from storage, or by transcribing the audio.
- * `force` transcribes again (and overwrites what is saved). A transcription of another track stops.
+ * `force` transcribes again (and overwrites what is saved). A transcription of another track (or
+ * source) stops.
  */
 export function requestNotes(track: NotesTrack, opts: { force?: boolean } = {}): void {
-  const { id } = track
-  if (!track.audioUrl) {
-    if (getState(id).status !== 'unavailable') setState(id, { status: 'unavailable' })
+  const key = notesKey(track.id, track.notesSource)
+  const hasAudio = (track.notesSource ?? 'mix') === 'mix' ? !!track.audioUrl : !!track.loadAudio
+  if (!hasAudio) {
+    if (getState(key).status !== 'unavailable') setState(key, { status: 'unavailable' })
     return
   }
-  const st = getState(id)
+  const st = getState(key)
   if (!opts.force && (st.status === 'ready' || st.status === 'loading' || st.status === 'computing')) return
-  if (current) stop(current.id)
+  if (current) stop(current.key)
   const ctrl = new AbortController()
-  current = { id, ctrl }
+  current = { key, ctrl }
   void run(track, Boolean(opts.force), ctrl.signal).finally(() => {
     if (current?.ctrl === ctrl) current = null
   })
 }
 
-/** A view shows this track's notes (keeps its transcription alive). */
-export function retainNotes(id: string): void {
-  holders.set(id, (holders.get(id) ?? 0) + 1)
-  const timer = releaseTimers.get(id)
+/** A view shows this track's notes (keeps its transcription alive). `key` = notesKey(id, source). */
+export function retainNotes(key: string): void {
+  holders.set(key, (holders.get(key) ?? 0) + 1)
+  const timer = releaseTimers.get(key)
   if (timer) {
     clearTimeout(timer)
-    releaseTimers.delete(id)
+    releaseTimers.delete(key)
   }
 }
 
 /** The view is gone: stop its transcription shortly after unless another view takes it over. */
-export function releaseNotes(id: string): void {
-  const n = (holders.get(id) ?? 1) - 1
+export function releaseNotes(key: string): void {
+  const n = (holders.get(key) ?? 1) - 1
   if (n > 0) {
-    holders.set(id, n)
+    holders.set(key, n)
     return
   }
-  holders.delete(id)
+  holders.delete(key)
   releaseTimers.set(
-    id,
+    key,
     setTimeout(() => {
-      releaseTimers.delete(id)
-      if (!holders.has(id)) stop(id)
+      releaseTimers.delete(key)
+      if (!holders.has(key)) stop(key)
     }, RELEASE_GRACE_MS),
   )
 }
 
-/** Notes state of a track for a component; starts loading / transcribing while mounted. */
-export function useTrackNotes(track: NotesTrack | null): NotesState {
+/** Current notes state of a track / source (non-hook). */
+export function getNotesState(id: string, source: NotesSource = 'mix'): NotesState {
+  return getState(notesKey(id, source))
+}
+
+/**
+ * Notes state of a track for a component; starts loading / transcribing while mounted. A stem source
+ * needs `loadAudio` (read once per request; the effect re-runs when the source changes).
+ */
+export function useTrackNotes(
+  track: NotesTrack | null,
+  opts: { source?: NotesSource; loadAudio?: (signal: AbortSignal) => Promise<Blob> } = {},
+): NotesState {
   const id = track?.id ?? ''
   const audioUrl = track?.audioUrl ?? ''
   const duration = track?.duration ?? 0
+  const source = opts.source ?? 'mix'
+  const key = id ? notesKey(id, source) : ''
+  const loadRef = useRef(opts.loadAudio)
+  useLayoutEffect(() => {
+    loadRef.current = opts.loadAudio
+  })
   useEffect(() => {
     if (!id) return
-    retainNotes(id)
-    requestNotes({ id, audioUrl, duration })
-    return () => releaseNotes(id)
-  }, [id, audioUrl, duration])
-  return useNotesStore((s) => (id ? (s.tracks[id] ?? IDLE) : IDLE))
+    retainNotes(key)
+    const loadAudio = loadRef.current
+    requestNotes({ id, audioUrl, duration, notesSource: source, loadAudio: loadAudio ? (signal) => loadAudio(signal) : undefined })
+    return () => releaseNotes(key)
+  }, [id, key, audioUrl, duration, source])
+  return useNotesStore((s) => (key ? (s.tracks[key] ?? IDLE) : IDLE))
 }
 
 /** Tests: forget everything. */

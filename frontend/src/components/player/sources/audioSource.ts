@@ -1,16 +1,22 @@
 import { fetchAudioBlobUrl } from '../../../lib/api'
 import type { PlaybackSource, SourceEvents } from './types'
 
-/** HTMLAudioElement-backed source (track.audioUrl, Range-capable endpoint). */
+/**
+ * HTMLAudioElement-backed source (track.audioUrl, Range-capable endpoint).
+ * `offset`: the audio file starts at this track time (a recording linked to a YouTube video and
+ * started mid-video: audio time = track time − offset), so the track clock stays in video time.
+ */
 export class AudioSource implements PlaybackSource {
   readonly kind = 'audio' as const
   private el: HTMLAudioElement
   private events: SourceEvents
   private disposers: Array<() => void> = []
   private wantPlay = false
+  private readonly offset: number
 
-  constructor(url: string, events: SourceEvents) {
+  constructor(url: string, events: SourceEvents, offset = 0) {
     this.events = events
+    this.offset = Number.isFinite(offset) && offset > 0 ? offset : 0
     const el = new Audio()
     el.preload = 'metadata'
     el.preservesPitch = true
@@ -30,7 +36,7 @@ export class AudioSource implements PlaybackSource {
       events.onEnded()
     })
     const pushDuration = () => {
-      if (Number.isFinite(el.duration) && el.duration > 0) events.onDuration(el.duration)
+      if (Number.isFinite(el.duration) && el.duration > 0) events.onDuration(el.duration + this.offset)
     }
     on('loadedmetadata', pushDuration)
     on('durationchange', pushDuration)
@@ -90,7 +96,7 @@ export class AudioSource implements PlaybackSource {
   }
 
   seek(time: number) {
-    this.el.currentTime = Math.max(0, time)
+    this.el.currentTime = Math.max(0, time - this.offset)
   }
 
   setRate(rate: number) {
@@ -103,7 +109,7 @@ export class AudioSource implements PlaybackSource {
   }
 
   getTime() {
-    return this.el.currentTime
+    return this.el.currentTime + this.offset
   }
 
   isPlaying() {
@@ -111,7 +117,7 @@ export class AudioSource implements PlaybackSource {
   }
 
   getDuration() {
-    return Number.isFinite(this.el.duration) ? this.el.duration : 0
+    return Number.isFinite(this.el.duration) ? this.el.duration + this.offset : 0
   }
 
   destroy() {

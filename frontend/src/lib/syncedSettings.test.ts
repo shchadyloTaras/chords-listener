@@ -80,6 +80,11 @@ describe('parseSynced', () => {
     expect(parsed).toMatchObject({ accidentals: 'auto', lang: 'uk', showVideo: false })
   })
 
+  it('accepts the score view and rejects unknown views', () => {
+    expect(parseSynced({ ...SYNCED_DEFAULTS, view: 'score' })).toMatchObject({ view: 'score' })
+    expect(parseSynced({ view: 'tabs' })).toEqual({})
+  })
+
   it('rejects a numeric string for barsPerLine', () => {
     expect(parseSynced({ barsPerLine: '4' })).toEqual({})
   })

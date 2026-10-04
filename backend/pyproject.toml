@@ -5,6 +5,8 @@ description = "Local chord recognition server (YouTube + audio files)"
 requires-python = ">=3.11,<3.12"
 dependencies = [
     "fastapi>=0.142.2",
+    "google-auth>=2.40",
+    "google-cloud-storage>=3.0",
     "librosa>=0.11.0",
     "madmom",
     "numpy>=2.4.6",
@@ -16,14 +18,32 @@ dependencies = [
     "yt-dlp[default]>=2026.8.19",
 ]
 
+[project.optional-dependencies]
+vocals = [
+    "demucs>=4.1.0 ; platform_machine == 'arm64' or sys_platform != 'darwin'",
+    "torch>=2.14.1 ; platform_machine == 'arm64' or sys_platform != 'darwin'",
+    "torchaudio>=2.11.0 ; platform_machine == 'arm64' or sys_platform != 'darwin'",
+    "torchcrepe>=0.0.24 ; platform_machine == 'arm64' or sys_platform != 'darwin'",
+]
+
 [tool.uv]
 package = false
 
 [tool.uv.sources]
 madmom = { git = "https://github.com/CPJKU/madmom", rev = "27f032e8947204902c675e5e341a3faf5dc86dae" }
+# Optional "vocals" extra: on Linux (the Cloud Run image) torch comes from the CPU-only wheel index,
+# so no CUDA libraries are pulled in. macOS keeps the normal PyPI wheels (CPU + Apple MPS).
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchaudio = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
+    "mir-eval>=0.8",
     "pytest>=9.1.1",
 ]

@@ -204,7 +204,7 @@ function voicedMean(chroma: ChromaFeatures, silent: Uint8Array): Float64Array | 
 // ---------------------------------------------------------------------------------------
 // chord decoding
 
-interface Vocabulary {
+export interface Vocabulary {
   chords: Chord[]
   templates: Uint8Array
   priors: Float64Array
@@ -212,7 +212,7 @@ interface Vocabulary {
 
 let vocabulary: Vocabulary | null = null
 
-function getVocabulary(): Vocabulary {
+export function getVocabulary(): Vocabulary {
   if (vocabulary) return vocabulary
   const chords: Chord[] = []
   for (const q of ENGINE_QUALITIES) for (let r = 0; r < 12; r++) chords.push({ root: r, quality: q, bass: null })

@@ -1,0 +1,26 @@
+# Cloud Build: backend/Dockerfile -> Artifact Registry. Run by scripts/deploy_cloud.sh:
+#   gcloud builds submit backend --config backend/cloudbuild.yaml --substitutions _IMAGE=<repo>/api,_TAG=<tag>
+# The previous :latest image seeds the layer cache, so code-only redeploys skip the dependency layers.
+steps:
+  - id: pull-cache
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args: ["-c", "docker pull ${_IMAGE}:latest || echo 'no cached image yet'"]
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --build-arg=BUILDKIT_INLINE_CACHE=1
+      - --cache-from=${_IMAGE}:latest
+      - --tag=${_IMAGE}:${_TAG}
+      - --tag=${_IMAGE}:latest
+      - .
+images:
+  - ${_IMAGE}:${_TAG}
+  - ${_IMAGE}:latest
+substitutions:
+  _IMAGE: europe-west1-docker.pkg.dev/build-chords-listener/chords/api
+  _TAG: manual
+timeout: 3600s
+options:
+  logging: CLOUD_LOGGING_ONLY

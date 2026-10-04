@@ -1,21 +1,37 @@
 import type { Dict } from './index'
 
-// Owned by the "web" agent (GitHub Pages / server modes). Keys prefixed "web.".
+// Where the app runs: cloud / browser mode / local server, the mode popover. Keys prefixed "web.".
 export const web: Dict = {
   uk: {
     'web.mode.title': 'Режим роботи',
+    'web.mode.cloud': 'Хмара',
     'web.mode.server': 'Локальний сервер',
     'web.mode.browser': 'Браузерний режим',
-    'web.mode.checking': 'Шукаю сервер…',
+    'web.mode.checking': 'Підключаюсь…',
     'web.mode.aria': 'Режим роботи: {mode}. Відкрити налаштування зʼєднання',
+
+    'web.cloud.what': 'Пісні розпізнає сервер у хмарі, а бібліотека зберігається у твоєму акаунті — її видно на всіх пристроях.',
+    'web.cloud.account': 'Акаунт: {email}',
+    'web.cloud.waking': 'Хмара прокидається — перший запит може тривати до пів хвилини.',
+    'web.cloud.down': 'Хмара зараз не відповідає. Спробуй ще раз трохи згодом.',
+    'web.cloud.check': 'Перевірити',
+    'web.cloud.limits': 'До 2 аналізів одночасно, ліміт на день — щоб сервіс лишався безкоштовним.',
 
     'web.server.connected': 'Підключено до {url}',
     'web.server.what': 'Посилання на YouTube, файли й записи з мікрофона розпізнає програма на твоєму компʼютері.',
     'web.server.engine': 'Рушій: {engine}',
     'web.browser.what':
       'Файли й записи з мікрофона розпізнаються прямо в браузері та зберігаються лише на цьому пристрої.',
-    'web.browser.needServer': 'Для посилань на YouTube потрібен локальний сервер.',
+    'web.browser.needServer': 'Відео з YouTube слухаємо прямо на сторінці.',
+    'web.browser.cta': 'Увійди — і отримаєш акорди з YouTube, точний аналіз і бібліотеку на всіх пристроях.',
     'web.browser.localNote': 'Пісні, розпізнані в браузері, лишаються на цьому пристрої.',
+
+    'web.advanced.summary': 'Розширено: власний сервер',
+    'web.advanced.what':
+      'Необовʼязково. Якщо запустиш Chords Listener на своєму компʼютері (./start.sh), сайт без акаунта може працювати через нього.',
+    'web.advanced.cloudFirst':
+      'Поки ти в акаунті, пісні розпізнає хмара. Власний сервер використовується без акаунта — або відкрий його напряму:',
+    'web.advanced.disable': 'Не використовувати власний сервер',
 
     'web.guide.title': 'Як підключити локальний сервер',
     'web.guide.step1': 'Один раз завантаж програму (потрібні git, ffmpeg, uv і Node.js — дивись README):',
@@ -41,8 +57,8 @@ export const web: Dict = {
     'web.status.invalidUrl': 'Адреса сервера некоректна.',
     'web.status.notChords': 'За адресою {url} відповідає не Chords Listener. Перевір порт.',
 
-    'web.input.needServer': 'Для посилань потрібен локальний сервер на твоєму компʼютері.',
-    'web.input.serverReady': 'Сервер підключено — натисни Enter, щоб розпізнати.',
+    'web.input.needServer': 'Посилання з цього сайту розпізнає хмара — увійди або зареєструйся.',
+    'web.input.serverReady': 'Хмару підключено — натисни Enter, щоб розпізнати.',
     'web.input.dismiss': 'Сховати',
 
     'web.toast.connected': 'Локальний сервер підключено',
@@ -52,22 +68,38 @@ export const web: Dict = {
     'web.history.localHint': 'Розпізнано в браузері й збережено лише на цьому пристрої',
 
     'web.error.serverRequired':
-      'Посилання розпізнає лише локальний сервер. Запусти його на компʼютері — інструкція в меню «Браузерний режим» угорі.',
-    'web.errorTitle.serverRequired': 'Потрібен локальний сервер',
+      'Посилання з цього сайту розпізнає сервер у хмарі — увійди або зареєструйся, це безкоштовно. Відео з YouTube можна послухати й без акаунта.',
+    'web.errorTitle.serverRequired': 'Потрібен акаунт',
   },
   en: {
     'web.mode.title': 'How it runs',
+    'web.mode.cloud': 'Cloud',
     'web.mode.server': 'Local server',
     'web.mode.browser': 'Browser mode',
-    'web.mode.checking': 'Looking for the server…',
+    'web.mode.checking': 'Connecting…',
     'web.mode.aria': 'Mode: {mode}. Open connection settings',
+
+    'web.cloud.what': 'Songs are analyzed by a cloud server and your library lives in your account — on every device.',
+    'web.cloud.account': 'Account: {email}',
+    'web.cloud.waking': 'The cloud is waking up — the first request may take up to half a minute.',
+    'web.cloud.down': 'The cloud is not responding right now. Try again a bit later.',
+    'web.cloud.check': 'Check',
+    'web.cloud.limits': 'Up to 2 analyses at a time and a daily limit — that keeps the service free.',
 
     'web.server.connected': 'Connected to {url}',
     'web.server.what': 'YouTube links, files and microphone recordings are analyzed by the app on your computer.',
     'web.server.engine': 'Engine: {engine}',
     'web.browser.what': 'Files and microphone recordings are analyzed right in the browser and stay on this device.',
-    'web.browser.needServer': 'YouTube links need the local server.',
+    'web.browser.needServer': 'YouTube videos are listened to right on the page.',
+    'web.browser.cta': 'Sign in for chords from YouTube, accurate analysis and your library on every device.',
     'web.browser.localNote': 'Songs analyzed in the browser stay on this device.',
+
+    'web.advanced.summary': 'Advanced: your own server',
+    'web.advanced.what':
+      'Optional. If you run Chords Listener on your computer (./start.sh), the site can use it while you are signed out.',
+    'web.advanced.cloudFirst':
+      'While you are signed in, songs are analyzed in the cloud. Your own server is used when signed out — or open it directly:',
+    'web.advanced.disable': 'Stop using my own server',
 
     'web.guide.title': 'Connect the local server',
     'web.guide.step1': 'Get the app once (needs git, ffmpeg, uv and Node.js — see the README):',
@@ -93,8 +125,8 @@ export const web: Dict = {
     'web.status.invalidUrl': 'The server address is not valid.',
     'web.status.notChords': 'Something other than Chords Listener answers at {url}. Check the port.',
 
-    'web.input.needServer': 'Links need the local server on your computer.',
-    'web.input.serverReady': 'Server connected — press Enter to detect the chords.',
+    'web.input.needServer': 'Links to this site are analyzed in the cloud — sign in or create an account.',
+    'web.input.serverReady': 'Cloud connected — press Enter to detect the chords.',
     'web.input.dismiss': 'Hide',
 
     'web.toast.connected': 'Local server connected',
@@ -104,7 +136,7 @@ export const web: Dict = {
     'web.history.localHint': 'Analyzed in the browser and stored only on this device',
 
     'web.error.serverRequired':
-      'Links are analyzed by the local server only. Start it on your computer — see “Browser mode” at the top.',
-    'web.errorTitle.serverRequired': 'Local server needed',
+      'Links to this site are analyzed by a cloud server — sign in or create a free account. YouTube videos can be listened to without one.',
+    'web.errorTitle.serverRequired': 'Account needed',
   },
 }

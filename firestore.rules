@@ -18,7 +18,7 @@ rules_version = '2';
 //       - simplify: bool
 //       - accidentals: string, one of 'auto' | 'sharp' | 'flat'
 //       - instrument: string, one of 'guitar' | 'ukulele' | 'piano' | 'handpan'
-//       - view: string, one of 'sheet' | 'timeline'
+//       - view: string, one of 'sheet' | 'timeline' | 'score'
 //       - barsPerLine: int, one of 2 | 4 | 8
 //       - follow: bool
 //       - showDiagrams: bool
@@ -82,7 +82,7 @@ service cloud.firestore {
         s.simplify is bool &&
         s.accidentals in ['auto', 'sharp', 'flat'] &&
         s.instrument in ['guitar', 'ukulele', 'piano', 'handpan'] &&
-        s.view in ['sheet', 'timeline'] &&
+        s.view in ['sheet', 'timeline', 'score'] &&
         s.barsPerLine is int && s.barsPerLine in [2, 4, 8] &&
         s.follow is bool &&
         s.showDiagrams is bool &&

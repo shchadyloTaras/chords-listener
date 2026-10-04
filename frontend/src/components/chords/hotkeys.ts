@@ -87,7 +87,8 @@ export function useChordHotkeys(model: ChordModel): void {
           break
         }
         case 'KeyV':
-          app.setSetting('view', app.view === 'sheet' ? 'timeline' : 'sheet')
+          // sheet → timeline → score (sheet music) → sheet
+          app.setSetting('view', app.view === 'sheet' ? 'timeline' : app.view === 'timeline' ? 'score' : 'sheet')
           break
         case 'KeyC':
           void copyAll(ref.current)

@@ -154,6 +154,10 @@ describe('users/{uid}', () => {
     assert.equal(await updateProfile(alice, alice.uid, { settings: { ...VALID_SETTINGS, theme: 'light', instrument: 'piano' } }), OK)
   })
 
+  test('the score view ("score") is a valid view', async () => {
+    assert.equal(await updateProfile(alice, alice.uid, { settings: { ...VALID_SETTINGS, view: 'score' } }), OK)
+  })
+
   test('another user cannot read it', async () => {
     assert.equal(await read(bob, alice.uid), DENIED)
   })
@@ -197,6 +201,7 @@ describe('users/{uid}', () => {
     'unknown instrument': { instrument: 'banjo' },
     'string instead of bool': { simplify: 'yes' },
     'unknown lang': { lang: 'de' },
+    'unknown view': { view: 'tabs' },
   }
   for (const [name, patch] of Object.entries(invalid)) {
     test(`invalid settings are rejected: ${name}`, async () => {

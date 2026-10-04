@@ -4,7 +4,7 @@
 
 import { memo, useState } from 'react'
 import clsx from 'clsx'
-import { AudioWaveform, Crosshair, Minus, Plus, RotateCcw, Rows3, SlidersHorizontal, Volume2, Wand2 } from 'lucide-react'
+import { AudioWaveform, Crosshair, FileMusic, Minus, Plus, RotateCcw, Rows3, SlidersHorizontal, Volume2, Wand2 } from 'lucide-react'
 import { useT } from '../../i18n'
 import { chordTone } from '../../lib/music/color'
 import { formatTranspose } from '../../lib/music/key'
@@ -182,6 +182,16 @@ function ViewControls() {
               <>
                 <AudioWaveform size={15} aria-hidden />
                 <span className="sr-only lg:not-sr-only">{t('chords.view.timeline')}</span>
+              </>
+            ),
+            title: t('chords.view.title'),
+          },
+          {
+            value: 'score',
+            label: (
+              <>
+                <FileMusic size={15} aria-hidden />
+                <span className="sr-only lg:not-sr-only">{t('score.view')}</span>
               </>
             ),
             title: t('chords.view.title'),

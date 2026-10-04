@@ -16,7 +16,7 @@ const PARTIAL_DECAY = 0.7
 const NNLS_ITERATIONS = 40
 
 /** STFT resolutions: long windows resolve the bass, shorter ones keep chord changes sharp. */
-const BANDS: readonly { size: number; maxMidi: number }[] = [
+export const BANDS: readonly { size: number; maxMidi: number }[] = [
   { size: 16384, maxMidi: 52 }, // A0 .. D#3
   { size: 8192, maxMidi: Infinity }, // E3 .. G#7
 ]
@@ -39,12 +39,12 @@ export function frameCount(nSamples: number): number {
   return 1 + Math.floor(nSamples / HOP)
 }
 
-function midiToHz(m: number): number {
+export function midiToHz(m: number): number {
   return 440 * 2 ** ((m - 69) / 12)
 }
 
 /** Fill `buf` with the Hann-windowed frame of `y` centered at sample `center` (zero-padded). */
-function windowFrame(y: Float32Array, center: number, win: Float64Array, buf: Float64Array): void {
+export function windowFrame(y: Float32Array, center: number, win: Float64Array, buf: Float64Array): void {
   const n = win.length
   const start = center - (n >> 1)
   if (start >= 0 && start + n <= y.length) {
@@ -116,7 +116,7 @@ export function estimateTuning(y: Float32Array): number {
   return Math.max(-0.5, Math.min(0.4999, t))
 }
 
-interface BandKernel {
+export interface BandKernel {
   fft: RealFFT
   win: Float64Array
   buf: Float64Array
@@ -132,7 +132,7 @@ interface BandKernel {
   scale: number
 }
 
-function buildBand(size: number, bins: number[], freqs: Float64Array): BandKernel {
+export function buildBand(size: number, bins: number[], freqs: Float64Array): BandKernel {
   const df = SR / size
   const ratio = 2 ** (1 / 36) - 1
   const start = new Int32Array(N_LOG_BINS)

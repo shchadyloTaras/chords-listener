@@ -180,12 +180,28 @@ export function cancelLocalTrackJobs(trackId: string): void {
 
 export type LocalProgress = (fraction: number) => void
 
+/** What a browser upload is beyond its bytes (e.g. a tab recording of a YouTube video keeps its link). */
+export interface LocalUploadMeta {
+  title?: string
+  source?: TrackSource
+  /**
+   * Video time (s) the recording began at. The audio must already start at the video's 0:00
+   * (silence padded in front), so the detected times line up with the video as they are.
+   */
+  startOffset?: number
+}
+
 /**
  * Starts analyzing a dropped / picked / recorded file in the browser. Rejects (like the upload endpoint)
  * for files that are too large or too long; resolves with a job that is already `done` when the same file
  * was analyzed before.
  */
-export async function startLocalUpload(file: File, onProgress?: LocalProgress, signal?: AbortSignal): Promise<Job> {
+export async function startLocalUpload(
+  file: File,
+  onProgress?: LocalProgress,
+  signal?: AbortSignal,
+  meta: LocalUploadMeta = {},
+): Promise<Job> {
   const aborted = () => {
     if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError')
   }
@@ -196,8 +212,8 @@ export async function startLocalUpload(file: File, onProgress?: LocalProgress, s
   const trackId = await contentId(file)
   aborted()
   onProgress?.(0.6)
-  const source: TrackSource = { type: 'file', url: null, videoId: null, filename: file.name || null }
-  const title = displayName(file.name || 'Untitled')
+  const source: TrackSource = meta.source ?? { type: 'file', url: null, videoId: null, filename: file.name || null }
+  const title = meta.title?.trim().slice(0, 300) || displayName(file.name || 'Untitled')
 
   const running = activeByTrack.get(trackId)
   if (running && jobs.has(running)) {
@@ -214,12 +230,11 @@ export async function startLocalUpload(file: File, onProgress?: LocalProgress, s
     throw new LocalError(`The recording is longer than ${MAX_LOCAL_DURATION_S / 60} minutes`, 'too_long', 422)
 
   const job = createJob({ title, source })
-  enqueue(job.id, trackId, file, (analysis) =>
-    saveNewLocalTrack(
-      newRecord(trackId, { filename: file.name || title, mime: file.type, size: file.size, source }, analysis),
-      file,
-    ),
-  )
+  enqueue(job.id, trackId, file, (analysis) => {
+    const rec = newRecord(trackId, { filename: file.name || title, mime: file.type, size: file.size, source }, analysis)
+    rec.title = title
+    return saveNewLocalTrack(rec, file)
+  })
   onProgress?.(1)
   return job
 }

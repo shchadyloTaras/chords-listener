@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import clsx from 'clsx'
-import { Check, ChevronDown, Copy, Download } from 'lucide-react'
+import { Check, ChevronDown, Copy, Download, FileMusic, FileText, Music2 } from 'lucide-react'
 import { useT } from '../../i18n'
 import { useApp, type CopyFormat } from '../../store'
 import { useChordModel } from './model'
@@ -8,6 +8,13 @@ import { Floating } from './ui/Floating'
 import { copyAll, downloadChords, useCopyFeedback } from './useCopy'
 
 const FORMATS: CopyFormat[] = ['bars', 'timestamps', 'chordpro', 'unique']
+
+/** Sheet music downloads (components/chords/score): PDF, MusicXML, MIDI. */
+const SCORE_EXPORTS = [
+  { kind: 'pdf', icon: <FileText size={15} /> },
+  { kind: 'musicxml', icon: <FileMusic size={15} /> },
+  { kind: 'midi', icon: <Music2 size={15} /> },
+] as const
 
 /** Split button: main part copies everything in the current format; the menu picks a format or downloads. */
 export function CopyButton({ compact = false }: { compact?: boolean }) {
@@ -82,6 +89,27 @@ export function CopyButton({ compact = false }: { compact?: boolean }) {
           >
             <Download size={15} className="text-muted" />
             {t(`chords.download.${kind}`)}
+          </button>
+        ))}
+        <div className="mx-2 my-1.5 h-px bg-border" />
+        <div className="px-2.5 pt-1 pb-1 text-xs text-faint">{t('score.export.menu')}</div>
+        {SCORE_EXPORTS.map(({ kind, icon }) => (
+          <button
+            key={kind}
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false)
+              // the score code (and OSMD / jsPDF for the PDF) loads only when used
+              void import('./score/exportScore').then((m) => m.exportScore(kind, model))
+            }}
+            className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-surface-3"
+          >
+            <span className="mt-0.5 text-muted">{icon}</span>
+            <span className="min-w-0">
+              <span className="block text-sm">{t(`score.export.${kind}`)}</span>
+              <span className="block truncate text-xs text-muted">{t(`score.export.${kind}.hint`)}</span>
+            </span>
           </button>
         ))}
       </Floating>

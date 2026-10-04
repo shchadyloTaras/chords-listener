@@ -35,7 +35,9 @@ export class PlaybackEngine {
 
   constructor(track: Track) {
     this.base = this.create((events) =>
-      track.audioUrl ? new AudioSource(track.audioUrl, events) : new ClockSource(track.duration, events),
+      track.audioUrl
+        ? new AudioSource(track.audioUrl, events, track.startOffset ?? 0)
+        : new ClockSource(track.duration, events),
     )
     this.activate(this.base)
     useApp.getState().registerController(this.controller)

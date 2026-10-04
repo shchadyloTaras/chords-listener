@@ -2,7 +2,7 @@ import { Check, Copy, ServerOff, TriangleAlert } from 'lucide-react'
 import { useState } from 'react'
 import { useT } from '../../i18n'
 import { useHealth } from '../../hooks/useHealth'
-import { HOSTED } from '../../lib/serverMode'
+import { HOSTED, useConnection } from '../../lib/serverMode'
 import { paths } from '../../hooks/useRoute'
 import { copyText } from '../ui/copyText'
 
@@ -38,8 +38,11 @@ export function HealthBanner() {
   const t = useT()
   const status = useHealth((s) => s.status)
   const health = useHealth((s) => s.health)
+  const cloud = useConnection((s) => s.backend === 'cloud')
 
-  // The hosted build (GitHub Pages) works without a server: the header's mode chip explains it calmly.
+  // The hosted build (GitHub Pages) works without a server and the cloud has its own chip: the header's
+  // mode chip explains both calmly. This banner is for the local app (./start.sh) only.
+  if (cloud) return null
   if (status === 'down' && !HOSTED) {
     return (
       <div role="alert" className="border-b border-danger/30 bg-danger/[0.07]">

@@ -8,6 +8,10 @@ const api = vi.hoisted(() => ({
 }))
 const runner = vi.hoisted(() => ({ createTranscriber: vi.fn() }))
 const audio = vi.hoisted(() => ({ decodeForModel: vi.fn() }))
+const stems = vi.hoisted(() => ({
+  getStemNotes: vi.fn<(key: string) => Promise<TrackNotes | null>>(),
+  putStemNotes: vi.fn<(key: string, notes: TrackNotes) => Promise<void>>(),
+}))
 
 vi.mock('../api', async () => {
   const real = await vi.importActual<typeof import('../api')>('../api')
@@ -18,10 +22,11 @@ vi.mock('./runner', async () => {
   return { ...real, createTranscriber: runner.createTranscriber }
 })
 vi.mock('./audio', () => audio)
+vi.mock('./stemCache', () => stems)
 
 import { ApiError } from '../api'
 import { TranscriberError } from './runner'
-import { requestNotes, releaseNotes, resetNotesService, retainNotes, useNotesStore, type NotesState } from './service'
+import { getNotesState, notesKey, requestNotes, releaseNotes, resetNotesService, retainNotes, useNotesStore, type NotesState } from './service'
 
 const SAVED: TrackNotes = { version: 1, engine: 'saved', notes: [[0.5, 1, 60, 0.7]] }
 const track = (id = 'aaaaaaaaaaaa', audioUrl = '/api/tracks/aaaaaaaaaaaa/audio') => ({ id, audioUrl, duration: 30 })
@@ -69,6 +74,8 @@ beforeEach(() => {
   api.fetchTrackAudio.mockReset().mockResolvedValue(new Blob(['mp3']))
   audio.decodeForModel.mockReset().mockResolvedValue({ samples: new Float32Array(22050), duration: 1 })
   runner.createTranscriber.mockReset().mockImplementation(fakeTranscriber())
+  stems.getStemNotes.mockReset().mockResolvedValue(null)
+  stems.putStemNotes.mockReset().mockResolvedValue(undefined)
 })
 
 afterEach(() => {
@@ -225,5 +232,45 @@ describe('notes service', () => {
     requestNotes(track())
     expect(await settle('aaaaaaaaaaaa')).toMatchObject({ status: 'ready', saved: true })
     expect(runner.createTranscriber).toHaveBeenCalledTimes(1)
+  })
+
+  describe('sources', () => {
+    const stemTrack = (loadAudio = vi.fn(async () => new Blob(['stem']))) => ({ ...track(), notesSource: 'instruments' as const, loadAudio })
+
+    it('transcribes the instruments stem separately from the mix and keeps it on this device', async () => {
+      const loadAudio = vi.fn(async () => new Blob(['stem']))
+      requestNotes(stemTrack(loadAudio))
+      const key = notesKey('aaaaaaaaaaaa', 'instruments')
+      expect(key).not.toBe('aaaaaaaaaaaa')
+      const s = await settle(key)
+      expect(s).toMatchObject({ status: 'ready', source: 'instruments', saved: true })
+      if (s.status === 'ready') expect(s.engine).toMatch(/instruments stem/)
+      expect(loadAudio).toHaveBeenCalledTimes(1)
+      expect(api.fetchTrackAudio).not.toHaveBeenCalled()
+      expect(api.getTrackNotes).not.toHaveBeenCalled()
+      expect(api.saveTrackNotes).not.toHaveBeenCalled()
+      expect(stems.putStemNotes).toHaveBeenCalledTimes(1)
+      expect(stems.putStemNotes.mock.calls[0][0]).toMatch(/\|aaaaaaaaaaaa\|instruments$/)
+      // the mix is untouched
+      expect(getNotesState('aaaaaaaaaaaa').status).toBe('idle')
+    })
+
+    it('reads saved stem notes without transcribing', async () => {
+      stems.getStemNotes.mockResolvedValue(SAVED)
+      requestNotes(stemTrack())
+      const s = await settle(notesKey('aaaaaaaaaaaa', 'instruments'))
+      expect(s).toMatchObject({ status: 'ready', saved: true, engine: 'saved', source: 'instruments' })
+      expect(runner.createTranscriber).not.toHaveBeenCalled()
+    })
+
+    it('a stem source without audio is unavailable', () => {
+      requestNotes({ ...track(), notesSource: 'instruments' })
+      expect(getNotesState('aaaaaaaaaaaa', 'instruments').status).toBe('unavailable')
+    })
+
+    it('the mix still reports its source', async () => {
+      requestNotes(track())
+      expect(await settle('aaaaaaaaaaaa')).toMatchObject({ status: 'ready', source: 'mix' })
+    })
   })
 })

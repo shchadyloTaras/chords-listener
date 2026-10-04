@@ -309,7 +309,9 @@ def test_health(env: SimpleNamespace) -> None:
     res = env.client.get("/api/health")
     assert res.status_code == 200
     body = res.json()
-    assert body["engine"] == ENGINE_INFO
+    features = dict(body["engine"]["features"])
+    assert isinstance(features.pop("vocals"), bool)  # the optional vocal transcription (app.vocals)
+    assert {**body["engine"], "features": features} == ENGINE_INFO
     assert body["ffmpeg"] is True and body["ok"] is True
     assert isinstance(body["ytdlp"], str) and body["ytdlp"]
 

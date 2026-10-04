@@ -16,7 +16,7 @@ export const core: Dict = {
     // home
     'core.home.title': 'Акорди до будь-якої пісні',
     'core.home.subtitle':
-      'Встав посилання або кинь файл — акорди підсвічуватимуться в такт музиці, а скопіювати їх можна одним натиском.',
+      'Встав посилання на YouTube, завантаж файл або дай сайту послухати — акорди підсвічуватимуться в такт музиці, а скопіювати їх можна одним натиском.',
 
     // smart input
     'core.input.label': 'Посилання на відео або аудіо',
@@ -63,7 +63,7 @@ export const core: Dict = {
     'core.history.count.few': '{n} пісні',
     'core.history.count.many': '{n} пісень',
     'core.history.count.other': '{n} пісні',
-    'core.history.empty': 'Тут зʼявлятимуться пісні, які ти розібрав. Почни з посилання або файлу.',
+    'core.history.empty': 'Тут зʼявлятимуться пісні, які ти розібрав. Почни з посилання, файлу або «Слухати».',
     'core.history.tryDemo': 'Подивитися демо',
     'core.history.loadFailed': 'Не вдалося завантажити список пісень.',
     'core.history.delete': 'Видалити «{title}»',
@@ -202,7 +202,7 @@ export const core: Dict = {
     'core.shortcuts.transpose': 'Транспонувати на півтону вниз / вгору',
     'core.shortcuts.transposeReset': 'Повернути оригінальну тональність',
     'core.shortcuts.simplify': 'Спрощені акорди',
-    'core.shortcuts.view': 'Перемкнути вигляд: аркуш / стрічка',
+    'core.shortcuts.view': 'Перемкнути вигляд: акорди / таймлайн / ноти',
     'core.shortcuts.copy': 'Скопіювати всі акорди',
     'core.shortcuts.follow': 'Стежити за відтворенням',
     'core.shortcuts.loop': 'Повторювати такт або виділення',
@@ -228,7 +228,7 @@ export const core: Dict = {
 
     'core.home.title': 'Chords for any song',
     'core.home.subtitle':
-      'Paste a link or drop a file — chords light up in time with the music, and copying them takes one click.',
+      'Paste a YouTube link, upload a file or let the site listen — chords light up in time with the music, and copying them takes one click.',
 
     'core.input.label': 'Video or audio link',
     'core.input.placeholder': 'Paste a YouTube link or drop an audio/video file',
@@ -270,7 +270,7 @@ export const core: Dict = {
     'core.history.count.few': '{n} songs',
     'core.history.count.many': '{n} songs',
     'core.history.count.other': '{n} songs',
-    'core.history.empty': 'Songs you analyze will show up here. Start with a link or a file.',
+    'core.history.empty': 'Songs you analyze will show up here. Start with a link, a file or “Listen”.',
     'core.history.tryDemo': 'See the demo',
     'core.history.loadFailed': 'Could not load your songs.',
     'core.history.delete': 'Delete “{title}”',
@@ -400,7 +400,7 @@ export const core: Dict = {
     'core.shortcuts.transpose': 'Transpose a semitone down / up',
     'core.shortcuts.transposeReset': 'Back to the original key',
     'core.shortcuts.simplify': 'Simplified chords',
-    'core.shortcuts.view': 'Switch view: sheet / timeline',
+    'core.shortcuts.view': 'Switch view: chords / timeline / score',
     'core.shortcuts.copy': 'Copy all chords',
     'core.shortcuts.follow': 'Follow playback',
     'core.shortcuts.loop': 'Loop bar or selection',

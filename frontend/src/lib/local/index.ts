@@ -26,4 +26,5 @@ export {
   startLocalReanalysis,
   cancelLocalTrackJobs,
   type LocalProgress,
+  type LocalUploadMeta,
 } from './jobs'

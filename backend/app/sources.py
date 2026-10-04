@@ -106,6 +106,26 @@ def youtube_thumbnail(video_id: str) -> str:
     return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
 
 
+def youtube_oembed(video_id: str, timeout: float = 6.0) -> tuple[Optional[str], Optional[str]]:
+    """(title, channel) of a YouTube video from the public oEmbed endpoint; (None, None) on any failure."""
+    import urllib.request
+    from urllib.parse import quote
+
+    if not _YT_ID_RE.fullmatch(video_id or ""):
+        return None, None
+    url = f"https://www.youtube.com/oembed?format=json&url={quote(youtube_url(video_id), safe='')}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "chords-listener"})
+        with urllib.request.urlopen(req, timeout=timeout) as res:  # noqa: S310 - fixed https host
+            data = json.loads(res.read(256 * 1024).decode("utf-8"))
+    except Exception as exc:
+        log.info("oEmbed lookup for %s failed: %s", video_id, exc)
+        return None, None
+    title = str(data.get("title") or "").strip()[:300] or None
+    author = _strip_topic(str(data.get("author_name") or "").strip()[:300] or None)
+    return title, author
+
+
 def _is_youtube_host(host: str) -> bool:
     if host in ("youtu.be", "www.youtu.be", "youtube-nocookie.com", "www.youtube-nocookie.com"):
         return True
@@ -224,9 +244,37 @@ def _clean_ytdlp_message(msg: str) -> str:
     return (msg[:280] + "...") if len(msg) > 280 else msg
 
 
-def _map_ytdlp_error(exc: BaseException) -> SourceError:
+# YouTube refusing a (data-center) server: bot check, sign-in wall, 403/429 on the media URLs, or every
+# stream withheld. The client then offers to capture the audio in the browser tab (docs/CLOUD.md → YouTube).
+_BLOCKED_PATTERNS = (
+    "sign in to confirm",  # "Sign in to confirm you're not a bot" / "... your age"
+    "not a bot",
+    "--cookies-from-browser",
+    "http error 403",
+    "403: forbidden",
+    "status code 403",
+    "http error 429",
+    "too many requests",
+    "the following content is not available on this app",
+    "this content isn't available, try again later",
+)
+_YOUTUBE_BLOCKED_PATTERNS = ("requested format is not available", "only images are available")
+
+
+def is_blocked_message(message: str, youtube: bool = False) -> bool:
+    low = _ANSI_RE.sub("", message).lower().replace("’", "'")
+    return any(p in low for p in _BLOCKED_PATTERNS) or (youtube and any(p in low for p in _YOUTUBE_BLOCKED_PATTERNS))
+
+
+def _map_ytdlp_error(exc: BaseException, youtube: bool = False) -> SourceError:
     msg = _clean_ytdlp_message(str(exc))
     low = msg.lower()
+    if is_blocked_message(str(exc), youtube):
+        return SourceError(
+            "download_blocked",
+            "YouTube refused the download from the server (bot check). Play the video and use "
+            "\"listen in this tab\", or upload the audio file.",
+        )
     if "unsupported url" in low or "is not a valid url" in low:
         return SourceError("invalid_url", "This link isn't supported")
     if any(s in low for s in ("getaddrinfo", "nodename nor servname", "name or service not known", "timed out",
@@ -319,7 +367,7 @@ class YtDlpFetcher:
             with yt_dlp.YoutubeDL(self._opts(format=AUDIO_FORMAT)) as ydl:
                 info = ydl.extract_info(url.url, download=False)
         except yt_dlp.utils.DownloadError as exc:
-            raise _map_ytdlp_error(exc) from exc
+            raise _map_ytdlp_error(exc, youtube=bool(url.youtube_id)) from exc
         if not info:
             raise SourceError("download_failed", "Couldn't read this link")
         if info.get("_type") == "playlist" or "entries" in info:
@@ -398,7 +446,7 @@ class YtDlpFetcher:
                 if cancel.is_set():
                     raise Cancelled() from exc
                 if fresh:
-                    raise _map_ytdlp_error(exc) from exc
+                    raise _map_ytdlp_error(exc, youtube=bool(media.video_id)) from exc
                 # Pre-extracted stream URLs can be rejected (e.g. YouTube 403); re-extract and retry once.
                 log.info("download from cached info failed (%s); re-extracting", _clean_ytdlp_message(str(exc)))
                 for leftover in dest_dir.glob("source.*"):

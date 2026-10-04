@@ -1,14 +1,15 @@
 import { useEffect } from 'react'
 import { useT } from '../../i18n'
 import { useApp } from '../../store'
-import { submitUrl } from '../../hooks/useJobs'
 import { isTypingTarget } from '../../hooks/useHotkeys'
 import { useDocumentTitle } from '../../hooks/useDocumentTitle'
 import { toApiError } from '../../lib/api'
 import { announceServerRequired } from '../../lib/serverMode'
+import { AccountCta } from '../account/AccountCta'
 import { RecentTracks } from '../history/RecentTracks'
 import { SmartInput } from '../input/SmartInput'
 import { startFiles } from '../input/startFiles'
+import { startLink } from '../input/startLink'
 import { checkUrl, findUrl } from '../input/url'
 import { errorText } from '../jobs/errorText'
 
@@ -26,13 +27,15 @@ function useGlobalPaste() {
       const check = url ? checkUrl(url) : null
       if (check?.ok && check.url) {
         e.preventDefault()
-        const url = check.url
-        submitUrl(url).catch((err) => {
-          const code = toApiError(err).code
-          // no server (browser mode): the link field takes the link and explains how to connect one
-          if (code === 'server_required' && announceServerRequired(url)) return
-          useApp.getState().toast(errorText(code), 'error')
-        })
+        const link = check.url
+        startLink(link).then(
+          (started) => {
+            // another site without a server: the link field takes it and explains the account
+            if (started.kind === 'account' && !announceServerRequired(link))
+              useApp.getState().toast(errorText('server_required'), 'info')
+          },
+          (err) => useApp.getState().toast(errorText(toApiError(err).code), 'error'),
+        )
       }
     }
     window.addEventListener('paste', onPaste)
@@ -46,12 +49,13 @@ export function HomePage() {
   useGlobalPaste()
 
   return (
-    <div className="mx-auto w-full max-w-[52rem] px-4 pt-12 pb-24 sm:px-6 sm:pt-20">
+    <div className="mx-auto w-full max-w-[52rem] px-4 pt-10 pb-24 sm:px-6 sm:pt-16">
       <h1 className="max-w-[16ch] font-display text-[2.6rem] leading-[1.02] font-semibold tracking-[-0.035em] text-balance sm:text-[3.75rem]">
         {t('core.home.title')}
       </h1>
-      <p className="mt-4 max-w-[52ch] text-[17px] leading-relaxed text-muted sm:text-lg">{t('core.home.subtitle')}</p>
-      <SmartInput className="mt-9" />
+      <p className="mt-4 max-w-[56ch] text-[17px] leading-relaxed text-muted sm:text-lg">{t('core.home.subtitle')}</p>
+      <AccountCta className="mt-7" />
+      <SmartInput className="mt-7" />
       <RecentTracks />
     </div>
   )

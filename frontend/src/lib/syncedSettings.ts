@@ -25,7 +25,7 @@ export type SyncedSettings = Pick<Settings, SyncedKey>
 const ENUMS: Partial<Record<SyncedKey, readonly unknown[]>> = {
   accidentals: ['auto', 'sharp', 'flat'],
   instrument: ['guitar', 'ukulele', 'piano', 'handpan'],
-  view: ['sheet', 'timeline'],
+  view: ['sheet', 'timeline', 'score'],
   barsPerLine: [2, 4, 8],
   copyFormat: ['bars', 'timestamps', 'chordpro', 'unique'],
   theme: ['dark', 'light', 'system'],

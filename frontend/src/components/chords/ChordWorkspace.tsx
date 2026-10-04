@@ -1,5 +1,6 @@
-// Chord workspace for the loaded track: now-playing hero, sticky toolbar, sheet or timeline,
-// chord legend, popover / editor and floating helpers. No props — everything comes from the store.
+// Chord workspace for the loaded track: now-playing hero, sticky toolbar, sheet, timeline or score
+// (sheet music), chord legend, popover / editor and floating helpers. No props — everything comes from
+// the store.
 
 import { useEffect, useRef, useState } from 'react'
 import { AudioWaveform } from 'lucide-react'
@@ -14,6 +15,7 @@ import { ChordModelContext, useBuildChordModel } from './model'
 import { NowPlaying } from './NowPlaying'
 import { Overlays } from './Overlays'
 import { LivePianoSlot } from './piano/LivePianoSlot'
+import { ScoreSlot } from './score/ScoreSlot'
 import { SheetView } from './SheetView'
 import { TimelineView } from './TimelineView'
 import { Toolbar } from './Toolbar'
@@ -69,7 +71,9 @@ function Workspace({ track }: { track: Track }) {
         <div className="h-3" />
         <Toolbar heroVisible={heroVisible} />
         <div className="mt-5 mb-10">
-          {model.hasChords ? (
+          {view === 'score' ? (
+            <ScoreSlot />
+          ) : model.hasChords ? (
             view === 'timeline' ? <TimelineView /> : <SheetView />
           ) : (
             <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border px-6 py-16 text-center">

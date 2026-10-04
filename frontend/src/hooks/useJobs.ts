@@ -1,10 +1,13 @@
 import { create } from 'zustand'
 import * as api from '../lib/api'
-import { toApiError, type JobOptions } from '../lib/api'
+import { toApiError, type JobOptions, type UploadMeta } from '../lib/api'
+import { isLocalId } from '../lib/local'
+import { useConnection } from '../lib/serverMode'
 import { t } from '../i18n'
 import { useApp } from '../store'
 import type { Job, JobStatus } from '../types'
 import { errorText } from '../components/jobs/errorText'
+import { parseYouTubeId } from '../components/input/url'
 import { currentPath, navigate, paths } from './useRoute'
 
 const ACTIVE: ReadonlySet<JobStatus> = new Set<JobStatus>(['queued', 'downloading', 'decoding', 'analyzing'])
@@ -60,6 +63,12 @@ function jobTitle(job: Job): string {
   return job.title || job.source?.filename || t('core.jobs.untitled')
 }
 
+/** YouTube video of a job whose server download YouTube refused: it can be listened to in the tab instead. */
+export function blockedVideoId(job: Pick<Job, 'status' | 'errorCode' | 'source'>): string | null {
+  if (job.status !== 'error' || job.errorCode !== 'download_blocked' || !job.source) return null
+  return job.source.videoId || (job.source.url ? parseYouTubeId(job.source.url) : null)
+}
+
 // ------------------------------------------------------------------ polling
 
 let pollTimer: number | null = null
@@ -75,6 +84,7 @@ function schedulePoll(delay = 400) {
 async function pollOnce() {
   const active = Object.values(useJobs.getState().jobs).filter(isActiveJob)
   if (!active.length) return
+  let signedOut = false
   await Promise.all(
     active.map(async (prev) => {
       try {
@@ -84,11 +94,13 @@ async function pollOnce() {
         if (err.code === 'not_found') {
           applyUpdate(prev, { ...prev, status: 'error', errorCode: 'not_found', error: err.message })
         }
+        if (err.code === 'unauthorized') signedOut = true
         // network hiccups: keep polling
       }
     }),
   )
-  if (Object.values(useJobs.getState().jobs).some(isActiveJob)) schedulePoll(document.hidden ? 1500 : 400)
+  // the cloud wants a new sign-in: check back calmly instead of hammering it
+  if (Object.values(useJobs.getState().jobs).some(isActiveJob)) schedulePoll(signedOut ? 5000 : document.hidden ? 1500 : 400)
 }
 
 function applyUpdate(prev: Job, next: Job) {
@@ -104,6 +116,14 @@ function applyUpdate(prev: Job, next: Job) {
       run: () => navigate(paths.track(trackId)),
     })
   } else if (next.status === 'error') {
+    const videoId = blockedVideoId(next)
+    if (videoId) {
+      toast(`${jobTitle(next)}: ${t('cloud.blocked.toast')}`, 'info', {
+        label: t('cloud.blocked.action'),
+        run: () => navigate(paths.capture(videoId, { blocked: true })),
+      })
+      return
+    }
     toast(`${jobTitle(next)}: ${errorText(next.errorCode)}`, 'error', {
       label: t('core.jobs.details'),
       run: () => navigate(paths.job(next.id)),
@@ -124,8 +144,31 @@ export async function ensureJob(id: string, signal?: AbortSignal): Promise<Job> 
   return job
 }
 
+/** Drops the jobs of a server that is no longer connected (e.g. the cloud after signing out). */
+export function forgetServerJobs(): void {
+  useJobs.setState((s) => {
+    const jobs: Record<string, Job> = {}
+    for (const [id, job] of Object.entries(s.jobs)) if (isLocalId(id)) jobs[id] = job
+    return { jobs }
+  })
+}
+
+// Another server (or none) now answers: its jobs are not ours to poll; pick up the new one's running jobs.
+useConnection.subscribe((s, prev) => {
+  if (s.apiBase === prev.apiBase) return
+  if (prev.apiBase) forgetServerJobs()
+  if (s.status === 'server') void syncServerJobs()
+})
+
+let syncing: Promise<void> | null = null
+
 /** Picks up jobs that are still running on the server (e.g. after a page reload). */
-export async function syncServerJobs(): Promise<void> {
+export function syncServerJobs(): Promise<void> {
+  syncing ??= doSyncServerJobs().finally(() => (syncing = null))
+  return syncing
+}
+
+async function doSyncServerJobs(): Promise<void> {
   try {
     const jobs = await api.listJobs()
     const running = jobs.filter(isActiveJob)
@@ -175,10 +218,25 @@ export async function submitUrl(url: string, options?: JobOptions): Promise<Job>
 
 let uploadSeq = 0
 
-/** Uploads a file with progress (shown in the header / home input) and navigates to its job. */
-export async function submitFile(file: File, options?: JobOptions): Promise<Job | null> {
+export interface SubmitFileExtra {
+  /** title / source / start offset of the recording (see api.UploadMeta) */
+  meta?: UploadMeta
+  /** analyze in this browser even when a server is connected */
+  inBrowser?: boolean
+  signal?: AbortSignal
+}
+
+/**
+ * Uploads a file with progress (shown in the header / home input), then follows its job (navigates to it
+ * unless the user went elsewhere meanwhile). Throws ApiError; see submitFile for the toasting variant.
+ */
+export async function uploadAndFollow(file: File, options?: JobOptions, extra: SubmitFileExtra = {}): Promise<Job> {
   const key = `upload-${++uploadSeq}`
   const ctrl = new AbortController()
+  const outer = extra.signal
+  const onOuterAbort = () => ctrl.abort()
+  if (outer?.aborted) ctrl.abort()
+  else outer?.addEventListener('abort', onOuterAbort, { once: true })
   const fromPath = currentPath()
   const patchUpload = (patch: Partial<UploadEntry>) =>
     useJobs.setState((s) => ({ uploads: s.uploads.map((u) => (u.key === key ? { ...u, ...patch } : u)) }))
@@ -197,20 +255,34 @@ export async function submitFile(file: File, options?: JobOptions): Promise<Job 
         lastUpdate = now
         patchUpload({ progress: fraction })
       },
-      { options, signal: ctrl.signal },
+      { options, signal: ctrl.signal, meta: extra.meta, inBrowser: extra.inBrowser },
     )
     rememberFile(job.id, file)
     upsert(job)
     follow(job, fromPath)
     return job
+  } finally {
+    outer?.removeEventListener('abort', onOuterAbort)
+    useJobs.setState((s) => ({ uploads: s.uploads.filter((u) => u.key !== key) }))
+  }
+}
+
+/** Uploads a file with progress (shown in the header / home input) and navigates to its job; failures toast. */
+export async function submitFile(file: File, options?: JobOptions, extra: SubmitFileExtra = {}): Promise<Job | null> {
+  try {
+    return await uploadAndFollow(file, options, extra)
   } catch (e) {
     const err = toApiError(e)
     const { toast } = useApp.getState()
     if (err.code === 'aborted') toast(t('core.upload.cancelled'), 'info')
+    else if (err.code === 'quota_exceeded' && !extra.inBrowser)
+      // the cloud's limit for today: this browser can still do it
+      toast(`${file.name}: ${errorText(err.code)}`, 'error', {
+        label: t('cloud.quota.inBrowser'),
+        run: () => void submitFile(file, options, { ...extra, inBrowser: true }),
+      })
     else toast(`${file.name}: ${errorText(err.code)}`, 'error')
     return null
-  } finally {
-    useJobs.setState((s) => ({ uploads: s.uploads.filter((u) => u.key !== key) }))
   }
 }
 
