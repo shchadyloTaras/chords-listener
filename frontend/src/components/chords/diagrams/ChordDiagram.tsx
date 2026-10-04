@@ -4,14 +4,16 @@ import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useT } from '../../../i18n'
 import { lookupVoicings, type FretInstrument } from '../../../lib/diagrams/chordsDb'
 import { pianoVoicing } from '../../../lib/diagrams/piano'
+import { staffChord } from '../../../lib/diagrams/staff'
 import { parseChord } from '../../../lib/music/chord'
 import { chordTone } from '../../../lib/music/color'
-import { pcToName, type Spelling } from '../../../lib/music/notes'
+import type { Spelling } from '../../../lib/music/notes'
 import type { Instrument } from '../../../store'
 import { HandpanDiagram } from '../handpan/HandpanDiagram'
 import { useChordUi } from '../uiStore'
 import { FretChart } from './FretChart'
 import { PianoChart } from './PianoChart'
+import { StaffChart } from './StaffChart'
 import { useChordDb } from './useChordDb'
 
 const WIDTHS = {
@@ -20,6 +22,9 @@ const WIDTHS = {
   piano: { sm: 120, md: 168, lg: 210 },
   handpan: { sm: 80, md: 124, lg: 148 },
 } as const
+
+/** grand-staff height (px) shown above the piano keyboard */
+const STAFF_HEIGHTS = { sm: 72, md: 96, lg: 124 } as const
 
 export type DiagramSize = 'sm' | 'md' | 'lg'
 
@@ -41,7 +46,7 @@ export const ChordDiagram = memo(function ChordDiagram({
   size?: DiagramSize
   /** show ‹ › to browse voicings */
   switcher?: boolean
-  /** note-name spelling for the piano caption (defaults to the chord's own accidental) */
+  /** note-name spelling for the handpan caption (defaults to the chord's own accidental) */
   spelling?: Spelling
   className?: string
 }) {
@@ -75,11 +80,20 @@ export const ChordDiagram = memo(function ChordDiagram({
 
   if (!fretted) {
     const v = pianoVoicing(parsed)
+    const staff = staffChord(parsed, v)
+    const right = staff.treble.map((n) => n.name).join(' ')
     return (
       <figure className={clsx('flex flex-col items-center gap-1.5', className)}>
+        <StaffChart
+          chord={staff}
+          color={color}
+          height={STAFF_HEIGHTS[size]}
+          title={t('chords.staff.label', { chord: label, notes: right, bass: staff.bass.name })}
+        />
         <PianoChart voicing={v} color={color} width={width} title={title} />
         <figcaption className="font-mono text-[11px] tracking-wide text-muted">
-          {v.notes.map((n) => pcToName(n, spelling ?? (parsed.root.includes('b') ? 'flat' : 'sharp'))).join('  ')}
+          {parsed.bassPc != null && `${staff.bass.name} / `}
+          {staff.treble.map((n) => n.name).join('  ')}
         </figcaption>
       </figure>
     )

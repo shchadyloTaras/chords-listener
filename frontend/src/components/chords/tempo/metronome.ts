@@ -46,12 +46,34 @@ function sameTimes(a: readonly number[], b: readonly number[]): boolean {
   return true
 }
 
-/** Perceptual volume curve; the click is short, so allow it to be fairly loud at the top. */
-const gainFor = (v: number) => Math.max(0, Math.min(1, v)) ** 2 * 0.9
+/** Highest metronome volume setting (2 = 200%). */
+export const METRONOME_MAX_VOLUME = 2
+
+/**
+ * Perceptual curve up to 100%, then a steeper boost so the click cuts through loud mixes;
+ * the limiter after the master gain keeps the boosted clicks from clipping.
+ */
+const gainFor = (v: number) => {
+  const x = Math.max(0, Math.min(METRONOME_MAX_VOLUME, v))
+  return x <= 1 ? x * x : 1 + (x - 1) * 3
+}
+
+function makeNoise(ctx: AudioContext): AudioBuffer | null {
+  try {
+    const buf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * 0.02), ctx.sampleRate)
+    const data = buf.getChannelData(0)
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1
+    return buf
+  } catch {
+    return null
+  }
+}
 
 class MetronomeEngine {
   private ctx: AudioContext | null = null
   private master: GainNode | null = null
+  /** 20 ms of white noise reused for every click's attack */
+  private noise: AudioBuffer | null = null
   /** clicks go through a disposable bus so queued clicks can be silenced at once */
   private bus: GainNode | null = null
   private ticker: Ticker | null = null
@@ -124,7 +146,16 @@ class MetronomeEngine {
       const ctx = new Ctor({ latencyHint: 'interactive' })
       const master = ctx.createGain()
       master.gain.value = gainFor(useApp.getState().metronomeVolume)
-      master.connect(ctx.destination)
+      // Fast limiter: loud settings get louder clicks instead of distortion.
+      const limiter = ctx.createDynamicsCompressor()
+      limiter.threshold.value = -3
+      limiter.knee.value = 2
+      limiter.ratio.value = 20
+      limiter.attack.value = 0.0005
+      limiter.release.value = 0.06
+      master.connect(limiter)
+      limiter.connect(ctx.destination)
+      this.noise = makeNoise(ctx)
       this.ctx = ctx
       this.master = master
       this.bus = null
@@ -165,28 +196,53 @@ class MetronomeEngine {
     this.bus.connect(this.master)
   }
 
-  /** A short pitched "tick": higher and louder on the downbeat. */
+  /**
+   * A short woodblock-like "tick": a bright pitched body plus a noise transient for the attack,
+   * so it stays audible over the music. Higher and louder on the downbeat.
+   */
   private click(at: number, accent: boolean): void {
     const ctx = this.ctx
     const bus = this.bus
     if (!ctx || !bus) return
+    const len = accent ? 0.08 : 0.06
+    const peak = accent ? 1 : 0.75
+
     const osc = ctx.createOscillator()
+    const tone = ctx.createBiquadFilter()
     const env = ctx.createGain()
-    osc.type = 'triangle'
+    osc.type = 'square'
     osc.frequency.setValueAtTime(accent ? 1760 : 1175, at)
     osc.frequency.exponentialRampToValueAtTime(accent ? 1320 : 880, at + 0.04)
-    const peak = accent ? 1 : 0.6
-    const len = accent ? 0.07 : 0.05
+    tone.type = 'lowpass'
+    tone.frequency.value = 6000
     env.gain.setValueAtTime(0.0001, at)
-    env.gain.exponentialRampToValueAtTime(peak, at + 0.002)
+    env.gain.exponentialRampToValueAtTime(peak * 0.7, at + 0.0015)
     env.gain.exponentialRampToValueAtTime(0.0001, at + len)
-    osc.connect(env)
+    osc.connect(tone)
+    tone.connect(env)
     env.connect(bus)
     osc.start(at)
     osc.stop(at + len + 0.01)
+
+    const nodes: AudioNode[] = [osc, tone, env]
+    if (this.noise) {
+      const hiss = ctx.createBufferSource()
+      const hp = ctx.createBiquadFilter()
+      const henv = ctx.createGain()
+      hiss.buffer = this.noise
+      hp.type = 'highpass'
+      hp.frequency.value = 2500
+      henv.gain.setValueAtTime(peak * 0.9, at)
+      henv.gain.exponentialRampToValueAtTime(0.0001, at + 0.012)
+      hiss.connect(hp)
+      hp.connect(henv)
+      henv.connect(bus)
+      hiss.start(at)
+      hiss.stop(at + 0.015)
+      nodes.push(hiss, hp, henv)
+    }
     osc.onended = () => {
-      osc.disconnect()
-      env.disconnect()
+      for (const n of nodes) n.disconnect()
     }
     this.clicks++
   }

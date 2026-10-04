@@ -138,6 +138,7 @@ export const chords: Dict = {
     'chords.voicing.fallback': 'Показано {chord}',
     'chords.voicing.none': 'Немає аплікатури',
     'chords.fret': '{n} лад',
+    'chords.staff.label': '{chord} на нотному стані: права рука {notes}, ліва рука {bass}',
 
     'chords.timeline.zoomIn': 'Наблизити',
     'chords.timeline.zoomOut': 'Віддалити',
@@ -281,6 +282,7 @@ export const chords: Dict = {
     'chords.voicing.fallback': 'Showing {chord}',
     'chords.voicing.none': 'No shape available',
     'chords.fret': 'fret {n}',
+    'chords.staff.label': '{chord} on the staff: right hand {notes}, left hand {bass}',
 
     'chords.timeline.zoomIn': 'Zoom in',
     'chords.timeline.zoomOut': 'Zoom out',

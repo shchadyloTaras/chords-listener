@@ -55,7 +55,7 @@ export interface Settings {
   handpanNotes: string[]
   /** beat-synced metronome click */
   metronome: boolean
-  metronomeVolume: number // 0..1
+  metronomeVolume: number // 0..2 (up to 200%)
   /** per-track tempo correction factor (0.5 | 1 | 2), keyed by track id */
   tempoFactors: Record<string, number>
   /** local chord server used when the page is not served by it (e.g. GitHub Pages) */
@@ -110,7 +110,7 @@ const defaultSettings: Settings = {
   handpanScale: 'custom',
   handpanNotes: ['A', 'D', 'F', 'A', 'C', 'G', 'E', 'C', 'A'],
   metronome: false,
-  metronomeVolume: 0.6,
+  metronomeVolume: 1,
   tempoFactors: {},
   serverUrl: 'http://localhost:8765',
 }

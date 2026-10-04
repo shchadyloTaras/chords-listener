@@ -11,7 +11,7 @@ import { Kbd } from '../../ui/Kbd'
 import { useChordModel } from '../model'
 import { Floating } from '../ui/Floating'
 import { differsNotably, factorLabel, useLocalBpm } from './hooks'
-import { toggleMetronome } from './metronome'
+import { METRONOME_MAX_VOLUME, toggleMetronome } from './metronome'
 import { MetronomeIcon } from './MetronomeIcon'
 import { useTap } from './tapStore'
 import { TempoSparkline } from './TempoSparkline'
@@ -269,13 +269,17 @@ function MetronomeSection() {
         <input
           type="range"
           min={0}
-          max={1}
+          max={METRONOME_MAX_VOLUME}
           step={0.05}
           value={volume}
           aria-label={t('tempo.metronome.volume')}
+          aria-valuetext={`${Math.round(volume * 100)}%`}
           onChange={(e) => setSetting('metronomeVolume', Number(e.target.value))}
           className="h-1 w-full cursor-pointer accent-accent"
         />
+        <span className={clsx('w-11 shrink-0 text-right font-mono text-xs tabular-nums', volume > 1 ? 'text-accent' : 'text-muted')}>
+          {Math.round(volume * 100)}%
+        </span>
       </div>
     </Section>
   )
