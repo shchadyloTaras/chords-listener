@@ -1,14 +1,15 @@
-// Hover / focus popover for a chord (diagram + copy + edit + play from here) and the inline
+// Hover / focus popover for a chord (diagram + listen + copy + edit + play from here) and the inline
 // chord editor with autocomplete. One instance lives in the workspace; triggers call the
 // helpers in ./popoverIntent.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { Check, Copy, Pencil, Play } from 'lucide-react'
+import { Check, Copy, Pencil, Play, Volume2 } from 'lucide-react'
 import { useT } from '../../i18n'
 import { allChordNames, formatChord, isNoChordLabel, parseChord } from '../../lib/music/chord'
 import { chordTone } from '../../lib/music/color'
 import { formatTime } from '../../lib/music/formats'
+import { playChordSound } from '../../lib/sound'
 import { useApp } from '../../store'
 import { ChordName } from './ChordName'
 import { ChordDiagram } from './diagrams/ChordDiagram'
@@ -37,7 +38,7 @@ export function ChordPopoverHost() {
       onPointerEnter={popoverIntent.keep}
       onPointerLeave={pop.mode === 'info' ? popoverIntent.closeSoon : undefined}
       ariaLabel={chord.isNone ? undefined : chord.label}
-      className={pop.mode === 'edit' ? 'w-80 p-3' : 'w-64 p-3'}
+      className={pop.mode === 'edit' ? 'w-80 p-3' : 'w-72 p-3'}
     >
       {pop.mode === 'edit' ? (
         <ChordEditor key={`e${chord.index}`} chordIndex={chord.index} />
@@ -73,7 +74,14 @@ function ChordInfo({ chordIndex, time }: { chordIndex: number; time: number }) {
           <ChordDiagram label={chord.label} instrument={instrument} size="md" switcher spelling={spelling} />
         </div>
       )}
-      <div className="grid w-full grid-cols-3 gap-1">
+      <div className="grid w-full grid-cols-4 gap-1">
+        <PopButton
+          icon={<Volume2 size={15} />}
+          label={t('sound.play')}
+          disabled={chord.isNone}
+          sound
+          onClick={(e) => playChordSound(chord.label, { from: e.currentTarget, color })}
+        />
         <PopButton
           icon={done ? <Check size={15} className="text-success" /> : <Copy size={15} />}
           label={t('chords.popover.copy')}
@@ -91,13 +99,27 @@ function ChordInfo({ chordIndex, time }: { chordIndex: number; time: number }) {
   )
 }
 
-function PopButton({ icon, label, onClick, disabled }: { icon: React.ReactNode; label: string; onClick(): void; disabled?: boolean }) {
+function PopButton({
+  icon,
+  label,
+  onClick,
+  disabled,
+  sound,
+}: {
+  icon: React.ReactNode
+  label: string
+  onClick(e: React.MouseEvent<HTMLButtonElement>): void
+  disabled?: boolean
+  /** plays a sound (lets the audio start on press) */
+  sound?: boolean
+}) {
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="flex flex-col items-center gap-1 rounded-lg px-1 py-2 text-[11px] text-muted transition-colors hover:bg-surface-3 hover:text-text disabled:opacity-35"
+      data-cw-sound={sound ? 'always' : undefined}
+      className="flex flex-col items-center gap-1 rounded-lg px-1 py-2 text-center text-[11px] leading-tight text-muted transition-colors hover:bg-surface-3 hover:text-text disabled:opacity-35"
     >
       {icon}
       {label}

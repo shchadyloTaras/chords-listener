@@ -59,6 +59,9 @@ export const chords: Dict = {
 
     'chords.settings': 'Налаштування вигляду',
     'chords.barsPerLine': 'Тактів у рядку',
+    'chords.barsPerLine.hint': 'Скільки тактів стоїть в одному рядку сітки «Акорди» і в копії у форматі «Такти». Більше — компактніше, менше — крупніше.',
+    'chords.barsPerLine.limited': 'На цьому екрані вміщається до {n} тактів у рядку, тому зараз показано {n}. Розгорни вікно ширше — і зʼявиться більше.',
+    'chords.barsPerLine.tooWide': 'Не вміщається на цьому екрані',
     'chords.follow': 'Слідкувати',
     'chords.follow.title': 'Прокручувати за відтворенням (F)',
     'chords.follow.on': 'Прокрутка за відтворенням увімкнена',
@@ -139,6 +142,8 @@ export const chords: Dict = {
     'chords.voicing.none': 'Немає аплікатури',
     'chords.fret': '{n} лад',
     'chords.staff.label': '{chord} на нотному стані: права рука {notes}, ліва рука {bass}',
+    'chords.staff.treble': 'Скрипковий ключ (ключ соль): його завиток обвиває лінію соль першої октави',
+    'chords.staff.bass': 'Басовий ключ (ключ фа): дві крапки стоять обабіч лінії фа малої октави',
 
     'chords.timeline.zoomIn': 'Наблизити',
     'chords.timeline.zoomOut': 'Віддалити',
@@ -203,6 +208,9 @@ export const chords: Dict = {
 
     'chords.settings': 'View settings',
     'chords.barsPerLine': 'Bars per line',
+    'chords.barsPerLine.hint': 'How many bars sit on one line of the Chords sheet and in “Bars” copies. More is compact, fewer is bigger.',
+    'chords.barsPerLine.limited': 'This screen fits up to {n} bars per line, so {n} are shown now. Make the window wider to see more.',
+    'chords.barsPerLine.tooWide': 'Does not fit on this screen',
     'chords.follow': 'Follow',
     'chords.follow.title': 'Scroll with playback (F)',
     'chords.follow.on': 'Following playback',
@@ -283,6 +291,8 @@ export const chords: Dict = {
     'chords.voicing.none': 'No shape available',
     'chords.fret': 'fret {n}',
     'chords.staff.label': '{chord} on the staff: right hand {notes}, left hand {bass}',
+    'chords.staff.treble': 'Treble clef (G clef): its curl wraps the G4 line',
+    'chords.staff.bass': 'Bass clef (F clef): its two dots sit either side of the F3 line',
 
     'chords.timeline.zoomIn': 'Zoom in',
     'chords.timeline.zoomOut': 'Zoom out',

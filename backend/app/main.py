@@ -16,6 +16,7 @@ from fastapi import APIRouter, Body, FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -33,6 +34,7 @@ from .models import (
     ReanalyzeRequest,
     Settings,
     Track,
+    TrackNotes,
     TrackPatch,
     TrackSummary,
     normalize_origin,
@@ -240,6 +242,28 @@ def _install_error_handlers(app: FastAPI) -> None:
         return error_response(500, "internal", "Internal server error")
 
 
+async def _read_body_limited(request: Request, limit: int) -> bytes:
+    """The request body, refusing (413 too_large) anything over ``limit`` bytes without buffering it all."""
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > limit:
+        raise ApiException("too_large", f"The request body is larger than {limit // (1024 * 1024)} MB")
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > limit:
+            raise ApiException("too_large", f"The request body is larger than {limit // (1024 * 1024)} MB")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _validation_message(exc: ValidationError) -> str:
+    first = exc.errors()[0] if exc.errors() else {}
+    where = ".".join(str(p) for p in first.get("loc", ()))
+    msg = str(first.get("msg", "invalid value")).removeprefix("Value error, ")
+    return f"Invalid notes - {where}: {msg}" if where else f"Invalid notes - {msg}"
+
+
 def _options(raw: Optional[AnalysisOptions | dict[str, Any]]) -> dict[str, Any]:
     if raw is None:
         return {}
@@ -350,6 +374,47 @@ def _api_router(
             raise _not_found()
         jobs.cancel_track_jobs(track_id, "not_found", "The track was deleted")
         store.delete(track_id)
+        return Response(status_code=204)
+
+    # ------------------------------------------------------------------ live-piano notes
+
+    @api.get(
+        "/tracks/{track_id}/notes",
+        response_model=TrackNotes,
+        responses={404: {"description": "Unknown track, or its notes were not computed yet (code not_found)"}},
+    )
+    def get_notes(track_id: str) -> Response:
+        """Notes transcribed in the browser for the live piano (stored by PUT)."""
+        raw = store.read_notes(track_id)  # unknown track -> 404 not_found
+        if raw is None:
+            raise ApiException("not_found", "Notes were not computed for this track yet")
+        return Response(content=raw, media_type="application/json", headers={"Cache-Control": "no-cache"})
+
+    @api.put(
+        "/tracks/{track_id}/notes",
+        status_code=204,
+        openapi_extra={
+            "requestBody": {
+                "required": True,
+                "content": {"application/json": {"schema": TrackNotes.model_json_schema()}},
+            }
+        },
+    )
+    async def put_notes(track_id: str, request: Request) -> Response:
+        """Stores (replaces) a track's live-piano notes: ≤ max_notes rows, ≤ max_notes_mb of JSON."""
+        if not store.exists(track_id):
+            raise _not_found()
+        body = await _read_body_limited(request, settings.max_notes_bytes)
+        try:
+            notes = await run_in_threadpool(TrackNotes.model_validate_json, body)
+        except ValidationError as exc:
+            raise ApiException("internal", _validation_message(exc), status=422) from exc
+        if len(notes.notes) > settings.max_notes:
+            raise ApiException("internal", f"Invalid notes - at most {settings.max_notes} notes are allowed", status=422)
+        duration = await run_in_threadpool(store.duration, track_id)
+        if duration and notes.latest_end() > duration + 1.0:
+            raise ApiException("internal", f"Invalid notes - a note ends after the track ({duration:.1f} s)", status=422)
+        await run_in_threadpool(store.write_notes, track_id, notes)
         return Response(status_code=204)
 
     @api.api_route("/tracks/{track_id}/audio", methods=["GET", "HEAD"], response_class=FileResponse)

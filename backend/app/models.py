@@ -82,6 +82,9 @@ class Settings:
     # GitHub Pages build. Pages on a local host (any port) are always allowed. CHORDS_ALLOWED_ORIGINS
     # (comma-separated) replaces this list.
     allowed_origins: tuple[str, ...] = DEFAULT_ALLOWED_ORIGINS
+    # Live-piano notes uploaded by the UI (PUT /api/tracks/{id}/notes)
+    max_notes: int = 300_000
+    max_notes_mb: float = 25.0
 
     @property
     def max_duration_s(self) -> float:
@@ -90,6 +93,10 @@ class Settings:
     @property
     def max_upload_bytes(self) -> int:
         return int(self.max_upload_mb * 1024 * 1024)
+
+    @property
+    def max_notes_bytes(self) -> int:
+        return int(self.max_notes_mb * 1024 * 1024)
 
     @property
     def tracks_dir(self) -> Path:
@@ -256,6 +263,49 @@ class TrackPatch(CamelModel):
     title: Optional[str] = Field(default=None, max_length=300)
     artist: Optional[str] = Field(default=None, max_length=300)
     chords: Optional[list[ChordSegment]] = Field(default=None, max_length=50_000)
+
+
+# --------------------------------------------------------------------------- live piano notes
+
+NOTES_VERSION = 1
+NOTES_MIDI_MIN = 21
+NOTES_MIDI_MAX = 108
+NoteRow = tuple[float, float, int, float]
+
+
+class TrackNotes(BaseModel):
+    """Notes transcribed from a track's audio in the browser (live piano), stored as notes.json.
+
+    ``notes`` rows are ``[start s, end s, MIDI 21..108, velocity 0..1]``; on save they are rounded
+    (ms / 0.001) and sorted by start. Bounds against the track duration are checked by the endpoint.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    version: Literal[1]
+    engine: str = Field(min_length=1, max_length=200)
+    notes: list[NoteRow]
+
+    @model_validator(mode="after")
+    def _valid_rows(self) -> TrackNotes:
+        rows: list[NoteRow] = []
+        for i, (start, end, midi, velocity) in enumerate(self.notes):
+            if not (math.isfinite(start) and math.isfinite(end) and math.isfinite(velocity)):
+                raise ValueError(f"notes[{i}]: values must be finite numbers")
+            if not 0 <= start < end:
+                raise ValueError(f"notes[{i}]: need 0 <= start < end")
+            if not NOTES_MIDI_MIN <= midi <= NOTES_MIDI_MAX:
+                raise ValueError(f"notes[{i}]: pitch must be {NOTES_MIDI_MIN}..{NOTES_MIDI_MAX}")
+            if not 0 <= velocity <= 1:
+                raise ValueError(f"notes[{i}]: velocity must be 0..1")
+            r_start, r_end = round(start, 3), round(end, 3)
+            rows.append((r_start, max(r_end, round(r_start + 0.001, 3)), midi, round(velocity, 3)))
+        rows.sort(key=lambda r: (r[0], r[2]))
+        self.notes = rows
+        return self
+
+    def latest_end(self) -> float:
+        return max((r[1] for r in self.notes), default=0.0)
 
 
 # --------------------------------------------------------------------------- engine output

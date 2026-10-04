@@ -60,6 +60,13 @@ export interface Settings {
   tempoFactors: Record<string, number>
   /** local chord server used when the page is not served by it (e.g. GitHub Pages) */
   serverUrl: string
+  /** clicking a chord plays its sound (explicit play buttons always play) */
+  chordSound: boolean
+  chordSoundVolume: number // 0..1
+  /** live piano (transcribed notes lighting the keys) shown under the hero when the instrument is piano */
+  liveKeys: boolean
+  /** manual audio/visual sync correction for the live piano, ms (positive = keys light later) */
+  syncOffsetMs: number
 }
 
 export interface AppState extends Settings {
@@ -113,6 +120,10 @@ const defaultSettings: Settings = {
   metronomeVolume: 1,
   tempoFactors: {},
   serverUrl: 'http://localhost:8765',
+  chordSound: true,
+  chordSoundVolume: 0.8,
+  liveKeys: true,
+  syncOffsetMs: 0,
 }
 
 let toastSeq = 1
@@ -185,6 +196,10 @@ export const useApp = create<AppState>()(
         metronomeVolume: s.metronomeVolume,
         tempoFactors: s.tempoFactors,
         serverUrl: s.serverUrl,
+        chordSound: s.chordSound,
+        chordSoundVolume: s.chordSoundVolume,
+        liveKeys: s.liveKeys,
+        syncOffsetMs: s.syncOffsetMs,
       }),
     },
   ),

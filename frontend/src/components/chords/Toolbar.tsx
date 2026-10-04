@@ -4,13 +4,15 @@
 
 import { memo, useState } from 'react'
 import clsx from 'clsx'
-import { AudioWaveform, Crosshair, Minus, Plus, RotateCcw, Rows3, SlidersHorizontal, Wand2 } from 'lucide-react'
+import { AudioWaveform, Crosshair, Minus, Plus, RotateCcw, Rows3, SlidersHorizontal, Volume2, Wand2 } from 'lucide-react'
 import { useT } from '../../i18n'
 import { chordTone } from '../../lib/music/color'
 import { formatTranspose } from '../../lib/music/key'
 import { nextRealChord } from '../../lib/music/display'
+import { playTestSound } from '../../lib/sound'
 import { useApp, type Accidentals, type ChordView, type Instrument } from '../../store'
 import { ChordName } from './ChordName'
+import { getClockTime } from './clock'
 import { CopyButton } from './CopyButton'
 import { resetChords } from './edit'
 import { HandpanScaleControls } from './handpan/HandpanScaleControls'
@@ -211,6 +213,7 @@ function SettingsMenu() {
   const instrument = useApp((s) => s.instrument)
   const setSetting = useApp((s) => s.setSetting)
   const collapse = useChordUi((s) => s.collapseRepeats)
+  const sheetFit = useChordUi((s) => s.sheetFit)
   const setCollapse = useChordUi((s) => s.setCollapseRepeats)
 
   return (
@@ -241,14 +244,81 @@ function SettingsMenu() {
               label={t('chords.barsPerLine')}
               value={barsPerLine}
               onChange={(v) => setSetting('barsPerLine', v)}
-              options={[2, 4, 8].map((v) => ({ value: v, label: String(v) }))}
+              options={[2, 4, 8].map((v) => ({
+                value: v,
+                label: String(v),
+                dim: v > sheetFit,
+                title: v > sheetFit ? t('chords.barsPerLine.tooWide') : undefined,
+              }))}
             />
+            <p className="text-xs leading-snug text-muted">
+              {barsPerLine > sheetFit ? t('chords.barsPerLine.limited', { n: sheetFit }) : t('chords.barsPerLine.hint')}
+            </p>
           </Row>
           <Switch checked={showDiagrams} onChange={(v) => setSetting('showDiagrams', v)} label={t('chords.diagrams')} />
+          <LiveKeysSwitch />
           <Switch checked={collapse} onChange={setCollapse} label={t('chords.collapse')} hint={t('chords.collapse.title')} />
+          <SoundSettings />
         </div>
       </Floating>
     </>
+  )
+}
+
+/** Live piano under the hero (piano only); turning it on also picks the piano. */
+function LiveKeysSwitch() {
+  const t = useT()
+  const on = useApp((s) => s.liveKeys && s.instrument === 'piano')
+  const setSetting = useApp((s) => s.setSetting)
+  return (
+    <Switch
+      checked={on}
+      onChange={(v) => {
+        setSetting('liveKeys', v)
+        if (v) setSetting('instrument', 'piano')
+      }}
+      label={t('keys.settings.toggle')}
+      hint={t('keys.settings.hint')}
+    />
+  )
+}
+
+/** Chord sound: play on click (sheet, timeline, legend, hero) on / off, its volume and a test button. */
+function SoundSettings() {
+  const t = useT()
+  const model = useChordModel()
+  const on = useApp((s) => s.chordSound)
+  const volume = useApp((s) => s.chordSoundVolume)
+  const setSetting = useApp((s) => s.setSetting)
+  const pct = Math.round(volume * 100)
+  return (
+    <div className="space-y-3 border-t border-border pt-3.5">
+      <Switch checked={on} onChange={(v) => setSetting('chordSound', v)} label={t('sound.settings.click')} hint={t('sound.settings.clickHint')} />
+      <Row label={t('sound.settings.volume')}>
+        <div className="flex items-center gap-2">
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={volume}
+            aria-label={t('sound.settings.volume')}
+            aria-valuetext={`${pct}%`}
+            onChange={(e) => setSetting('chordSoundVolume', Number(e.target.value))}
+            className="h-1 min-w-0 flex-1 cursor-pointer accent-accent"
+          />
+          <span className="w-9 shrink-0 text-right font-mono text-xs text-muted tabular-nums">{pct}%</span>
+          <IconButton
+            label={t('sound.settings.test')}
+            size="sm"
+            data-cw-sound="always"
+            onClick={(e) => playTestSound(model, getClockTime(), e.currentTarget)}
+          >
+            <Volume2 size={15} />
+          </IconButton>
+        </div>
+      </Row>
+    </div>
   )
 }
 

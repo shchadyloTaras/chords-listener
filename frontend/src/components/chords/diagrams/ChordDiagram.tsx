@@ -8,6 +8,7 @@ import { staffChord } from '../../../lib/diagrams/staff'
 import { parseChord } from '../../../lib/music/chord'
 import { chordTone } from '../../../lib/music/color'
 import type { Spelling } from '../../../lib/music/notes'
+import { playChordSound, playHandpanField, playPianoKey, useSoundingTargets } from '../../../lib/sound'
 import type { Instrument } from '../../../store'
 import { HandpanDiagram } from '../handpan/HandpanDiagram'
 import { useChordUi } from '../uiStore'
@@ -31,7 +32,8 @@ export type DiagramSize = 'sm' | 'md' | 'lg'
 /**
  * Chord diagram for the selected instrument. Guitar / ukulele: chart from chords-db with a
  * voicing switcher (shared choice per chord); piano: 2-octave keyboard; handpan: the selected
- * scale with the chord's tone fields lit.
+ * scale with the chord's tone fields lit. A click plays the chord (a piano key / handpan field:
+ * just that note); the notes light up while they sound.
  */
 export const ChordDiagram = memo(function ChordDiagram({
   label,
@@ -59,9 +61,26 @@ export const ChordDiagram = memo(function ChordDiagram({
   const parsed = parseChord(label)
   const width = WIDTHS[instrument][size]
   const instName = t(`chords.instrument.${instrument}`)
+  const sounding = useSoundingTargets(instrument, label)
+  // diagrams always sound (also inside a legend tile, whose own click is stopped here)
+  const play = (e: React.MouseEvent<HTMLElement>) => {
+    e.stopPropagation()
+    playChordSound(label, { instrument })
+  }
 
   if (instrument === 'handpan') {
-    return <HandpanDiagram label={label} width={width} size={size} spelling={spelling} className={className} />
+    return (
+      <HandpanDiagram
+        label={label}
+        width={width}
+        size={size}
+        spelling={spelling}
+        className={className}
+        sounding={sounding}
+        onPlay={play}
+        onField={(i) => playHandpanField(label, i)}
+      />
+    )
   }
 
   if (!parsed) {
@@ -83,14 +102,20 @@ export const ChordDiagram = memo(function ChordDiagram({
     const staff = staffChord(parsed, v)
     const right = staff.treble.map((n) => n.name).join(' ')
     return (
-      <figure className={clsx('flex flex-col items-center gap-1.5', className)}>
+      <figure
+        className={clsx('flex cursor-pointer flex-col items-center gap-1.5', className)}
+        onClick={play}
+        data-cw-sound="always"
+        title={t('sound.diagram.piano')}
+      >
         <StaffChart
           chord={staff}
           color={color}
           height={STAFF_HEIGHTS[size]}
           title={t('chords.staff.label', { chord: label, notes: right, bass: staff.bass.name })}
+          clefTitles={{ treble: t('chords.staff.treble'), bass: t('chords.staff.bass') }}
         />
-        <PianoChart voicing={v} color={color} width={width} title={title} />
+        <PianoChart voicing={v} color={color} width={width} title={title} sounding={sounding} onKey={(k) => playPianoKey(label, k)} />
         <figcaption className="font-mono text-[11px] tracking-wide text-muted">
           {parsed.bassPc != null && `${staff.bass.name} / `}
           {staff.treble.map((n) => n.name).join('  ')}
@@ -116,8 +141,13 @@ export const ChordDiagram = memo(function ChordDiagram({
   const voicing = found.voicings[index]
 
   return (
-    <figure className={clsx('flex flex-col items-center', className)}>
-      <FretChart voicing={voicing} strings={found.strings} color={color} width={width} title={title} />
+    <figure
+      className={clsx('flex cursor-pointer flex-col items-center', className)}
+      onClick={play}
+      data-cw-sound="always"
+      title={t('sound.diagram.fret')}
+    >
+      <FretChart voicing={voicing} strings={found.strings} color={color} width={width} title={title} sounding={sounding} />
       {(switcher && count > 1) || !found.exact ? (
         <figcaption className="mt-1 flex items-center gap-0.5 text-[11px] text-muted">
           {switcher && count > 1 && (

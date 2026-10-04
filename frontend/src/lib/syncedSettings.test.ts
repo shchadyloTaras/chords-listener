@@ -18,6 +18,10 @@ const local = {
   metronomeVolume: 0.6,
   tempoFactors: { abc: 2 },
   serverUrl: 'http://localhost:8765',
+  chordSound: false,
+  chordSoundVolume: 0.3,
+  liveKeys: false,
+  syncOffsetMs: 40,
 } as Settings
 
 describe('pickSynced', () => {
@@ -26,7 +30,7 @@ describe('pickSynced', () => {
     expect(SYNCED_KEYS).toHaveLength(11)
     expect(Object.keys(picked).sort()).toEqual([...SYNCED_KEYS].sort())
     expect(picked).toMatchObject({ theme: 'light', instrument: 'piano', barsPerLine: 8 })
-    for (const k of ['transpose', 'volume', 'handpanNotes', 'metronome', 'tempoFactors', 'serverUrl']) {
+    for (const k of ['transpose', 'volume', 'handpanNotes', 'metronome', 'tempoFactors', 'serverUrl', 'chordSound', 'liveKeys', 'syncOffsetMs']) {
       expect(picked).not.toHaveProperty(k)
     }
   })

@@ -106,3 +106,14 @@ export interface ApiError {
   detail: string
   code: ErrorCode
 }
+
+/**
+ * Notes transcribed from a track's audio (live piano), stored compactly per track:
+ * `notes` rows are [start s, end s, MIDI 21..108, velocity 0..1], sorted by start, times rounded to ms.
+ */
+export interface TrackNotes {
+  version: 1
+  /** transcription engine + settings, e.g. "basic-pitch 1.0.1 (onset 0.5, frame 0.3, min 80 ms)" */
+  engine: string
+  notes: [number, number, number, number][]
+}

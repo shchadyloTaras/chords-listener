@@ -10,6 +10,7 @@ import { barIndexAt, buildLines, groupRepeats, type Bar, type BarSlot, type Line
 import { splitLabel } from '../../lib/music/chord'
 import { chordTone } from '../../lib/music/color'
 import { formatTime } from '../../lib/music/formats'
+import { clickChordSound } from '../../lib/sound'
 import { useApp } from '../../store'
 import { popoverIntent } from './popoverIntent'
 import { ChordName } from './ChordName'
@@ -64,14 +65,23 @@ function readableBarPx(bars: Bar[], phone: boolean): number {
   return Math.max(MIN_BAR_PX, needs[Math.min(needs.length - 1, Math.floor(needs.length * READABLE_SHARE))])
 }
 
-/** Bars per line: the user's setting, lowered until (most) chord names fit the available width. */
-function effectivePerLine(setting: number, width: number, barPx: number): number {
-  if (!width) return setting
+/** Chord names may shrink down to this scale so the chosen bars per line still fit. */
+const MIN_NAME_SCALE = 0.7
+
+/**
+ * Sheet layout for the user's "bars per line" setting: that many bars, with chord names scaled
+ * down (to MIN_NAME_SCALE) when the line is tight. Only when even the smaller names would not
+ * fit does it fall back to the most bars that do (`fit`), which the settings menu explains.
+ */
+function sheetLayout(setting: number, width: number, barPx: number): { perLine: number; scale: number; fit: number } {
+  if (!width) return { perLine: setting, scale: 1, fit: 8 }
   // The per-line gutter is hidden on phones (< 640px) unless a line repeats.
-  const gutter = isPhoneWidth() ? 0 : RIGHT_GUTTER_PX
-  const fit = Math.floor((width - gutter) / barPx)
-  for (const n of [8, 4, 2, 1]) if (n <= setting && n <= fit) return n
-  return 1
+  const usable = width - (isPhoneWidth() ? 0 : RIGHT_GUTTER_PX)
+  const most = Math.floor(usable / (barPx * MIN_NAME_SCALE))
+  const fit = [8, 4, 2].find((n) => n <= most) ?? 1
+  const perLine = Math.min(setting, fit)
+  const scale = Math.min(1, Math.max(MIN_NAME_SCALE, usable / perLine / barPx))
+  return { perLine, scale, fit }
 }
 
 function useElementWidth(ref: React.RefObject<HTMLElement | null>): number {
@@ -128,7 +138,11 @@ export const SheetView = memo(function SheetView() {
   const width = useElementWidth(wrap)
   const phone = isPhoneWidth()
   const barPx = useMemo(() => readableBarPx(bars, phone), [bars, phone])
-  const perLine = effectivePerLine(setting, width, barPx)
+  const { perLine, scale, fit } = sheetLayout(setting, width, barPx)
+
+  useEffect(() => {
+    useChordUi.getState().setSheetFit(fit)
+  }, [fit])
 
   const lines = useMemo(() => buildLines(bars, perLine), [bars, perLine])
   const groups = useMemo<LineGroup[]>(
@@ -163,7 +177,13 @@ export const SheetView = memo(function SheetView() {
   }, [follow])
 
   return (
-    <div ref={wrap} role="region" aria-label={t('chords.sheet.label')} className="flex flex-col gap-2.5">
+    <div
+      ref={wrap}
+      role="region"
+      aria-label={t('chords.sheet.label')}
+      className="flex flex-col gap-2.5"
+      style={{ '--cw-name-scale': scale } as CSSProperties}
+    >
       {groups.map((g, gi) => (
         <SheetLine key={`${g.line.index}:${perLine}`} group={g} gi={gi} perLine={perLine} />
       ))}
@@ -392,7 +412,13 @@ const Slot = memo(function Slot({
       <button
         type="button"
         data-chord={slot.chordIndex}
-        onClick={() => useApp.getState().seek(seekTime)}
+        data-cw-sound={slot.isNone ? undefined : 'seek'}
+        onClick={(e) => {
+          useApp.getState().seek(seekTime)
+          // paused: also hear the chord (playing: the recording is heard there right away);
+          // the second click of a double-click (edit) stays silent
+          if (!slot.isNone && e.detail < 2) clickChordSound(slot.label, { from: e.currentTarget, color, unlessPlaying: true })
+        }}
         onDoubleClick={(e) => popoverIntent.openNow(info(e.currentTarget, 'edit'))}
         onPointerEnter={(e) => {
           if (e.pointerType === 'mouse') popoverIntent.openSoon(info(e.currentTarget))
@@ -438,7 +464,7 @@ const Slot = memo(function Slot({
         <ChordName
           label={slot.label}
           className={clsx(
-            narrow ? 'text-[16px] sm:text-xl' : 'text-[21px] sm:text-[27px]',
+            narrow ? 'cw-name-narrow' : 'cw-name-wide',
             slot.continued && !active && 'opacity-45',
             slot.lowConfidence && 'cw-lowconf',
           )}

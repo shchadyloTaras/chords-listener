@@ -9,6 +9,7 @@ import { useT } from '../../i18n'
 import type { DisplayChord } from '../../lib/music/display'
 import { chordTone } from '../../lib/music/color'
 import { formatTime } from '../../lib/music/formats'
+import { clickChordSound } from '../../lib/sound'
 import { useApp } from '../../store'
 import { popoverIntent } from './popoverIntent'
 import { ChordName } from './ChordName'
@@ -260,7 +261,12 @@ const Block = memo(function Block({ chord, zoom, active }: { chord: DisplayChord
     <button
       type="button"
       data-chord={chord.index}
-      onClick={() => useApp.getState().seek(chord.start)}
+      data-cw-sound="seek"
+      onClick={(e) => {
+        useApp.getState().seek(chord.start)
+        // paused: also hear the chord; the second click of a double-click (edit) stays silent
+        if (e.detail < 2) clickChordSound(chord.label, { from: e.currentTarget, color, unlessPlaying: true })
+      }}
       onDoubleClick={(e) => popoverIntent.openNow(info(e.currentTarget, 'edit'))}
       onPointerEnter={(e) => e.pointerType === 'mouse' && popoverIntent.openSoon(info(e.currentTarget))}
       onPointerLeave={(e) => e.pointerType === 'mouse' && popoverIntent.closeSoon()}

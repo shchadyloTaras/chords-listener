@@ -54,6 +54,8 @@ export interface SegmentOption<T extends string | number> {
   value: T
   label: ReactNode
   title?: string
+  /** shown faded (still selectable), e.g. a value that does not fit the screen right now */
+  dim?: boolean
 }
 
 export function Segmented<T extends string | number>({
@@ -87,6 +89,7 @@ export function Segmented<T extends string | number>({
               'inline-flex items-center justify-center gap-1.5 rounded-md font-medium whitespace-nowrap transition-colors duration-150',
               size === 'sm' ? 'h-7 px-2.5 text-xs' : 'h-8 px-3 text-sm',
               on ? 'bg-surface-3 text-text shadow-[0_1px_0_rgb(255_255_255/0.04)_inset]' : 'text-muted hover:text-text',
+              o.dim && 'opacity-45',
             )}
           >
             {o.label}

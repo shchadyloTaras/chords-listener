@@ -4,6 +4,7 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { t } from '../../i18n'
 import { barIndexAt } from '../../lib/music/bars'
+import { playHotkeyChord } from '../../lib/sound'
 import { useApp, type Instrument } from '../../store'
 import { getClockTime } from './clock'
 import type { ChordModel } from './model'
@@ -107,6 +108,10 @@ export function useChordHotkeys(model: ChordModel): void {
           app.toast(t(`chords.instrument.${next}`), 'info')
           break
         }
+        case 'KeyP':
+          // hear the current chord (else the selected / next one) on the selected instrument
+          playHotkeyChord(ref.current, getClockTime())
+          break
         default:
           return
       }

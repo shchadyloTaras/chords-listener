@@ -9,9 +9,13 @@ const PAD_T = 20
 const PAD_B = 6
 const R = 6.2
 
+/** A sounding string lights up in the chord colour, then settles back as it fades. */
+const ring = (on: boolean) => ({ transition: on ? 'none' : 'stroke 600ms ease-out, stroke-opacity 600ms ease-out, stroke-width 600ms ease-out, fill 600ms ease-out' })
+
 /**
  * Fretboard chord chart (strings vertical, low string left). Theme-aware: lines use
  * currentColor; dots and barres use the chord color; finger digits use the page background.
+ * `sounding` strings (the chord sound strumming them) light up in the chord color.
  */
 export const FretChart = memo(function FretChart({
   voicing,
@@ -19,13 +23,17 @@ export const FretChart = memo(function FretChart({
   color,
   width,
   title,
+  sounding,
 }: {
   voicing: Voicing
   strings: number
   color: string
   width: number
   title: string
+  /** string indices sounding right now */
+  sounding?: ReadonlySet<number>
 }) {
+  const on = (s: number) => !!sounding?.has(s)
   const frets = Math.max(4, ...voicing.frets)
   const w = PAD_L + (strings - 1) * SX + PAD_R
   const h = PAD_T + frets * FY + PAD_B
@@ -70,7 +78,17 @@ export const FretChart = memo(function FretChart({
       ))}
       {/* strings */}
       {Array.from({ length: strings }, (_, s) => (
-        <line key={`s${s}`} x1={x(s)} x2={x(s)} y1={PAD_T} y2={PAD_T + frets * FY} stroke="currentColor" strokeOpacity={0.55} strokeWidth={1} />
+        <line
+          key={`s${s}`}
+          x1={x(s)}
+          x2={x(s)}
+          y1={PAD_T}
+          y2={PAD_T + frets * FY}
+          stroke={on(s) ? color : 'currentColor'}
+          strokeOpacity={on(s) ? 1 : 0.55}
+          strokeWidth={on(s) ? 2 : 1}
+          style={ring(on(s))}
+        />
       ))}
       {!open && (
         <text x={PAD_L - 7} y={y(1) + 3.5} textAnchor="end" fontSize={10} fontWeight={600} fill="currentColor" style={{ fontFamily: 'var(--font-mono)' }}>
@@ -80,7 +98,16 @@ export const FretChart = memo(function FretChart({
       {/* open / muted markers */}
       {voicing.frets.map((f, s) =>
         f === 0 ? (
-          <circle key={`o${s}`} cx={x(s)} cy={PAD_T - 9} r={3.6} fill="none" stroke="currentColor" strokeWidth={1.3} />
+          <circle
+            key={`o${s}`}
+            cx={x(s)}
+            cy={PAD_T - 9}
+            r={3.6}
+            fill={on(s) ? color : 'transparent'}
+            stroke={on(s) ? color : 'currentColor'}
+            strokeWidth={1.3}
+            style={ring(on(s))}
+          />
         ) : f < 0 ? (
           <g key={`m${s}`} stroke="currentColor" strokeWidth={1.3} strokeLinecap="round" opacity={0.8}>
             <line x1={x(s) - 3.2} x2={x(s) + 3.2} y1={PAD_T - 12.2} y2={PAD_T - 5.8} />

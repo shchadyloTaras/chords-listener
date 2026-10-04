@@ -1,12 +1,14 @@
 // All unique chords of the song (after transpose / simplify) with diagrams and counts.
-// Click copies the name; hover highlights occurrences in the sheet / timeline.
+// Click plays the chord (copies its name when the click sound is off); the copy button copies;
+// hover highlights occurrences in the sheet / timeline.
 
 import { memo } from 'react'
 import clsx from 'clsx'
-import { Check } from 'lucide-react'
+import { Check, Copy } from 'lucide-react'
 import { useT } from '../../i18n'
 import { chordTone } from '../../lib/music/color'
 import type { UniqueChord } from '../../lib/music/display'
+import { clickChordSound } from '../../lib/sound'
 import { useApp } from '../../store'
 import { ChordName } from './ChordName'
 import { ChordDiagram } from './diagrams/ChordDiagram'
@@ -33,7 +35,7 @@ export const ChordLegend = memo(function ChordLegend() {
             ? instrument === 'piano'
               ? 'grid-cols-[repeat(auto-fill,minmax(150px,1fr))]'
               : 'grid-cols-[repeat(auto-fill,minmax(112px,1fr))]'
-            : 'grid-cols-[repeat(auto-fill,minmax(76px,1fr))]',
+            : 'grid-cols-[repeat(auto-fill,minmax(104px,1fr))]',
         )}
       >
         {unique.map((u) => (
@@ -57,28 +59,45 @@ const LegendTile = memo(function LegendTile({
 }) {
   const t = useT()
   const setHover = useChordUi((s) => s.setHoverLabel)
+  const sound = useApp((s) => s.chordSound)
   const { done, run } = useCopyFeedback()
   const color = chordTone(chord.rootPc, chord.quality)
+  const copy = () => run(() => copyChordName(chord.label))
+  const copyLabel = t('sound.legend.copy', { chord: chord.label })
   return (
-    <li>
+    <li className="relative" onPointerEnter={() => setHover(chord.label)} onPointerLeave={() => setHover(null)}>
       <button
         type="button"
-        onClick={() => run(() => copyChordName(chord.label))}
-        onPointerEnter={() => setHover(chord.label)}
-        onPointerLeave={() => setHover(null)}
+        data-cw-sound="click"
+        onClick={(e) => {
+          if (!clickChordSound(chord.label, { from: e.currentTarget, color })) copy()
+        }}
         onFocus={() => setHover(chord.label)}
         onBlur={() => setHover(null)}
-        title={t('chords.legend.copyHint', { chord: chord.label })}
+        title={sound ? t('sound.legend.play', { chord: chord.label }) : t('chords.legend.copyHint', { chord: chord.label })}
+        aria-label={`${sound ? t('sound.playChord', { chord: chord.label }) : copyLabel} (${t('chords.legend.count', { n: chord.count })})`}
         className="group relative flex h-full w-full flex-col items-center gap-2 rounded-xl border border-border bg-surface px-2 pt-2.5 pb-2 text-left transition-colors hover:border-border-strong hover:bg-surface-2"
       >
-        <span className="flex w-full items-baseline justify-between gap-1">
+        <span className="flex w-full items-baseline justify-between gap-1 pr-7">
           <ChordName label={chord.label} className="text-xl" />
-          <span className="font-mono text-[11px] text-faint tabular-nums">
-            {done ? <Check size={13} className="inline text-success" /> : t('chords.legend.count', { n: chord.count })}
-          </span>
+          <span className="font-mono text-[11px] text-faint tabular-nums">{t('chords.legend.count', { n: chord.count })}</span>
         </span>
         <span aria-hidden className="h-[3px] w-full rounded-full opacity-80" style={{ background: color }} />
         {showDiagram && <ChordDiagram label={chord.label} instrument={instrument} size="sm" spelling={spelling} />}
+      </button>
+      <button
+        type="button"
+        onClick={copy}
+        onFocus={() => setHover(chord.label)}
+        onBlur={() => setHover(null)}
+        aria-label={copyLabel}
+        title={copyLabel}
+        className={clsx(
+          'absolute top-1.5 right-1.5 grid size-7 place-items-center rounded-lg transition-colors hover:bg-surface-3 hover:text-text',
+          done ? 'text-success' : 'text-faint',
+        )}
+      >
+        {done ? <Check size={14} strokeWidth={2.4} /> : <Copy size={14} />}
       </button>
     </li>
   )

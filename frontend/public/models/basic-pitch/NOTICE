@@ -1,0 +1,23 @@
+Basic Pitch — note transcription model (TensorFlow.js graph model)
+Copyright 2022 Spotify AB
+
+Licensed under the Apache License, Version 2.0 (the "License"); see the LICENSE
+file in this folder or http://www.apache.org/licenses/LICENSE-2.0. Distributed on
+an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND.
+
+Files in this folder:
+  model.json, group1-shard1of1.bin
+    Unmodified copies of model/model.json and model/group1-shard1of1.bin from the
+    npm package @spotify/basic-pitch 1.0.1 (https://github.com/spotify/basic-pitch-ts).
+  LICENSE
+    The Apache License 2.0 text shipped with that package.
+
+Chords Listener also contains a modified port of the package's note post-processing
+(src/toMidi.ts: outputToNotesPoly) in frontend/src/lib/transcription/basicPitch/postprocess.ts:
+same algorithm, rewritten for typed arrays with a heap-driven "melodia trick" so that whole
+songs decode in linear-logarithmic time; equivalence with the original is checked by
+frontend/src/lib/transcription/basicPitch/postprocess.test.ts.
+
+Reference: R. M. Bittner, J. J. Bosch, D. Rubinstein, G. Meseguer-Brocal, S. Ewert,
+"A Lightweight Instrument-Agnostic Model for Polyphonic Note Transcription and
+Multipitch Estimation", ICASSP 2022.

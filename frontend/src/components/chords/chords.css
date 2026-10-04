@@ -113,3 +113,20 @@
     transition: none;
   }
 }
+
+/* Sheet chord names: base sizes (phone / ≥640px) scaled by --cw-name-scale so the chosen
+   bars-per-line still fits (see sheetLayout in SheetView.tsx; keep in sync with slotNeedPx). */
+.cw-name-wide {
+  font-size: calc(21px * var(--cw-name-scale, 1));
+}
+.cw-name-narrow {
+  font-size: calc(16px * var(--cw-name-scale, 1));
+}
+@media (min-width: 640px) {
+  .cw-name-wide {
+    font-size: calc(27px * var(--cw-name-scale, 1));
+  }
+  .cw-name-narrow {
+    font-size: calc(20px * var(--cw-name-scale, 1));
+  }
+}

@@ -36,6 +36,10 @@ interface ChordUiState {
   collapseRepeats: boolean
   setCollapseRepeats(v: boolean): void
 
+  /** most bars per line the sheet can show at the current width (1 | 2 | 4 | 8) */
+  sheetFit: number
+  setSheetFit(n: number): void
+
   /** timeline pixels per second */
   zoom: number
   setZoom(z: number): void
@@ -79,6 +83,11 @@ export const useChordUi = create<ChordUiState>()((set, get) => ({
 
   collapseRepeats: false,
   setCollapseRepeats: (collapseRepeats) => set({ collapseRepeats }),
+
+  sheetFit: 8,
+  setSheetFit: (sheetFit) => {
+    if (get().sheetFit !== sheetFit) set({ sheetFit })
+  },
 
   zoom: ZOOM_DEFAULT,
   setZoom: (z) => set({ zoom: Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z)) }),

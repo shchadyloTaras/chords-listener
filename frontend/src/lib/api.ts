@@ -3,17 +3,20 @@
 //    at `serverUrl` when the page is hosted elsewhere (GitHub Pages); URLs it returns are resolved against it;
 //  · browser mode — no server reachable: files and recordings are analyzed in the page (lib/local), tracks
 //    live in IndexedDB. Ids starting with "local-" always belong to the browser library, in any mode.
-import type { ChordSegment, ErrorCode, Health, Job, Track, TrackSummary } from '../types'
+import type { ChordSegment, ErrorCode, Health, Job, Track, TrackNotes, TrackSummary } from '../types'
 import {
   cancelLocalTrackJobs,
   deleteLocalTrack,
   getLocalJob,
+  getLocalNotes,
   getLocalTrack,
   isLocalId,
   listLocalJobs,
   listLocalTracks,
+  localAudio,
   LocalError,
   patchLocalTrack,
+  putLocalNotes,
   resetLocalTrack,
   startLocalReanalysis,
   startLocalUpload,
@@ -238,6 +241,46 @@ export async function deleteTrack(id: string, opts: { keepalive?: boolean } = {}
     return local(() => deleteLocalTrack(id))
   }
   return request(`/tracks/${enc(id)}`, { method: 'DELETE', keepalive: opts.keepalive })
+}
+
+// ---------------------------------------------------------------- live piano notes
+
+/** The track's transcribed notes (live piano); null when they have not been computed yet. */
+export async function getTrackNotes(id: string, signal?: AbortSignal): Promise<TrackNotes | null> {
+  if (isLocalId(id)) return local(() => getLocalNotes(id))
+  try {
+    return await request<TrackNotes>(`/tracks/${enc(id)}/notes`, { signal, cache: 'no-store' })
+  } catch (err) {
+    const e = toApiError(err)
+    if (e.code === 'not_found') return null
+    throw e
+  }
+}
+
+/** Stores (replaces) the track's transcribed notes, so they are computed only once. */
+export async function saveTrackNotes(id: string, notes: TrackNotes): Promise<void> {
+  if (isLocalId(id)) return local(() => putLocalNotes(id, notes))
+  await request<unknown>(`/tracks/${enc(id)}/notes`, { method: 'PUT', body: JSON.stringify(notes) })
+}
+
+/** The whole audio file of a track, for analysis in the page (the stored Blob for browser tracks). */
+export async function fetchTrackAudio(track: Pick<Track, 'id' | 'audioUrl'>, signal?: AbortSignal): Promise<Blob> {
+  if (isLocalId(track.id)) return local(() => localAudio(track.id))
+  if (!track.audioUrl) throw new ApiError('This track has no audio', 'not_found', 404)
+  let res: Response
+  try {
+    res = await serverFetch(new URL(track.audioUrl, location.href).href, { signal })
+  } catch (err) {
+    const e = toApiError(err)
+    if (e.code === 'network') noteServerTrouble()
+    throw e
+  }
+  if (!res.ok) throw await errorFromResponse(res)
+  try {
+    return await res.blob()
+  } catch (err) {
+    throw toApiError(err)
+  }
 }
 
 /** Playback URL of a server track (browser tracks get an object URL from getTrack). */

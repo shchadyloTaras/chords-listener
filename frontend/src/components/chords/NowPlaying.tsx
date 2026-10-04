@@ -4,9 +4,11 @@
 import { forwardRef, memo, useMemo, useRef, type CSSProperties } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import clsx from 'clsx'
+import { Volume2 } from 'lucide-react'
 import { useT } from '../../i18n'
 import { chordTone } from '../../lib/music/color'
 import { nextRealChord, prevRealChord, type DisplayChord } from '../../lib/music/display'
+import { clickChordSound } from '../../lib/sound'
 import { useApp, type Instrument } from '../../store'
 import { ChordName } from './ChordName'
 import { useClockEffect } from './clock'
@@ -35,6 +37,7 @@ export const NowPlaying = memo(
     const { chords, spelling } = model
     const instrument = useApp((s) => s.instrument)
     const showDiagrams = useApp((s) => s.showDiagrams)
+    const chordSound = useApp((s) => s.chordSound)
     const setSetting = useApp((s) => s.setSetting)
     const reduce = useReducedMotion()
 
@@ -101,9 +104,17 @@ export const NowPlaying = memo(
 
         <div className="flex items-end justify-between gap-4 px-5 pt-2 pb-5 sm:gap-8 sm:px-7 sm:pb-7">
           <div className="flex min-w-0 flex-1 flex-wrap items-end gap-x-8 gap-y-3 sm:gap-x-12">
-            {/* current */}
+            {/* current (a click plays it) */}
             <div className="relative min-w-0">
-              <div className="relative h-[clamp(4.6rem,15vw,9.5rem)] min-w-[2ch]">
+              <button
+                type="button"
+                disabled={!shown || !chordSound}
+                data-cw-sound="click"
+                onClick={(e) => shown && clickChordSound(shown.label, { from: e.currentTarget, color, feedback: 'glow' })}
+                aria-label={shown && chordSound ? t('sound.playChord', { chord: shown.label }) : undefined}
+                title={shown && chordSound ? t('sound.playChord', { chord: shown.label }) : undefined}
+                className="group/hero relative block h-[clamp(4.6rem,15vw,9.5rem)] min-w-[2ch] cursor-pointer rounded-xl text-left disabled:cursor-default"
+              >
                 <AnimatePresence mode="popLayout" initial={false}>
                   <motion.div
                     key={key}
@@ -131,7 +142,14 @@ export const NowPlaying = memo(
                   className="absolute -bottom-2.5 left-1 h-1 w-12 rounded-full transition-[background-color,opacity] duration-300"
                   style={{ background: color, opacity: shown ? 1 : 0 }}
                 />
-              </div>
+                {shown && chordSound && (
+                  <Volume2
+                    aria-hidden
+                    size={18}
+                    className="pointer-events-none absolute top-1 -right-7 text-faint opacity-0 transition-opacity duration-150 group-hover/hero:opacity-100 group-focus-visible/hero:opacity-100"
+                  />
+                )}
+              </button>
               <div className="mt-5 flex h-5 items-center gap-2 text-sm text-muted">
                 {caption ? (
                   <span>{caption}</span>
@@ -148,10 +166,24 @@ export const NowPlaying = memo(
             <div className={clsx('min-w-0 pb-7', !next && 'invisible')}>
               <div className="mb-1 text-sm text-faint">{t('chords.now.next')}</div>
               <div className="flex items-baseline gap-4">
-                <ChordName
-                  label={next ? next.label : 'N'}
-                  className={clsx('block text-[clamp(2.1rem,5.2vw,3.4rem)]', next ? 'text-muted' : 'font-light text-border-strong')}
-                />
+                <button
+                  type="button"
+                  disabled={!next || !chordSound}
+                  data-cw-sound="click"
+                  onClick={(e) => next && clickChordSound(next.label, { from: e.currentTarget, color: chordTone(next.rootPc, next.quality), feedback: 'glow' })}
+                  aria-label={next && chordSound ? t('sound.playNext', { chord: next.label }) : undefined}
+                  title={next && chordSound ? t('sound.playNext', { chord: next.label }) : undefined}
+                  className="group/next block cursor-pointer rounded-lg text-left disabled:cursor-default"
+                >
+                  <ChordName
+                    label={next ? next.label : 'N'}
+                    className={clsx(
+                      'block text-[clamp(2.1rem,5.2vw,3.4rem)] transition-colors duration-150',
+                      next ? 'text-muted' : 'font-light text-border-strong',
+                      next && chordSound && 'group-hover/next:text-text group-focus-visible/next:text-text',
+                    )}
+                  />
+                </button>
                 {upcoming.length > 0 && (
                   <span className="hidden items-baseline gap-3 text-faint md:flex" aria-hidden>
                     {upcoming.map((c) => (

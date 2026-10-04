@@ -13,6 +13,7 @@ import { useChordHotkeys } from './hotkeys'
 import { ChordModelContext, useBuildChordModel } from './model'
 import { NowPlaying } from './NowPlaying'
 import { Overlays } from './Overlays'
+import { LivePianoSlot } from './piano/LivePianoSlot'
 import { SheetView } from './SheetView'
 import { TimelineView } from './TimelineView'
 import { Toolbar } from './Toolbar'
@@ -64,6 +65,7 @@ function Workspace({ track }: { track: Track }) {
     <ChordModelContext value={model}>
       <div className="mx-auto w-full max-w-[1180px] px-4 pt-4 pb-[calc(var(--chords-bottom-offset,96px)+48px)] sm:px-6 sm:pt-6">
         <NowPlaying ref={hero} />
+        <LivePianoSlot />
         <div className="h-3" />
         <Toolbar heroVisible={heroVisible} />
         <div className="mt-5 mb-10">

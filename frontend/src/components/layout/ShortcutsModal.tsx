@@ -31,6 +31,7 @@ function useGroups(): Array<{ title: string; items: Shortcut[] }> {
         { keys: [['F']], label: t('core.shortcuts.follow') },
         { keys: [['L']], label: t('core.shortcuts.loop') },
         { keys: [['I']], label: t('core.shortcuts.instrument') },
+        { keys: [['P']], label: t('sound.shortcut') },
       ],
     },
     {

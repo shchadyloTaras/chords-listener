@@ -6,6 +6,8 @@ Layout (under ``Settings.data_dir``)::
     tracks/<trackId>/analysis.json   engine output (detected chords, beats, waveform ...)
     tracks/<trackId>/meta.json       title, artist, source, createdAt, summary fields ...
     tracks/<trackId>/edits.json      user chord edits (optional; dropped by "reset")
+    tracks/<trackId>/notes.json      live-piano notes transcribed in the browser (optional; kept on
+                                     re-analysis since the audio does not change)
     .work/<jobId>/                   scratch space for running jobs (wiped on startup)
 
 A track directory is assembled completely inside ``.work`` and then moved into ``tracks/`` with a
@@ -25,7 +27,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from .models import AnalysisResult, Settings, Track, TrackPatch, TrackSummary
+from .models import (
+    NOTES_VERSION,
+    AnalysisResult,
+    Settings,
+    Track,
+    TrackNotes,
+    TrackPatch,
+    TrackSummary,
+)
 
 log = logging.getLogger("chords.storage")
 
@@ -34,6 +44,7 @@ ANALYSIS_FILE = "analysis.json"
 META_FILE = "meta.json"
 EDITS_FILE = "edits.json"
 EDITS_BACKUP_FILE = "edits.prev.json"
+NOTES_FILE = "notes.json"
 
 _TRACK_ID_RE = re.compile(r"^[0-9a-f]{6,64}$")
 
@@ -137,6 +148,42 @@ class TrackStore:
             log.warning("ignoring unreadable %s", path)
             return None
         return data if isinstance(data, dict) and isinstance(data.get("chords"), list) else None
+
+    def duration(self, track_id: str) -> float:
+        """Track duration in seconds (analysis first, then meta)."""
+        d = self._require(track_id)
+        for name in (ANALYSIS_FILE, META_FILE):
+            try:
+                value = read_json(d / name).get("duration")
+            except (OSError, ValueError, AttributeError):
+                continue
+            if isinstance(value, (int, float)) and value > 0:
+                return float(value)
+        return 0.0
+
+    # ------------------------------------------------------------------ live-piano notes
+
+    def read_notes(self, track_id: str) -> Optional[bytes]:
+        """The stored notes.json (compact JSON bytes), or None when not computed yet (or unreadable)."""
+        path = self._require(track_id) / NOTES_FILE
+        try:
+            raw = path.read_bytes()
+        except FileNotFoundError:
+            return None
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            log.warning("ignoring unreadable %s", path)
+            return None
+        if not isinstance(data, dict) or data.get("version") != NOTES_VERSION or not isinstance(data.get("notes"), list):
+            log.warning("ignoring %s with an unknown format", path)
+            return None
+        return raw
+
+    def write_notes(self, track_id: str, notes: TrackNotes) -> None:
+        with self._lock:
+            d = self._require(track_id)
+            write_json_atomic(d / NOTES_FILE, notes.model_dump(mode="json"))
 
     # ------------------------------------------------------------------ create / update
 

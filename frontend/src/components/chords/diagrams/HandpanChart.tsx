@@ -124,6 +124,7 @@ function NoteLabel({ note, x, y, fs, fill, weight, octave }: { note: HandpanNote
  * Top-down handpan: steel shell, ding in the centre, tone fields around it. Fields playing the
  * chord light up — root solid in the chord colour with a halo, other chord tones tinted, a slash
  * bass dashed — and everything else dims. Every field with a chord tone's pitch class is lit.
+ * `sounding` fields (struck by the chord sound) get a ring that fades as the note rings out.
  */
 export const HandpanChart = memo(function HandpanChart({
   scale,
@@ -135,6 +136,7 @@ export const HandpanChart = memo(function HandpanChart({
   octaves = false,
   highlight = null,
   onFieldClick,
+  sounding,
 }: {
   scale: HandpanScale
   /** role per note index (ding = 0); null → nothing lit */
@@ -149,6 +151,8 @@ export const HandpanChart = memo(function HandpanChart({
   /** a note index to mark in the accent colour (editor preview) */
   highlight?: number | null
   onFieldClick?(index: number): void
+  /** note indices sounding right now (chord sound) */
+  sounding?: ReadonlySet<number>
 }) {
   const uid = `hp${useId().replace(/[^\w-]/g, '')}`
   const geom = layout(scale)
@@ -191,12 +195,20 @@ export const HandpanChart = memo(function HandpanChart({
         const l = look(role, tint, anyLit || highlight != null)
         const showLabel = labels === 'all' || role != null
         const isDing = i === 0
+        const struck = !!sounding?.has(i)
         return (
           <g
             key={i}
-            opacity={l.opacity}
+            opacity={struck ? 1 : l.opacity}
             className="cw-hp-field"
-            onClick={onFieldClick ? () => onFieldClick(i) : undefined}
+            onClick={
+              onFieldClick
+                ? (e) => {
+                    e.stopPropagation()
+                    onFieldClick(i)
+                  }
+                : undefined
+            }
             style={onFieldClick ? { cursor: 'pointer' } : undefined}
           >
             {l.halo && (
@@ -240,6 +252,19 @@ export const HandpanChart = memo(function HandpanChart({
             )}
             {showLabel && (
               <NoteLabel note={note} x={g.x} y={g.y} fs={g.fs} fill={l.label} weight={l.weight} octave={octaves} />
+            )}
+            {sounding && (
+              <ellipse
+                cx={g.x}
+                cy={g.y}
+                rx={g.rx + 2.6}
+                ry={g.ry + 2.6}
+                transform={`rotate(${g.rot} ${g.x} ${g.y})`}
+                fill="none"
+                strokeWidth={1.6}
+                pointerEvents="none"
+                style={{ stroke: color, opacity: struck ? 0.95 : 0, transition: struck ? 'none' : 'opacity 700ms ease-out' }}
+              />
             )}
           </g>
         )

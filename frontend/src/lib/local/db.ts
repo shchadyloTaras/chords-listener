@@ -1,9 +1,10 @@
 // Persistence for tracks analyzed in the browser: IndexedDB database "chords-listener" with
 //  · "tracks" — metadata + detection + user edits (small, listed often)
 //  · "audio"  — the audio Blob per track (read only when a track is opened)
+//  · "notes"  — transcribed notes for the live piano (TrackNotes, since schema version 2)
 // Falls back to an in-memory store when IndexedDB is unavailable (tracks then last for the session).
 import type { BrowserAnalysis } from '../engine'
-import type { ChordSegment, TrackSource } from '../../types'
+import type { ChordSegment, TrackNotes, TrackSource } from '../../types'
 
 export interface LocalTrackRecord {
   id: string
@@ -31,7 +32,10 @@ export interface LocalRepo {
   /** stores a new track together with its audio, atomically */
   putWithAudio(rec: LocalTrackRecord, audio: Blob): Promise<void>
   audio(id: string): Promise<Blob | undefined>
-  /** false when there was nothing to delete */
+  /** transcribed notes of a track (live piano), if computed */
+  getNotes(id: string): Promise<TrackNotes | undefined>
+  putNotes(id: string, notes: TrackNotes): Promise<void>
+  /** removes the track, its audio and its notes; false when there was nothing to delete */
   delete(id: string): Promise<boolean>
 }
 
@@ -40,6 +44,7 @@ export interface LocalRepo {
 export function createMemoryRepo(): LocalRepo {
   const tracks = new Map<string, LocalTrackRecord>()
   const audio = new Map<string, Blob>()
+  const notes = new Map<string, TrackNotes>()
   const clone = (r: LocalTrackRecord): LocalTrackRecord => structuredClone(r)
   return {
     kind: 'memory',
@@ -56,8 +61,16 @@ export function createMemoryRepo(): LocalRepo {
       audio.set(rec.id, blob)
     },
     audio: async (id) => audio.get(id),
+    getNotes: async (id) => {
+      const n = notes.get(id)
+      return n ? structuredClone(n) : undefined
+    },
+    putNotes: async (id, value) => {
+      notes.set(id, structuredClone(value))
+    },
     delete: async (id) => {
       audio.delete(id)
+      notes.delete(id)
       return tracks.delete(id)
     },
   }
@@ -66,9 +79,17 @@ export function createMemoryRepo(): LocalRepo {
 // ------------------------------------------------------------------ IndexedDB
 
 const DB_NAME = 'chords-listener'
-const DB_VERSION = 1
+/** 1: tracks + audio · 2: + notes (upgrades only add stores, existing data stays untouched) */
+export const DB_VERSION = 2
 const TRACKS = 'tracks'
 const AUDIO = 'audio'
+const NOTES = 'notes'
+
+/** Stored notes row. */
+interface NotesRow {
+  id: string
+  notes: TrackNotes
+}
 
 /** Stored audio row. `buffer` is used where the browser cannot store Blobs in IndexedDB. */
 interface AudioRow {
@@ -99,9 +120,11 @@ function openDb(): Promise<IDBDatabase> {
   dbPromise ??= new Promise<IDBDatabase>((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION)
     req.onupgradeneeded = () => {
+      // runs for a new database (oldVersion 0) and for every older schema: only ever add what is missing
       const db = req.result
       if (!db.objectStoreNames.contains(TRACKS)) db.createObjectStore(TRACKS, { keyPath: 'id' })
       if (!db.objectStoreNames.contains(AUDIO)) db.createObjectStore(AUDIO, { keyPath: 'id' })
+      if (!db.objectStoreNames.contains(NOTES)) db.createObjectStore(NOTES, { keyPath: 'id' })
     }
     req.onsuccess = () => {
       const db = req.result
@@ -163,9 +186,22 @@ const idbRepo: LocalRepo = {
     if (row.blob) return row.blob
     return row.buffer ? new Blob([row.buffer], { type: row.type ?? '' }) : undefined
   },
+  async getNotes(id) {
+    const db = await openDb()
+    const row = await promisify(db.transaction(NOTES).objectStore(NOTES).get(id) as IDBRequest<NotesRow | undefined>)
+    return row?.notes
+  },
+  async putNotes(id, notes) {
+    const db = await openDb()
+    const tx = db.transaction(NOTES, 'readwrite')
+    const finished = done(tx)
+    const row: NotesRow = { id, notes }
+    tx.objectStore(NOTES).put(row)
+    await finished
+  },
   async delete(id) {
     const db = await openDb()
-    const tx = db.transaction([TRACKS, AUDIO], 'readwrite')
+    const tx = db.transaction([TRACKS, AUDIO, NOTES], 'readwrite')
     const finished = done(tx)
     let existed = false
     const count = tx.objectStore(TRACKS).count(id)
@@ -175,6 +211,7 @@ const idbRepo: LocalRepo = {
     // requests run in order inside one transaction: the count sees the row before it goes
     tx.objectStore(TRACKS).delete(id)
     tx.objectStore(AUDIO).delete(id)
+    tx.objectStore(NOTES).delete(id)
     await finished
     return existed
   },

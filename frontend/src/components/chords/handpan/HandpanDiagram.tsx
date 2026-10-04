@@ -22,12 +22,21 @@ export const HandpanDiagram = memo(function HandpanDiagram({
   size,
   spelling,
   className,
+  sounding,
+  onPlay,
+  onField,
 }: {
   label: string
   width: number
   size: HandpanDiagramSize
   spelling?: Spelling
   className?: string
+  /** note indices the chord sound is playing right now */
+  sounding?: ReadonlySet<number>
+  /** click on the instrument (not on a field): play the chord */
+  onPlay?(e: React.MouseEvent<HTMLElement>): void
+  /** click on a field / the ding: play that note */
+  onField?(index: number): void
 }) {
   const t = useT()
   const lang = useApp((s) => s.lang)
@@ -40,7 +49,12 @@ export const HandpanDiagram = memo(function HandpanDiagram({
   const title = play ? describePlay(lang, label, play, scale, sp) : `${t('chords.instrument.handpan')} — ${scaleName}`
 
   return (
-    <figure className={clsx('flex flex-col items-center gap-1.5', className)}>
+    <figure
+      className={clsx('flex flex-col items-center gap-1.5', onPlay && 'cursor-pointer', className)}
+      onClick={onPlay}
+      data-cw-sound={onPlay ? 'always' : undefined}
+      title={onPlay ? t('sound.diagram.handpan') : undefined}
+    >
       <HandpanChart
         scale={scale}
         roles={play?.roles ?? null}
@@ -49,6 +63,8 @@ export const HandpanDiagram = memo(function HandpanDiagram({
         title={title}
         labels={size === 'sm' ? 'lit' : 'all'}
         octaves={size !== 'sm'}
+        sounding={sounding}
+        onFieldClick={onField}
       />
       <figcaption className="flex min-h-5 flex-col items-center gap-0.5">
         {play ? <Verdict play={play} spelling={sp} lang={lang} /> : <span className="h-5" aria-hidden />}
