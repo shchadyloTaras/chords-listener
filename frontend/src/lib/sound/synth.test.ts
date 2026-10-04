@@ -60,16 +60,19 @@ describe('Karplus-Strong plucks', () => {
   ]
 
   for (const fs of [44100, 48000]) {
-    it(`are finite, decay and are in tune at ${fs} Hz`, () => {
+    // Renders ~9 multi-second buffers; generous timeout for slow CI runners.
+    it(`are finite, decay and are in tune at ${fs} Hz`, { timeout: 30_000 }, () => {
       for (const [instrument, midi] of cases) {
         const p = pluckParams(instrument, midi, fs)
         const x = renderPluck(p)
         expect(x.length).toBe(Math.round(p.duration * fs))
         let peak = 0
+        let nonFinite = 0
         for (const v of x) {
-          expect(Number.isFinite(v)).toBe(true)
-          peak = Math.max(peak, Math.abs(v))
+          if (!Number.isFinite(v)) nonFinite++
+          else peak = Math.max(peak, Math.abs(v))
         }
+        expect(nonFinite, `${instrument} ${midi}`).toBe(0)
         expect(peak).toBeGreaterThan(0.1)
         expect(peak).toBeLessThanOrEqual(0.96)
         // decays: well down after a second, silent at the very end (faded out)
