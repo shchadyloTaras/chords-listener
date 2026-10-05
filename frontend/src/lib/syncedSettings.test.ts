@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Settings } from '../store'
-import { parseSynced, pickSynced, SYNCED_DEFAULTS, SYNCED_KEYS, syncedChanged, syncedKey } from './syncedSettings'
+import { isValidSynced, parseSynced, pickSynced, SYNCED_DEFAULTS, SYNCED_KEYS, syncedChanged, syncedKey } from './syncedSettings'
 
 /** Local settings with every device-only field set to a non-default value. */
 const local = {
@@ -37,6 +37,13 @@ describe('pickSynced', () => {
 
   it('keeps the handpan instrument', () => {
     expect(pickSynced({ ...local, instrument: 'handpan' }).instrument).toBe('handpan')
+  })
+
+  it('keeps the bass and the harmonium', () => {
+    expect(pickSynced({ ...local, instrument: 'bass' }).instrument).toBe('bass')
+    expect(pickSynced({ ...local, instrument: 'harmonium' }).instrument).toBe('harmonium')
+    expect(isValidSynced('instrument', 'harmonium')).toBe(true)
+    expect(isValidSynced('instrument', 'banjo')).toBe(false)
   })
 
   it('never emits a value the rules would reject', () => {

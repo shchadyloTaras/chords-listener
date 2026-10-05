@@ -3,6 +3,7 @@
 // and the server URL stay device-local.
 // Shape and allowed values must match `isValidSettings` in /firestore.rules.
 import type { Settings } from '../store'
+import { INSTRUMENTS } from './instruments'
 
 export const SYNCED_KEYS = [
   'simplify',
@@ -24,7 +25,7 @@ export type SyncedSettings = Pick<Settings, SyncedKey>
 /** Allowed values per key; keys not listed here are booleans. */
 const ENUMS: Partial<Record<SyncedKey, readonly unknown[]>> = {
   accidentals: ['auto', 'sharp', 'flat'],
-  instrument: ['guitar', 'ukulele', 'piano', 'handpan'],
+  instrument: INSTRUMENTS,
   view: ['sheet', 'timeline', 'score'],
   barsPerLine: [2, 4, 8],
   copyFormat: ['bars', 'timestamps', 'chordpro', 'unique'],

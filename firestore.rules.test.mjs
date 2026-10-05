@@ -158,6 +158,12 @@ describe('users/{uid}', () => {
     assert.equal(await updateProfile(alice, alice.uid, { settings: { ...VALID_SETTINGS, view: 'score' } }), OK)
   })
 
+  test('the bass and the harmonium are valid instruments', async () => {
+    for (const instrument of ['bass', 'harmonium']) {
+      assert.equal(await updateProfile(alice, alice.uid, { settings: { ...VALID_SETTINGS, instrument } }), OK)
+    }
+  })
+
   test('another user cannot read it', async () => {
     assert.equal(await read(bob, alice.uid), DENIED)
   })
