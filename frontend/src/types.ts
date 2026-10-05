@@ -90,6 +90,8 @@ export interface TrackSummary {
   /** separated stems available under /api/tracks/{id}/stems/{name}: 'vocals' | 'instruments' */
   stems?: string[]
   createdAt: string
+  /** cloud only: bumps with every change of the track, as published to the live library (lib/cloud/library) */
+  version?: number
 }
 
 export interface Track extends TrackSummary {

@@ -226,6 +226,49 @@ describe('a browser that signed in before', () => {
     expect(cache.clearCloudCache).toHaveBeenCalledTimes(1)
   })
 
+  // The live library (lib/cloud/library) is the account's too: stopped and emptied synchronously, before a new session shows.
+  /** `boot()` + a live library that holds a list of `uid`'s tracks, as if its listener had answered */
+  async function bootWithLibrary(uid: string) {
+    const auth = await boot()
+    const { useLibrary } = await import('./cloud/library')
+    useLibrary.setState({ uid, tracks: [{ id: 't1', title: 'Song', duration: 1, source: { type: 'file' }, createdAt: '' }], versions: { t1: 1 } })
+    return { ...auth, useLibrary }
+  }
+  const emptyLibrary = { uid: null, tracks: null, versions: {}, error: false }
+
+  it('signing out empties the live library', async () => {
+    fb.saved = { uid: 'uid42', email: 'listener@example.com' }
+    const { signOut, startAuth, useAuth, useLibrary } = await bootWithLibrary('uid42')
+    stop = startAuth()
+    await vi.waitFor(() => expect(useAuth.getState().user).not.toBeNull())
+    // the same account restored keeps it
+    expect(useLibrary.getState().tracks).toHaveLength(1)
+    await signOut()
+    expect(useLibrary.getState()).toEqual(emptyLibrary)
+  })
+
+  it('a session that ends elsewhere empties it before the signed-out state shows', async () => {
+    fb.saved = { uid: 'uid42', email: 'listener@example.com' }
+    const { startAuth, useAuth, useLibrary } = await bootWithLibrary('uid42')
+    stop = startAuth()
+    await vi.waitFor(() => expect(useAuth.getState().user).not.toBeNull())
+    const seen: unknown[] = []
+    useAuth.subscribe((s) => seen.push({ user: s.user, library: useLibrary.getState() }))
+    fb.emit(null)
+    expect(seen).toEqual([{ user: null, library: emptyLibrary }])
+  })
+
+  it('another account signing in: the first one’s list is gone before the new session shows', async () => {
+    fb.saved = { uid: 'uid42', email: 'listener@example.com' }
+    const { startAuth, useAuth, useLibrary } = await bootWithLibrary('uid42')
+    stop = startAuth()
+    await vi.waitFor(() => expect(useAuth.getState().user?.uid).toBe('uid42'))
+    const seen: unknown[] = []
+    useAuth.subscribe((s) => seen.push({ uid: s.user?.uid, library: useLibrary.getState() }))
+    fb.emit({ uid: 'other7', email: 'other@example.com' })
+    expect(seen).toEqual([{ uid: 'other7', library: emptyLibrary }])
+  })
+
   it('goes on signed out when Firebase cannot be loaded', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     fb.fail = true

@@ -18,6 +18,7 @@ import { syncServerJobs } from './hooks/useJobs'
 import { useRoute, type Route } from './hooks/useRoute'
 import { useDocumentTheme } from './hooks/useTheme'
 import { startAuth } from './lib/auth'
+import { watchLibrary } from './lib/cloud/libraryWatch'
 
 function Page({ route }: { route: Route }) {
   switch (route.name) {
@@ -54,6 +55,9 @@ export default function App() {
   // Firebase sign-in (settings sync; the cloud API on the hosted site): restores a saved session only where this
   // browser has signed in before (a guest loads no Firebase); lazy, the app never waits for it
   useEffect(() => startAuth(), [])
+
+  // The live library (Firestore index of the signed-in user's tracks): follows while the cloud is the API
+  useEffect(() => watchLibrary(), [])
 
   // New page → start at the top.
   const routeKey =
