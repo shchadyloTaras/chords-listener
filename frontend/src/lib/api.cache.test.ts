@@ -17,6 +17,7 @@ vi.mock('./auth', () => ({
 }))
 
 import * as api from './api'
+import { rememberServerJob } from './cloud/activity'
 import { cachedAudio, cachedList, cachedTrack, LIST_TTL_MS, saveTrack, TRACK_TTL_MS } from './cloud/cache'
 import { createMemoryRepo, setLocalRepo } from './local'
 import { useConnection, type ConnectionState } from './serverMode'
@@ -64,6 +65,23 @@ const summary = (id: string, createdAt = '2026-10-04T10:00:00Z') => ({
 })
 
 const urls = () => fetchMock.mock.calls.map(([url]) => String(url))
+
+/** How GET /tracks lists a track (the summary fields of GET /tracks/{id}). */
+const listedAs = (t: Track) => ({ id: t.id, title: t.title, duration: t.duration, source: t.source, createdAt: t.createdAt })
+
+function memoryStorage(): Storage {
+  const data = new Map<string, string>()
+  return {
+    get length() {
+      return data.size
+    },
+    clear: () => data.clear(),
+    getItem: (k) => data.get(k) ?? null,
+    key: (i) => [...data.keys()][i] ?? null,
+    removeItem: (k) => void data.delete(k),
+    setItem: (k, v) => void data.set(k, String(v)),
+  }
+}
 
 beforeEach(() => {
   globalThis.indexedDB = new IDBFactory()
@@ -125,6 +143,58 @@ describe('the library list', () => {
     vi.setSystemTime(Date.now() + LIST_TTL_MS + 1)
     fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'))
     expect((await api.listTracks()).map((t) => t.id)).toEqual(['a'])
+  })
+
+  it('a song finished while the page was away (a job started here) is asked for', async () => {
+    vi.stubGlobal('localStorage', memoryStorage())
+    rememberServerJob('job9')
+    fetchMock.mockResolvedValueOnce(json([summary('a')]))
+    await api.listTracks()
+    // the page comes back: the job list says it is done
+    const finished: Job = { id: 'job9', status: 'done', progress: 1, message: 'Done', trackId: 'new1', createdAt: '2026-10-05T11:00:00Z' }
+    fetchMock.mockResolvedValueOnce(json([finished]))
+    await api.listJobs()
+    // the kept list still shows at once, but is asked again
+    expect((await api.listCachedTracks())?.map((t) => t.id)).toEqual(['a'])
+    fetchMock.mockResolvedValueOnce(json([summary('new1', '2026-10-05T11:00:00Z'), summary('a')]))
+    expect((await api.listTracks()).map((t) => t.id)).toEqual(['new1', 'a'])
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('a job seen finishing makes the list kept here old', async () => {
+    fetchMock.mockResolvedValueOnce(json([summary('a')]))
+    await api.listTracks()
+    const job: Job = { id: 'job1', status: 'done', progress: 1, message: 'Done', trackId: 'new1', createdAt: '2026-10-05T11:00:00Z' }
+    fetchMock.mockResolvedValueOnce(json(job))
+    await api.getJob('job1')
+    fetchMock.mockResolvedValueOnce(json([summary('new1'), summary('a')]))
+    await api.listTracks()
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('a list answer squares the tracks kept here with it (renamed or deleted on another device)', async () => {
+    const B = '0123456789bb'
+    const C = '0123456789cc'
+    fetchMock.mockResolvedValueOnce(json([listedAs(cloudTrack()), listedAs(cloudTrack({ id: B })), listedAs(cloudTrack({ id: C }))]))
+    await api.listTracks()
+    for (const id of [ID, B, C]) {
+      fetchMock.mockResolvedValueOnce(json(cloudTrack({ id })))
+      await api.getTrack(id)
+    }
+    fetchMock.mockResolvedValueOnce(new Response(new Blob(['b'])))
+    await api.fetchTrackAudio({ id: B, audioUrl: `${CLOUD}/api/tracks/${B}/audio?sig=1` })
+    expect(fetchMock).toHaveBeenCalledTimes(5)
+
+    // «Оновити»: ID was renamed elsewhere, B deleted elsewhere, C is as it was
+    fetchMock.mockResolvedValueOnce(json([listedAs(cloudTrack({ title: 'Renamed elsewhere' })), listedAs(cloudTrack({ id: C }))]))
+    await api.listTracks(undefined, { force: true })
+    expect(await cachedTrack('uid42', B)).toBeNull()
+    expect(await cachedAudio('uid42', B)).toBeNull()
+    expect(await cachedTrack('uid42', C)).not.toBeNull()
+    fetchMock.mockResolvedValueOnce(json(cloudTrack({ title: 'Renamed elsewhere' })))
+    expect((await api.getTrack(ID)).title).toBe('Renamed elsewhere')
+    await api.getTrack(C)
+    expect(fetchMock).toHaveBeenCalledTimes(7)
   })
 
   it('is never kept for a local server', async () => {

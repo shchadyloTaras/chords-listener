@@ -4,7 +4,8 @@
 // keyed by the account's uid, and the whole database goes on sign-out or when another account signs in
 // (lib/auth.ts). Callers (lib/api.ts, lib/vocals.ts, the player) use it only while the API is the cloud and
 // someone is signed in — never for a local server or a guest.
-//  · "lists"  — key uid: the library list (GET /tracks) as the server sent it, asked again after LIST_TTL_MS
+//  · "lists"  — key uid: the library list (GET /tracks) as the server sent it, asked again after LIST_TTL_MS;
+//               each list the server sends drops what is kept of tracks it no longer lists or lists changed
 //  · "tracks" — key `${uid}|${id}`: the track (GET /tracks/{id}), its signed media URLs included, for TRACK_TTL_MS
 //  · "audio"  — key `${uid}|${id}`: the audio file, least recently played evicted over AUDIO_BUDGET_BYTES
 //  · "json"   — key `${uid}|${kind}|${id}`: live-piano notes and vocal notes
@@ -12,8 +13,11 @@
 // every read is null and every write does nothing.
 import type { Track, TrackSummary } from '../../types'
 
-/** The list is asked again when older than this (a track added on another device shows up by then). */
-export const LIST_TTL_MS = 10 * 60_000
+/**
+ * The list is asked again when older than this. This device's own changes refresh it sooner (edits, deletes,
+ * finished jobs, a move to the cloud, «Оновити»); a change made on another device shows by then.
+ */
+export const LIST_TTL_MS = 6 * 3600_000
 /**
  * A kept track is used for this long. Shorter than the signed media URLs live (12–13 h, docs/CLOUD.md
  * "Media URLs"), so the `audioUrl` / `stemUrls` of a track served from here still play. Keep it that way.
@@ -168,13 +172,78 @@ export function cachedList(uid: string): Promise<{ tracks: TrackSummary[]; saved
   )
 }
 
-/** Keeps the library list the server just sent. */
+/** Visits every key (or row, `values`) of `uid` in a store. */
+function eachOfUser(store: IDBObjectStore, uid: string, values: boolean, visit: (cursor: IDBCursor) => void): Promise<void> {
+  const range = IDBKeyRange.bound(`${uid}|`, `${uid}|\uffff`)
+  return new Promise<void>((resolve, reject) => {
+    const req = values ? store.openCursor(range) : store.openKeyCursor(range)
+    req.onsuccess = () => {
+      const cursor = req.result
+      if (!cursor) return resolve()
+      visit(cursor)
+      cursor.continue()
+    }
+    req.onerror = () => reject(req.error)
+  })
+}
+
+/** The same summary, whatever the key order (and a missing field equals a null one). */
+function sameSummary(a: TrackSummary, b: TrackSummary): boolean {
+  const canonical = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(canonical)
+    if (!v || typeof v !== 'object') return v
+    const out: Record<string, unknown> = {}
+    for (const k of Object.keys(v).sort()) {
+      const value = (v as Record<string, unknown>)[k]
+      if (value !== null && value !== undefined) out[k] = canonical(value)
+    }
+    return out
+  }
+  return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b))
+}
+
+/**
+ * Keeps the library list the server just sent, and squares what is kept with it: a track it no longer lists
+ * (deleted on another device) goes completely; a kept track it lists differently (renamed, edited, re-analysed
+ * elsewhere) loses its JSON, so the next open asks again.
+ */
 export function saveList(uid: string, tracks: TrackSummary[]): Promise<void> {
   const row: Row<TrackSummary[]> = { key: uid, value: tracks, savedAt: Date.now() }
+  const listed = new Map(tracks.map((t) => [t.id, t]))
+  const prefix = `${uid}|`.length
+  return safely(
+    () =>
+      transact([LISTS, TRACKS, AUDIO, JSON_STORE], 'readwrite', async (tx) => {
+        tx.objectStore(LISTS).put(row)
+        const kept = tx.objectStore(TRACKS)
+        await eachOfUser(kept, uid, true, (cursor) => {
+          const entry = listed.get(String(cursor.primaryKey).slice(prefix))
+          const value = (cursor as IDBCursorWithValue).value as Row<Track>
+          if (!entry || !sameSummary(summaryOf(value.value), entry)) kept.delete(cursor.primaryKey)
+        })
+        const audio = tx.objectStore(AUDIO)
+        await eachOfUser(audio, uid, false, (cursor) => {
+          if (!listed.has(String(cursor.primaryKey).slice(prefix))) audio.delete(cursor.primaryKey)
+        })
+        // `${uid}|${kind}|${id}`
+        const json = tx.objectStore(JSON_STORE)
+        await eachOfUser(json, uid, false, (cursor) => {
+          const rest = String(cursor.primaryKey).slice(prefix)
+          if (!listed.has(rest.slice(rest.indexOf('|') + 1))) json.delete(cursor.primaryKey)
+        })
+      }),
+    undefined,
+  )
+}
+
+/** The kept list is to be asked again (a job ended: a new or changed song); it still shows meanwhile. */
+export function markListStale(uid: string): Promise<void> {
   return safely(
     () =>
       transact([LISTS], 'readwrite', async (tx) => {
-        tx.objectStore(LISTS).put(row)
+        const lists = tx.objectStore(LISTS)
+        const list = await getRow<TrackSummary[]>(lists, uid)
+        if (list) lists.put({ ...list, savedAt: 0 })
       }),
     undefined,
   )

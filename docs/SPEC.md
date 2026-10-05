@@ -115,7 +115,7 @@ The UI is also published as a static site (GitHub Pages, `VITE_BASE=/chords-list
 - Backend: `CHORDS_ALLOWED_ORIGINS` (comma-separated, default `https://shchadylotaras.github.io` + the Vite dev origins) may use the API cross-origin (CORS, Private Network Access preflight, cross-site write check); pages on a local host (any port) always may.
 
 **Cloud cache** (`src/lib/cloud/cache.ts`). The signed-in user's cloud library is kept on the device, so opening the site and replaying a song wake no Cloud Run instance. It lives in IndexedDB `chords-listener-cloud` (separate from the browser library `chords-listener`; no `local-` tracks in it). Every row is keyed by the account's uid. It is used only while `backend === 'cloud'` and someone is signed in, never for a local server or a guest. What is kept:
-- the list (`GET /tracks`): served from the device while younger than 10 min (`LIST_TTL_MS`). The home page shows it at once whatever its age and asks again in the background when stale; a finished job, a track moved to the cloud, «Оновити» and «Спробувати ще раз» ask the cloud right away;
+- the list (`GET /tracks`): served from the device while younger than 6 h (`LIST_TTL_MS`, the same as a track). The home page shows it at once whatever its age and asks again in the background when stale. This device's own changes refresh it sooner: a finished job (also one started here that ended while the page was closed: the job list after a reload reports it as done), a track moved to the cloud, «Оновити» and «Спробувати ще раз» ask the cloud right away. A change made on another device shows after the TTL or «Оновити»;
 - opened tracks (`GET /tracks/{id}`, signed URLs included): served for 6 h (`TRACK_TTL_MS`), less than the 12 h a signed URL lives, so their `audioUrl` / `stemUrls` still play;
 - the audio: the player plays the device copy as a Blob URL. Without one it streams the signed URL and, once that can play through, downloads the file once in the background. Total ≤ 300 MB (`AUDIO_BUDGET_BYTES`); the least recently played files go first;
 - live-piano notes and vocal notes, once found.
@@ -123,7 +123,8 @@ The UI is also published as a static site (GitHub Pages, `VITE_BASE=/chords-list
 What changes it:
 - an edit or a reset replaces the kept track and its list entry;
 - a delete forgets the track everywhere;
-- a re-analysis or vocals job seen finishing (`getJob`, or the job list after a reload) drops the track's JSON and vocal notes, so the next open asks again;
+- every list the cloud sends squares what is kept with it: a track it no longer lists (deleted elsewhere) is forgotten completely, a kept track it lists differently (renamed, edited, re-analysed elsewhere) loses its JSON;
+- a job seen finishing (`getJob`, or the job list after a reload) drops its track's JSON and vocal notes, so the next open asks again, and makes the kept list stale;
 - a signed URL the cloud refuses (401) drops the track's JSON, and the track is asked again once for a fresh URL;
 - a device copy that does not play is dropped for the signed URL.
 

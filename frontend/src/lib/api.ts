@@ -225,10 +225,15 @@ async function keepTrack(uid: string | null, track: Track): Promise<Track> {
   return withServerUrls(track)
 }
 
-/** A job that is over changed its track on the server (re-analysis, vocals): its JSON is asked again next time. */
+/**
+ * A job that is over made or changed a song on the server (analysis, re-analysis, vocals): its track's JSON is
+ * asked again next time, and so is the list (it still shows meanwhile).
+ */
 async function noteFinishedJob(job: Job): Promise<void> {
   const uid = job.status === 'done' && job.trackId ? cloudCacheUid() : null
-  if (uid) await cache.forgetTrack(uid, job.trackId as string, ['track', 'vocals'])
+  if (!uid) return
+  await cache.forgetTrack(uid, job.trackId as string, ['track', 'vocals'])
+  await cache.markListStale(uid)
 }
 
 function byNewest(tracks: TrackSummary[]): TrackSummary[] {

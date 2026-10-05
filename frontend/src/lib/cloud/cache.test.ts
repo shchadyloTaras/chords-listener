@@ -14,6 +14,7 @@ import {
   forgetTrack,
   isFresh,
   LIST_TTL_MS,
+  markListStale,
   OPEN_TIMEOUT_MS,
   saveAudio,
   saveJson,
@@ -127,7 +128,8 @@ describe('what is kept, and for whom', () => {
   it('a track is kept for less time than its signed audio URL lives (12 h)', async () => {
     expect(TRACK_TTL_MS).toBe(6 * 3600_000)
     expect(TRACK_TTL_MS).toBeLessThan(12 * 3600_000)
-    expect(LIST_TTL_MS).toBe(10 * 60_000)
+    // this device's own changes refresh the list sooner; another device's show by then (or with «Оновити»)
+    expect(LIST_TTL_MS).toBe(6 * 3600_000)
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(Date.UTC(2026, 9, 5, 12))
     await saveTrack('u1', track('a'))
@@ -145,6 +147,45 @@ describe('what is kept, and for whom', () => {
     expect(await cachedTrack('u1', 'a')).toBeNull()
     expect(isFresh(Date.now() + 1, LIST_TTL_MS)).toBe(false)
     expect(isFresh(Date.now(), LIST_TTL_MS)).toBe(true)
+  })
+
+  it('a list from the server squares what is kept with it', async () => {
+    await saveList('u1', [summary('a'), summary('b'), summary('c')])
+    await saveTrack('u1', track('a'))
+    await saveTrack('u1', track('b'))
+    await saveTrack('u1', track('c'))
+    await saveAudio('u1', 'a', new Blob(['a']))
+    await saveAudio('u1', 'c', new Blob(['c']))
+    await saveJson('u1', 'notes', 'c', { n: 1 })
+    await saveJson('u1', 'vocals', 'c', { v: 1 })
+    // only the audio and notes of d are kept (its track JSON ran out)
+    await saveAudio('u1', 'd', new Blob(['d']))
+    await saveJson('u1', 'notes', 'd', { n: 1 })
+    await saveTrack('u2', track('c'))
+    // b renamed and c deleted on another device
+    await saveList('u1', [summary('a'), summary('b', { title: 'Renamed elsewhere' })])
+    expect(await cachedTrack('u1', 'a')).not.toBeNull()
+    expect(await cachedAudio('u1', 'a')).not.toBeNull()
+    expect(await cachedTrack('u1', 'b')).toBeNull()
+    expect(await cachedTrack('u1', 'c')).toBeNull()
+    expect(await cachedAudio('u1', 'c')).toBeNull()
+    expect(await cachedJson('u1', 'notes', 'c')).toBeNull()
+    expect(await cachedJson('u1', 'vocals', 'c')).toBeNull()
+    expect(await cachedAudio('u1', 'd')).toBeNull()
+    expect(await cachedJson('u1', 'notes', 'd')).toBeNull()
+    // another account's are not this list's business
+    expect(await cachedTrack('u2', 'c')).not.toBeNull()
+  })
+
+  it('a stale list keeps its tracks but is asked again', async () => {
+    await saveList('u1', [summary('a')])
+    await markListStale('u1')
+    const list = await cachedList('u1')
+    expect(list?.tracks.map((t) => t.id)).toEqual(['a'])
+    expect(isFresh(list?.savedAt ?? Date.now(), LIST_TTL_MS)).toBe(false)
+    // nothing kept: nothing to mark
+    await markListStale('u2')
+    expect(await cachedList('u2')).toBeNull()
   })
 
   it('the list says when it was saved', async () => {

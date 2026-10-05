@@ -146,11 +146,26 @@ describe('syncServerJobs (page load, another server)', () => {
   it('picks up a job started here before the reload, and forgets the ones that are over', async () => {
     rememberServerJob('j1')
     rememberServerJob('j2')
-    api.listJobs.mockResolvedValue([running('j1'), done('j2')])
+    api.listJobs.mockResolvedValue([running('j1'), done('j2'), done('old')])
     await syncServerJobs()
     expect(api.listJobs).toHaveBeenCalledTimes(1)
-    expect(Object.keys(useJobs.getState().jobs)).toEqual(['j1'])
+    expect(useJobs.getState().jobs.j1?.status).toBe('analyzing')
     expect(recentServerJobs()).toEqual(['j1'])
+  })
+
+  it('a job started here that finished while the page was away shows as done (the song list hears of it)', async () => {
+    rememberServerJob('j2')
+    api.listJobs.mockResolvedValue([done('j2'), done('old')])
+    const seen: string[] = []
+    const unsubscribe = useJobs.subscribe((s, prev) => {
+      for (const [id, j] of Object.entries(s.jobs)) if (j.status === 'done' && prev.jobs[id]?.status !== 'done') seen.push(id)
+    })
+    await syncServerJobs()
+    unsubscribe()
+    expect(seen).toEqual(['j2'])
+    // a job not started here (or long known) is not news
+    expect(useJobs.getState().jobs.old).toBeUndefined()
+    expect(recentServerJobs()).toEqual([])
   })
 
   it('keeps them when the server cannot be asked right now', async () => {

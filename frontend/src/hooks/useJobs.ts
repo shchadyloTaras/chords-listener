@@ -191,20 +191,23 @@ async function doSyncServerJobs(): Promise<void> {
     const remembered = recentServerJobs()
     const jobs = await api.listJobs()
     const running = jobs.filter(isActiveJob)
+    let finished: Job[] = []
     // the ones that are over (or unknown to this server) need no looking for after the next reload — only when
     // a server answered (not browser mode while the session is still being restored) and is still the one
     const now = useConnection.getState()
     if (conn.status === 'server' && now.status === 'server' && now.apiBase === conn.apiBase) {
       const runningIds = new Set(running.map((j) => j.id))
       for (const id of remembered) if (!runningIds.has(id)) forgetServerJob(id)
+      // done while the page was away: a new (or changed) song — the song list hears of it like of any finished job
+      finished = jobs.filter((j) => j.status === 'done' && remembered.includes(j.id) && useJobs.getState().jobs[j.id]?.status !== 'done')
     }
-    if (!running.length) return
+    if (!running.length && !finished.length) return
     useJobs.setState((s) => {
       const next = { ...s.jobs }
-      for (const j of running) next[j.id] = j
+      for (const j of [...running, ...finished]) next[j.id] = j
       return { jobs: next }
     })
-    schedulePoll()
+    if (running.length) schedulePoll()
   } catch {
     /* backend down — the health banner explains it */
   }
