@@ -71,8 +71,8 @@ const createConnectionStore = () =>
 
 // Dev only: keep the one store across hot reloads of this module (components and lib/api must agree).
 export const useConnection: ReturnType<typeof createConnectionStore> =
-  import.meta.hot?.data.useConnection ?? createConnectionStore()
-if (import.meta.hot) import.meta.hot.data.useConnection = useConnection
+  import.meta.hot?.data?.useConnection ?? createConnectionStore()
+if (import.meta.hot?.data) import.meta.hot.data.useConnection = useConnection
 
 interface ServerPrefs {
   /** use the user's own server at `serverUrl` (opt-in on the hosted site, always on in local builds) */

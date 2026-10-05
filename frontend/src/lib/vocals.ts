@@ -4,14 +4,16 @@
 //        polled until done; 501 / code 'unavailable' when the server has no vocal transcription.
 //   GET  /api/tracks/{id}/stems/{vocals|instruments} → the separated audio (mp3)
 // Browser tracks (ids "local-…") and browser mode have no server to do this. Vocal notes found in the cloud are
-// kept on the device (lib/cloud/cache) and read from there next time.
+// kept on the device (lib/cloud/cache) and read from there next time. Loading asks nothing the track already
+// answers: a track with `vocals: false` has none to read, and the job list is asked only when a job started on
+// this device may still be making them (opening a song must not wake the cloud).
 import { useEffect } from 'react'
 import { create } from 'zustand'
 import { useJobs } from '../hooks/useJobs'
 import { useApp } from '../store'
 import type { Job, Track, TrackNotes, VocalNotes } from '../types'
 import { ApiError, apiFetch, apiRequest, cloudCacheUid, fetchMedia, getJob, listJobs, toApiError } from './api'
-import { rememberServerJob } from './cloud/activity'
+import { recentServerJobs, rememberServerJob } from './cloud/activity'
 import { cachedJson, saveJson } from './cloud/cache'
 import { isLocalId } from './local'
 import { cachedFeatures, needCloudHealth, useConnection } from './serverMode'
@@ -61,9 +63,9 @@ function setState(id: string, state: VocalsState): void {
 /**
  * Whether vocals can be transcribed for this track here: 'ok', or why not. The cloud's health is not asked on
  * connect: its features seen last time decide, else it is asked now in the background (meanwhile 'ok': a
- * cloud without the feature answers 501, shown as unavailable).
+ * cloud without the feature answers 501, shown as unavailable). `ask: false` never asks (just reading notes).
  */
-export function vocalsSupport(track: Pick<Track, 'id'>): 'ok' | 'browser' | 'server' {
+export function vocalsSupport(track: Pick<Track, 'id'>, opts: { ask?: boolean } = {}): 'ok' | 'browser' | 'server' {
   if (isLocalId(track.id)) return 'browser'
   const conn = useConnection.getState()
   if (conn.status !== 'server') return 'browser'
@@ -71,7 +73,7 @@ export function vocalsSupport(track: Pick<Track, 'id'>): 'ok' | 'browser' | 'ser
   if (!features && conn.backend === 'cloud') {
     features = cachedFeatures() ?? undefined
     // after the current render / call: asking updates the connection store
-    if (!features) queueMicrotask(needCloudHealth)
+    if (!features && opts.ask !== false) queueMicrotask(needCloudHealth)
   }
   if (features?.vocals === false) return 'server'
   return 'ok'
@@ -145,26 +147,33 @@ async function vocalNotes(id: string): Promise<VocalNotes> {
   return data
 }
 
+/** No vocal notes yet: maybe they are being transcribed right now (another tab, or before a reload). */
+async function noVocalsYet(track: VocalsTrack): Promise<void> {
+  const active = await activeJob(track.id)
+  if (active) return watchJob(track, active)
+  setState(track.id, { status: 'missing' })
+}
+
 async function fetchVocals(track: VocalsTrack): Promise<void> {
   const { id } = track
+  // the track says it has none: nothing to read
+  if (track.vocals === false) return noVocalsYet(track)
   try {
     const data = await vocalNotes(id)
     setState(id, { status: 'ready', notes: data, index: validVocals(data, track.duration) })
     if (!track.vocals || !track.stems?.length) markTrack(id)
   } catch (err) {
     const e = toApiError(err)
-    if (e.code === 'not_found') {
-      // maybe it is being transcribed right now (another tab, or before a reload)
-      const active = await activeJob(id)
-      if (active) return watchJob(track, active)
-      setState(id, { status: 'missing' })
-    } else if (e.code === 'unavailable' || e.status === 501) setState(id, { status: 'unavailable', reason: 'server' })
+    if (e.code === 'not_found') await noVocalsYet(track)
+    else if (e.code === 'unavailable' || e.status === 501) setState(id, { status: 'unavailable', reason: 'server' })
     else if (err instanceof NotesFormatError) setState(id, { status: 'error', code: 'invalid', message: err.message, during: 'load' })
     else setState(id, { status: 'error', code: e.code, message: e.message, during: 'load' })
   }
 }
 
+/** A vocals job for the track that may still run: asked only when a job started on this device may (lib/cloud/activity). */
 async function activeJob(id: string): Promise<Job | null> {
+  if (!recentServerJobs().length) return null
   try {
     const jobs = await listJobs()
     return jobs.find((j) => j.kind === 'vocals' && j.trackId === id && j.status !== 'done' && j.status !== 'error') ?? null
@@ -248,7 +257,8 @@ function watchJob(track: VocalsTrack, job: Job): void {
 
 /** Loads the track's vocal notes (once; again with `force`). */
 export function loadVocals(track: VocalsTrack, opts: { force?: boolean } = {}): Promise<void> {
-  const support = vocalsSupport(track)
+  // the cloud's features matter for starting a job, not for reading notes: its health is not asked for this
+  const support = vocalsSupport(track, { ask: false })
   if (support !== 'ok') {
     setState(track.id, { status: 'unavailable', reason: support })
     return Promise.resolve()
@@ -289,13 +299,14 @@ export async function startVocals(track: VocalsTrack): Promise<void> {
 export function useVocals(track: VocalsTrack | null, opts: { knownOnly?: boolean } = {}): VocalsState {
   const id = track?.id ?? ''
   const duration = track?.duration ?? 0
-  const has = !!track?.vocals
-  const skip = !!opts.knownOnly && !has
+  // as the track says (false: none to read; unknown: ask)
+  const vocals = track?.vocals
+  const skip = !!opts.knownOnly && !vocals
   const status = useConnection((c) => c.status)
   useEffect(() => {
     if (!id || skip) return
-    void loadVocals({ id, duration, vocals: has })
-  }, [id, duration, has, skip, status])
+    void loadVocals({ id, duration, vocals })
+  }, [id, duration, vocals, skip, status])
   return useVocalsStore((s) => (id ? (s.tracks[id] ?? IDLE) : IDLE))
 }
 

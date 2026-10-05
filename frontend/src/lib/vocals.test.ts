@@ -20,7 +20,7 @@ vi.mock('./api', async () => {
 import { useJobs } from '../hooks/useJobs'
 import { ApiError } from './api'
 import { useAuth } from './auth'
-import { recentServerJobs } from './cloud/activity'
+import { recentServerJobs, rememberServerJob } from './cloud/activity'
 import { refreshCloudHealth, useConnection } from './serverMode'
 import {
   fetchStem,
@@ -169,6 +169,8 @@ describe('vocals client', () => {
   })
 
   it('resumes following a job that is already running', async () => {
+    // started on this device (another tab, or before a reload)
+    rememberServerJob('job7')
     api.apiRequest.mockRejectedValueOnce(new ApiError('nope', 'not_found', 404)).mockResolvedValue(NOTES)
     api.listJobs.mockResolvedValue([job({ id: 'job7', progress: 0.5 })])
     api.getJob.mockResolvedValue(job({ id: 'job7', status: 'done', progress: 1 }))
@@ -205,6 +207,35 @@ describe('vocals client', () => {
     } finally {
       useAuth.setState({ user: null })
     }
+  })
+
+  it('no vocal notes and no job started on this device lately: the job list is not asked', async () => {
+    api.apiRequest.mockRejectedValue(new ApiError('nope', 'not_found', 404))
+    await loadVocals(track)
+    expect(state()).toEqual({ status: 'missing' })
+    expect(api.listJobs).not.toHaveBeenCalled()
+  })
+
+  it('on the cloud, a song whose track says it has no vocals asks nothing, not even the health', async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+    vi.stubGlobal('fetch', fetchMock)
+    useConnection.setState({ backend: 'cloud', apiBase: 'https://cloud.example/api', health: null, failure: null })
+    await loadVocals({ ...track, vocals: false })
+    await new Promise((r) => setTimeout(r, 5))
+    expect(state()).toEqual({ status: 'missing' })
+    expect(api.apiRequest).not.toHaveBeenCalled()
+    expect(api.listJobs).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('a song without vocals yet, while a vocals job started here may still run: picks it up', async () => {
+    rememberServerJob('job7')
+    api.listJobs.mockResolvedValue([job({ id: 'job7', progress: 0.5 })])
+    api.getJob.mockResolvedValue(job({ id: 'job7', status: 'done', progress: 1 }))
+    api.apiRequest.mockResolvedValue(NOTES)
+    await loadVocals({ ...track, vocals: false })
+    expect(state()).toMatchObject({ status: 'running', jobId: 'job7' })
+    await until((s) => s.status === 'ready')
   })
 
   it('polls a running job calmly', () => {
