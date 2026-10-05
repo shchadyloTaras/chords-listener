@@ -6,7 +6,9 @@ import { t as tNow, useT } from '../../i18n'
 import { useAuth, useAuthDialog } from '../../lib/auth'
 import { useCanListenInTab } from '../../hooks/useMediaQuery'
 import {
+  cloudWaking,
   HOSTED,
+  needCloudHealth,
   normalizeServerUrl,
   refreshCloudHealth,
   setLocalServerEnabled,
@@ -68,11 +70,15 @@ function PanelHead({ icon, tone, title, children }: { icon: ReactNode; tone: 'ok
   )
 }
 
-/** Health of the cloud: waking up (Cloud Run starts on demand) or not answering; nothing when fine. */
+/**
+ * Health of the cloud (asked when the popover opens): waking up (Cloud Run starts on demand) or not answering;
+ * nothing when fine.
+ */
 function CloudHealthLine() {
   const t = useT()
   const health = useConnection((s) => s.health)
   const failure = useConnection((s) => s.failure)
+  const waking = useConnection(cloudWaking)
   const [checking, setChecking] = useState(false)
   if (health) return null
   if (failure) {
@@ -94,6 +100,7 @@ function CloudHealthLine() {
       </div>
     )
   }
+  if (!waking) return null
   return (
     <p className="mt-1 flex items-center gap-1.5 text-xs text-faint">
       <LoaderCircle className="size-3 animate-spin" aria-hidden="true" />
@@ -231,8 +238,8 @@ export function ServerStatus({ compact = false }: { compact?: boolean }) {
   const remote = useConnection((s) => s.remote)
   // the cloud did not answer its health check: still the cloud, but say so
   const troubled = useConnection((s) => s.backend === 'cloud' && !!s.failure)
-  // the cloud has not answered yet (Cloud Run starts on demand): the first request may take a while
-  const waking = useConnection((s) => s.status === 'server' && s.backend === 'cloud' && !s.health && !s.failure)
+  // the cloud is being asked and has not answered yet (Cloud Run starts on demand): it may take a while
+  const waking = useConnection(cloudWaking)
   const [open, setOpen] = useState(false)
   const id = useId()
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -313,7 +320,11 @@ export function ServerStatus({ compact = false }: { compact?: boolean }) {
         aria-haspopup="dialog"
         aria-label={t('web.mode.aria', { mode: label })}
         title={waking ? t('web.cloud.waking') : label}
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          // the cloud's health is asked only now, when someone wants to see it
+          if (!open) needCloudHealth()
+          setOpen(!open)
+        }}
         className={clsx(
           'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border text-xs font-medium transition-colors duration-150',
           'border-border bg-surface-2 text-muted hover:bg-surface-3 hover:text-text',

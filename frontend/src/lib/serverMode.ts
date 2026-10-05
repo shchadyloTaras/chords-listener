@@ -1,7 +1,9 @@
 // Where the chord server is, if anywhere (docs/CLOUD.md "Frontend config"), in this order:
 //  1. same origin — the page is served by the backend (./start.sh, http://localhost:8765) or proxied by Vite;
 //  2. cloud — the signed-in user's cloud API (Cloud Run, `CLOUD_API_URL`); every call carries the
-//     Firebase ID token (lib/api.ts). Selected right away: a cold start only delays the first answer;
+//     Firebase ID token (lib/api.ts). Selected right away, without a request: any request wakes an instance
+//     that then bills for a while, so the cloud is asked only for real work (its health too, see
+//     refreshCloudHealth); a cold start only delays the first answer;
 //  3. remote — the user's own server at `serverUrl` (advanced, opt-in `useServerPrefs.localServer`);
 //  4. none — "browser mode": files and recordings are analyzed in the page and kept in IndexedDB.
 //
@@ -48,6 +50,8 @@ export interface ConnectionState {
   probing: boolean
   failure: ProbeFailure | null
   checkedAt: number
+  /** a health check or a request the user is waiting for is on its way to the cloud (see cloudWaking) */
+  cloudBusy: boolean
 }
 
 const createConnectionStore = () =>
@@ -62,6 +66,7 @@ const createConnectionStore = () =>
     probing: false,
     failure: null,
     checkedAt: 0,
+    cloudBusy: false,
   }))
 
 // Dev only: keep the one store across hot reloads of this module (components and lib/api must agree).
@@ -373,29 +378,94 @@ export function probeServer(opts: { interactive?: boolean } = {}): Promise<boole
   return pendingInteractive
 }
 
+// ------------------------------------------------------------------ the cloud's health (asked only when needed)
+
+let cloudHolds = 0
+
+/** Something waits for the cloud to answer until the returned release is called (see cloudWaking). */
+export function holdCloudBusy(): () => void {
+  if (++cloudHolds === 1) useConnection.setState({ cloudBusy: true })
+  let held = true
+  return () => {
+    if (!held) return
+    held = false
+    if (--cloudHolds === 0) useConnection.setState({ cloudBusy: false })
+  }
+}
+
+/**
+ * The cloud is being asked and has not answered yet: Cloud Run may be starting an instance (up to a minute).
+ * Health that nobody has asked for is not "waking" — an idle page asks the cloud nothing.
+ */
+export function cloudWaking(s: Pick<ConnectionState, 'status' | 'backend' | 'health' | 'failure' | 'cloudBusy'>): boolean {
+  return s.status === 'server' && s.backend === 'cloud' && !s.health && !s.failure && s.cloudBusy
+}
+
+/** The cloud's engine features seen at its last health check, kept for a day (vocals or not, without asking). */
+const FEATURES_KEY = 'chords-listener-cloud-health'
+const FEATURES_TTL_MS = 24 * 3600_000
+
+type Features = Health['engine']['features']
+
+function saveFeatures(base: string, features: Features): void {
+  try {
+    localStorage.setItem(FEATURES_KEY, JSON.stringify({ base, features, savedAt: Date.now() }))
+  } catch {
+    /* storage blocked: the next page asks again when it needs to */
+  }
+}
+
+/** The connected cloud's features from its last health check (younger than a day), or null. */
+export function cachedFeatures(): Features | null {
+  const { apiBase } = useConnection.getState()
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(FEATURES_KEY) ?? 'null')
+    if (!saved || typeof saved !== 'object') return null
+    const { base, features, savedAt } = saved as { base?: unknown; features?: unknown; savedAt?: unknown }
+    if (base !== apiBase || typeof savedAt !== 'number' || Date.now() - savedAt > FEATURES_TTL_MS) return null
+    return features && typeof features === 'object' ? (features as Features) : null
+  } catch {
+    return null
+  }
+}
+
 let cloudHealth: { base: string; promise: Promise<void> } | null = null
 
-/** Fetches the cloud's /health in the background (no polling: an idle tab must let Cloud Run scale to zero). */
+/**
+ * Asks the cloud's /health (deduplicated). Only when something needs it: the mode popover opens, vocals
+ * support is asked (lib/vocals), a request just failed at the network level. Never polled, never on connect:
+ * an idle tab must let Cloud Run scale to zero.
+ */
 export function refreshCloudHealth(): Promise<void> {
   const { backend, apiBase } = useConnection.getState()
   if (backend !== 'cloud' || !apiBase) return Promise.resolve()
   if (cloudHealth?.base === apiBase) return cloudHealth.promise
   const base = apiBase
+  const release = holdCloudBusy()
   const promise = fetchHealth(base, CLOUD_HEALTH_TIMEOUT_MS)
     .then((result) => {
       const now = useConnection.getState()
       if (now.backend !== 'cloud' || now.apiBase !== base) return
-      if ('health' in result) useConnection.setState({ health: result.health, failure: null, checkedAt: Date.now() })
-      else useConnection.setState({ failure: result.failure, checkedAt: Date.now() })
+      if ('health' in result) {
+        if (result.health.engine.features) saveFeatures(base, result.health.engine.features)
+        useConnection.setState({ health: result.health, failure: null, checkedAt: Date.now() })
+      } else useConnection.setState({ failure: result.failure, checkedAt: Date.now() })
     })
     .finally(() => {
+      release()
       if (cloudHealth?.base === base) cloudHealth = null
     })
   cloudHealth = { base, promise }
   return promise
 }
 
-/** The cloud answers for the signed-in user from now on (its health arrives in the background). */
+/** Asks the cloud's health if nothing is known about it yet (it was not needed so far on this page). */
+export function needCloudHealth(): void {
+  const s = useConnection.getState()
+  if (s.backend === 'cloud' && !s.health && !s.failure) void refreshCloudHealth()
+}
+
+/** The cloud answers for the signed-in user from now on (nothing is asked: see refreshCloudHealth). */
 function selectCloud(c: Candidate): void {
   const prev = useConnection.getState()
   const same = prev.status === 'server' && prev.backend === 'cloud' && prev.apiBase === c.base
@@ -411,7 +481,6 @@ function selectCloud(c: Candidate): void {
     failure: same ? prev.failure : null,
     checkedAt: Date.now(),
   })
-  if (!same || !prev.health) void refreshCloudHealth()
 }
 
 async function run(interactive: boolean): Promise<boolean> {
@@ -520,18 +589,20 @@ export function whenSettled(timeoutMs = 10_000): Promise<ConnectionState> {
 
 let troubleTimer: ReturnType<typeof setTimeout> | null = null
 
-/** A server request failed at the network level: re-check soon (the server may have stopped). */
+/** A server request failed at the network level: re-check soon (the server may have stopped, the cloud may be down). */
 export function noteServerTrouble(): void {
   if (troubleTimer) return
   troubleTimer = setTimeout(() => {
     troubleTimer = null
     void probeServer()
+    if (useConnection.getState().backend === 'cloud') void refreshCloudHealth()
   }, 300)
 }
 
 /**
  * Probes on start, when the session / address / opt-in changes, on focus, and periodically (every 10 s while
- * not connected). The cloud is never polled: an idle tab must let Cloud Run scale to zero.
+ * not connected). The cloud is never polled: an idle tab must let Cloud Run scale to zero (on focus it is
+ * asked again only after it did not answer).
  */
 export function useConnectionPolling(): void {
   const status = useConnection((s) => s.status)
@@ -549,7 +620,7 @@ export function useConnectionPolling(): void {
     const onFocus = () => {
       const now = useConnection.getState()
       if (now.backend !== 'cloud') void probeServer()
-      else if (!now.health) void refreshCloudHealth()
+      else if (now.failure) void refreshCloudHealth()
     }
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)

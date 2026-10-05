@@ -6,11 +6,13 @@
 // Browser tracks (ids "local-…") and browser mode have no server to do this.
 import { useEffect } from 'react'
 import { create } from 'zustand'
+import { useJobs } from '../hooks/useJobs'
 import { useApp } from '../store'
 import type { Job, Track, TrackNotes, VocalNotes } from '../types'
 import { ApiError, apiFetch, apiRequest, fetchTrackAudio, getJob, listJobs, toApiError } from './api'
+import { rememberServerJob } from './cloud/activity'
 import { isLocalId } from './local'
-import { useConnection } from './serverMode'
+import { cachedFeatures, needCloudHealth, useConnection } from './serverMode'
 import { decodeNotes, NotesFormatError } from './transcription/compact'
 import { NoteIndex } from './transcription/noteIndex'
 
@@ -33,8 +35,10 @@ export type VocalsState =
 type VocalsTrack = Pick<Track, 'id' | 'duration'> & Partial<Pick<Track, 'vocals' | 'stems'>>
 
 const IDLE: VocalsState = { status: 'idle' }
-/** How often a running vocals job is polled (tests shorten it). */
-export const vocalsPolling = { ms: 800 }
+/** How often a running vocals job is polled: calm, every poll keeps a cloud instance busy. */
+export const VOCALS_POLL_MS = 1500
+/** The live polling interval (tests shorten it). */
+export const vocalsPolling = { ms: VOCALS_POLL_MS }
 
 interface VocalsStore {
   tracks: Record<string, VocalsState>
@@ -52,12 +56,22 @@ function setState(id: string, state: VocalsState): void {
   useVocalsStore.setState((s) => ({ tracks: { ...s.tracks, [id]: state } }))
 }
 
-/** Whether vocals can be transcribed for this track here: 'ok', or why not. */
+/**
+ * Whether vocals can be transcribed for this track here: 'ok', or why not. The cloud's health is not asked on
+ * connect: its features seen last time decide, else it is asked now in the background (meanwhile 'ok': a
+ * cloud without the feature answers 501, shown as unavailable).
+ */
 export function vocalsSupport(track: Pick<Track, 'id'>): 'ok' | 'browser' | 'server' {
   if (isLocalId(track.id)) return 'browser'
   const conn = useConnection.getState()
   if (conn.status !== 'server') return 'browser'
-  if (conn.health?.engine?.features?.vocals === false) return 'server'
+  let features = conn.health?.engine?.features
+  if (!features && conn.backend === 'cloud') {
+    features = cachedFeatures() ?? undefined
+    // after the current render / call: asking updates the connection store
+    if (!features) queueMicrotask(needCloudHealth)
+  }
+  if (features?.vocals === false) return 'server'
   return 'ok'
 }
 
@@ -147,15 +161,36 @@ async function activeJob(id: string): Promise<Job | null> {
   }
 }
 
+/** Waits one polling interval, and longer while the tab is hidden (nobody is looking: no cloud request). */
+async function pause(): Promise<void> {
+  do await new Promise((r) => setTimeout(r, vocalsPolling.ms))
+  while (typeof document !== 'undefined' && document.hidden)
+}
+
+/** The next state of a job the job list (hooks/useJobs) already polls; null once it stops tracking it. */
+function nextTracked(jobId: string, current: Job): Promise<Job | null> {
+  return new Promise((resolve) => {
+    const unsubscribe = useJobs.subscribe((s) => {
+      const next = s.jobs[jobId]
+      if (next === current) return
+      unsubscribe()
+      resolve(next ?? null)
+    })
+  })
+}
+
 function watchJob(track: VocalsTrack, job: Job): void {
   const { id } = track
   setState(id, { status: 'running', jobId: job.id, stage: stageOf(job), progress: job.progress })
   if (polling.has(id)) return
   polling.add(id)
-  const tick = async (current: Job): Promise<void> => {
+  // someone reset / replaced the state: stop polling
+  const replaced = (current: Job) => {
     const st = getState(id)
-    // someone reset / replaced the state: stop polling
-    if (st.status !== 'running' || st.jobId !== current.id) {
+    return st.status !== 'running' || st.jobId !== current.id
+  }
+  const tick = async (current: Job): Promise<void> => {
+    if (replaced(current)) {
       polling.delete(id)
       return
     }
@@ -173,7 +208,14 @@ function watchJob(track: VocalsTrack, job: Job): void {
       return
     }
     setState(id, { status: 'running', jobId: current.id, stage: stageOf(current), progress: current.progress })
-    await new Promise((r) => setTimeout(r, vocalsPolling.ms))
+    // the job list polls it already (e.g. picked up after a reload): follow its updates, no second poll
+    const tracked = useJobs.getState().jobs[current.id]
+    if (tracked) return tick(tracked !== current ? tracked : ((await nextTracked(current.id, tracked)) ?? current))
+    await pause()
+    if (replaced(current)) {
+      polling.delete(id)
+      return
+    }
     let next: Job
     try {
       next = await getJob(current.id)
@@ -219,6 +261,7 @@ export async function startVocals(track: VocalsTrack): Promise<void> {
   setState(track.id, { status: 'running', jobId: '', stage: 'queued', progress: 0 })
   try {
     const job = await apiRequest<Job>(`/tracks/${encodeURIComponent(track.id)}/vocals`, { method: 'POST', body: '{}' })
+    if (job.status !== 'done' && job.status !== 'error') rememberServerJob(job.id)
     watchJob(track, job)
   } catch (err) {
     const e = toApiError(err)

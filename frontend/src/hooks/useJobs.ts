@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import * as api from '../lib/api'
 import { toApiError, type JobOptions, type UploadMeta } from '../lib/api'
+import { forgetServerJob, recentServerJobs } from '../lib/cloud/activity'
 import { isLocalId } from '../lib/local'
 import { useConnection } from '../lib/serverMode'
 import { t } from '../i18n'
@@ -71,9 +72,17 @@ export function blockedVideoId(job: Pick<Job, 'status' | 'errorCode' | 'source'>
 
 // ------------------------------------------------------------------ polling
 
+/**
+ * How often running jobs are polled (ms): calm, since every poll keeps a cloud instance busy; slower in a
+ * hidden tab, slowest while the cloud wants a new sign-in.
+ */
+export const JOB_POLL_MS = { visible: 1000, hidden: 3000, signedOut: 5000 } as const
+/** The first poll of a job just started / found. */
+const FIRST_POLL_MS = 600
+
 let pollTimer: number | null = null
 
-function schedulePoll(delay = 400) {
+function schedulePoll(delay: number = FIRST_POLL_MS) {
   if (pollTimer != null) return
   pollTimer = window.setTimeout(() => {
     pollTimer = null
@@ -100,12 +109,14 @@ async function pollOnce() {
     }),
   )
   // the cloud wants a new sign-in: check back calmly instead of hammering it
-  if (Object.values(useJobs.getState().jobs).some(isActiveJob)) schedulePoll(signedOut ? 5000 : document.hidden ? 1500 : 400)
+  if (Object.values(useJobs.getState().jobs).some(isActiveJob))
+    schedulePoll(signedOut ? JOB_POLL_MS.signedOut : document.hidden ? JOB_POLL_MS.hidden : JOB_POLL_MS.visible)
 }
 
 function applyUpdate(prev: Job, next: Job) {
   upsert(next)
   if (!isActiveJob(prev) || isActiveJob(next)) return
+  if (!isLocalId(next.id)) forgetServerJob(next.id)
   const watching = currentPath() === paths.job(next.id)
   if (watching) return // JobPage reacts itself
   const { toast } = useApp.getState()
@@ -162,8 +173,13 @@ useConnection.subscribe((s, prev) => {
 
 let syncing: Promise<void> | null = null
 
-/** Picks up jobs that are still running on the server (e.g. after a page reload). */
+/**
+ * Picks up jobs that are still running on the server (e.g. after a page reload). Asks the server only when a
+ * job started on this device in the last hours may still run (lib/cloud/activity): every request wakes the
+ * cloud, and an idle page must not.
+ */
 export function syncServerJobs(): Promise<void> {
+  if (!recentServerJobs().length) return Promise.resolve()
   syncing ??= doSyncServerJobs().finally(() => (syncing = null))
   return syncing
 }
@@ -172,6 +188,9 @@ async function doSyncServerJobs(): Promise<void> {
   try {
     const jobs = await api.listJobs()
     const running = jobs.filter(isActiveJob)
+    // the ones that are over (or unknown to this server) need no looking for after the next reload
+    const runningIds = new Set(running.map((j) => j.id))
+    for (const id of recentServerJobs()) if (!runningIds.has(id)) forgetServerJob(id)
     if (!running.length) return
     useJobs.setState((s) => {
       const next = { ...s.jobs }

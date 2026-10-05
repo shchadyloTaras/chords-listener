@@ -37,11 +37,26 @@ vi.mock('./engine', () => ({
 }))
 
 import * as api from './api'
+import { recentServerJobs } from './cloud/activity'
 import { createMemoryRepo, getLocalJob, setLocalRepo } from './local'
 import { useConnection, type ConnectionState } from './serverMode'
 
 const CLOUD = 'https://chords-api-abc123-ew.a.run.app'
 const fetchMock = vi.fn<typeof fetch>()
+
+function memoryStorage(): Storage {
+  const data = new Map<string, string>()
+  return {
+    get length() {
+      return data.size
+    },
+    clear: () => data.clear(),
+    getItem: (k) => data.get(k) ?? null,
+    key: (i) => [...data.keys()][i] ?? null,
+    removeItem: (k) => void data.delete(k),
+    setItem: (k, v) => void data.set(k, String(v)),
+  }
+}
 
 function connect(patch: Partial<ConnectionState>) {
   useConnection.setState({ probing: false, failure: null, checkedAt: 1, health: null, permission: 'unsupported', ...patch })
@@ -126,6 +141,36 @@ describe('cloud requests', () => {
     fetchMock.mockResolvedValueOnce(json(cloudTrack()))
     const track = await api.getTrack('0123456789ab')
     expect(track.audioUrl).toBe(`${CLOUD}${signedAudio}`)
+  })
+
+  it('resolves stem URLs against the cloud origin', async () => {
+    fetchMock.mockResolvedValueOnce(
+      json({ ...cloudTrack(), id: 'abc', stemUrls: { vocals: '/api/tracks/abc/stems/vocals?u=1&exp=2&sig=3' } }),
+    )
+    const track = await api.getTrack('abc')
+    expect(track.stemUrls?.vocals).toBe(`${CLOUD}/api/tracks/abc/stems/vocals?u=1&exp=2&sig=3`)
+  })
+
+  it('remember the running jobs started here (a reload looks for them), not finished ones', async () => {
+    vi.stubGlobal('localStorage', memoryStorage())
+    fetchMock.mockResolvedValueOnce(json(job, 201))
+    await api.createJob('https://soundcloud.com/a/b')
+    expect(recentServerJobs()).toEqual(['job1'])
+
+    // the same link analyzed before: the job comes back done
+    fetchMock.mockResolvedValueOnce(json({ ...job, id: 'job2', status: 'done', trackId: 't1' }, 201))
+    await api.createJob('https://soundcloud.com/a/c')
+    expect(recentServerJobs()).toEqual(['job1'])
+
+    storage.uploadToStorage.mockResolvedValue('users/uid42/uploads/abc/a.mp3')
+    fetchMock.mockResolvedValueOnce(json({ ...job, id: 'job3' }, 201))
+    await api.uploadFile(new File(['x'], 'a.mp3'))
+    expect(recentServerJobs()).toEqual(['job1', 'job3'])
+
+    // the last poll says it is over: nothing left to look for after a reload
+    fetchMock.mockResolvedValueOnce(json({ ...job, status: 'done', trackId: 't1' }))
+    await api.getJob('job1')
+    expect(recentServerJobs()).toEqual(['job3'])
   })
 
   it('renew an expired token once and repeat the call', async () => {

@@ -48,7 +48,8 @@ export function onTransferDone(fn: (done: TransferDone) => void): () => void {
   }
 }
 
-const POLL_MS = 1000
+/** Polling the cloud job: calm, every poll keeps a cloud instance busy. */
+const POLL_MS = 1500
 const ACTIVE = new Set(['queued', 'downloading', 'decoding', 'analyzing'])
 
 async function waitForJob(job: Job, onProgress: (p: number) => void): Promise<Job> {

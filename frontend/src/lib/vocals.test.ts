@@ -14,9 +14,36 @@ vi.mock('./api', async () => {
   return { ...real, ...api }
 })
 
+import { useJobs } from '../hooks/useJobs'
 import { ApiError } from './api'
-import { useConnection } from './serverMode'
-import { fetchStem, loadVocals, resetVocals, startVocals, stemsOf, useVocalsStore, vocalsPolling, vocalsSupport, type VocalsState } from './vocals'
+import { recentServerJobs } from './cloud/activity'
+import { refreshCloudHealth, useConnection } from './serverMode'
+import {
+  fetchStem,
+  loadVocals,
+  resetVocals,
+  startVocals,
+  stemsOf,
+  useVocalsStore,
+  VOCALS_POLL_MS,
+  vocalsPolling,
+  vocalsSupport,
+  type VocalsState,
+} from './vocals'
+
+function memoryStorage(): Storage {
+  const data = new Map<string, string>()
+  return {
+    get length() {
+      return data.size
+    },
+    clear: () => data.clear(),
+    getItem: (k) => data.get(k) ?? null,
+    key: (i) => [...data.keys()][i] ?? null,
+    removeItem: (k) => void data.delete(k),
+    setItem: (k, v) => void data.set(k, String(v)),
+  }
+}
 
 const NOTES: VocalNotes = {
   version: 1,
@@ -52,15 +79,18 @@ async function until(pred: (s: VocalsState) => boolean, ms = 3000): Promise<Voca
 }
 
 beforeEach(() => {
+  vi.stubGlobal('localStorage', memoryStorage())
   vocalsPolling.ms = 5
   resetVocals()
-  useConnection.setState({ status: 'server', apiBase: '/api', health: { ok: true, engine: { name: 'x', version: '1', features: { vocals: true } }, ytdlp: null, ffmpeg: true } })
+  useJobs.setState({ jobs: {} })
+  useConnection.setState({ status: 'server', backend: null, failure: null, apiBase: '/api', health: { ok: true, engine: { name: 'x', version: '1', features: { vocals: true } }, ytdlp: null, ffmpeg: true } })
   for (const f of Object.values(api)) f.mockReset()
   api.listJobs.mockResolvedValue([])
 })
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.unstubAllGlobals()
 })
 
 describe('vocals client', () => {
@@ -153,5 +183,71 @@ describe('vocals client', () => {
     expect(api.fetchTrackAudio).toHaveBeenCalledWith({ id: track.id, audioUrl: '/api/tracks/x/stems/instruments?sig=1' }, undefined)
     api.apiFetch.mockResolvedValue(new Response(JSON.stringify({ detail: 'gone', code: 'not_found' }), { status: 404 }))
     await expect(fetchStem(track, 'vocals')).rejects.toMatchObject({ code: 'not_found', status: 404 })
+  })
+
+  it('polls a running job calmly', () => {
+    expect(VOCALS_POLL_MS).toBe(1500)
+  })
+
+  it('remembers the job it starts (a reload looks for it)', async () => {
+    api.apiRequest.mockResolvedValue(job({ id: 'job5' }))
+    api.getJob.mockResolvedValue(job({ id: 'job5', status: 'error', errorCode: 'internal' }))
+    await startVocals(track)
+    expect(recentServerJobs()).toContain('job5')
+    await until((s) => s.status === 'error')
+  })
+
+  it('follows a job the job list already polls, without polling it again', async () => {
+    useJobs.setState({ jobs: { job1: job() } })
+    api.apiRequest.mockImplementation(async (_path, init) => (init?.method === 'POST' ? job() : NOTES))
+    await startVocals(track)
+    await new Promise((r) => setTimeout(r, 30))
+    expect(state()).toMatchObject({ status: 'running', jobId: 'job1', stage: 'separate' })
+    useJobs.setState({ jobs: { job1: job({ progress: 0.8, message: 'Tracking the melody' }) } })
+    await until((s) => s.status === 'running' && s.stage === 'melody')
+    useJobs.setState({ jobs: { job1: job({ status: 'done', progress: 1, message: 'Done' }) } })
+    await until((s) => s.status === 'ready')
+    expect(api.getJob).not.toHaveBeenCalled()
+  })
+
+  it('does not poll while the tab is hidden', async () => {
+    const doc = { hidden: true }
+    vi.stubGlobal('document', doc)
+    api.apiRequest.mockImplementation(async (_path, init) => (init?.method === 'POST' ? job() : NOTES))
+    api.getJob.mockResolvedValue(job({ status: 'done', progress: 1, message: 'Done' }))
+    await startVocals(track)
+    await new Promise((r) => setTimeout(r, 40))
+    expect(api.getJob).not.toHaveBeenCalled()
+    doc.hidden = false
+    await until((s) => s.status === 'ready')
+    expect(api.getJob).toHaveBeenCalledTimes(1)
+  })
+
+  it('on the cloud, goes by the features seen last time instead of asking again', async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+    vi.stubGlobal('fetch', fetchMock)
+    const noVocals = { ok: true, engine: { name: 'x', version: '1', features: { vocals: false } }, ytdlp: null, ffmpeg: true }
+    fetchMock.mockResolvedValue(new Response(JSON.stringify(noVocals), { status: 200 }))
+    useConnection.setState({ backend: 'cloud', apiBase: 'https://cloud.example/api', health: null, failure: null })
+    await refreshCloudHealth()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    // another page load: the health has not been asked for
+    useConnection.setState({ health: null })
+    expect(vocalsSupport(track)).toBe('server')
+    await new Promise((r) => setTimeout(r, 5))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('on the cloud, asks for its health once when nothing is known (and tries meanwhile)', async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+    vi.stubGlobal('fetch', fetchMock)
+    const noVocals = { ok: true, engine: { name: 'x', version: '1', features: { vocals: false } }, ytdlp: null, ffmpeg: true }
+    fetchMock.mockResolvedValue(new Response(JSON.stringify(noVocals), { status: 200 }))
+    useConnection.setState({ backend: 'cloud', apiBase: 'https://cloud.example/api', health: null, failure: null })
+    expect(vocalsSupport(track)).toBe('ok')
+    expect(vocalsSupport(track)).toBe('ok')
+    await vi.waitFor(() => expect(useConnection.getState().health).not.toBeNull())
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(vocalsSupport(track)).toBe('server')
   })
 })

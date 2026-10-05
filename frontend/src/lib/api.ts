@@ -7,6 +7,7 @@
 //    IndexedDB. Ids starting with "local-" always belong to the browser library, in any mode.
 import type { ChordSegment, ErrorCode, Health, Job, Track, TrackNotes, TrackSource, TrackSummary } from '../types'
 import { getIdToken, requestSignIn, useAuth } from './auth'
+import { forgetServerJob, rememberServerJob } from './cloud/activity'
 import { StorageUploadError, uploadToStorage } from './cloud/storage'
 import {
   cancelLocalTrackJobs,
@@ -240,15 +241,26 @@ export const apiRequest = request
 export const apiFetch = send
 
 /** Server objects carry server-relative URLs (signed ones in the cloud); make them work from any page. */
-function withServerUrls<T extends { thumbnail?: string | null; audioUrl?: string }>(obj: T): T {
+function withServerUrls<T extends { thumbnail?: string | null; audioUrl?: string; stemUrls?: Record<string, string> | null }>(obj: T): T {
   const out = { ...obj }
   if (typeof out.thumbnail === 'string') out.thumbnail = resolveServerUrl(out.thumbnail)
   if (typeof out.audioUrl === 'string') out.audioUrl = resolveServerUrl(out.audioUrl)
+  if (out.stemUrls && typeof out.stemUrls === 'object') {
+    const stems: Record<string, string> = {}
+    for (const [name, url] of Object.entries(out.stemUrls)) stems[name] = typeof url === 'string' ? resolveServerUrl(url) : url
+    out.stemUrls = stems
+  }
   return out
 }
 
 function serverJob(job: Job): Job {
   return withServerUrls(job)
+}
+
+/** A job just started on the server: remembered while it runs, so a reload knows to look for it (cloud/activity). */
+function startedJob(job: Job): Job {
+  if (job.status !== 'done' && job.status !== 'error') rememberServerJob(job.id)
+  return serverJob(job)
 }
 
 const enc = encodeURIComponent
@@ -269,7 +281,7 @@ export async function createJob(url: string, options?: JobOptions, signal?: Abor
     body: JSON.stringify(options ? { url, options } : { url }),
     signal,
   })
-  return serverJob(job)
+  return startedJob(job)
 }
 
 /** Body of POST /api/jobs/storage (docs/CLOUD.md "Uploads"). */
@@ -291,7 +303,7 @@ export async function createStorageJob(path: string, meta?: UploadMeta, opts: { 
     body: JSON.stringify(storageJobBody(path, meta, opts.options)),
     signal: opts.signal,
   })
-  return serverJob(job)
+  return startedJob(job)
 }
 
 export async function listJobs(signal?: AbortSignal): Promise<Job[]> {
@@ -308,7 +320,9 @@ export async function getJob(id: string, signal?: AbortSignal): Promise<Job> {
     if (!job) throw new ApiError('Job not found', 'not_found', 404)
     return job
   }
-  return serverJob(await request<Job>(`/jobs/${enc(id)}`, { signal, cache: 'no-store' }))
+  const job = await request<Job>(`/jobs/${enc(id)}`, { signal, cache: 'no-store' })
+  if (job.status === 'done' || job.status === 'error') forgetServerJob(job.id)
+  return serverJob(job)
 }
 
 /** Server / cloud library (when connected) plus the tracks analyzed in this browser, newest first. */
@@ -349,7 +363,7 @@ export async function reanalyzeTrack(id: string, options?: JobOptions): Promise<
     method: 'POST',
     body: JSON.stringify(options ? { options } : {}),
   })
-  return serverJob(job)
+  return startedJob(job)
 }
 
 /** `keepalive` lets a pending delete finish while the page unloads. */
@@ -513,7 +527,7 @@ async function multipartUpload(conn: ServerConn, file: File, onProgress: UploadP
     }
     if (!res.ok) throw await errorFromResponse(res)
     onProgress?.(1, file.size, file.size)
-    return serverJob((await res.json()) as Job)
+    return startedJob((await res.json()) as Job)
   }
 
   const once = async (forceRefresh: boolean) => xhrUpload(url, file, multipartForm(file, opts), await bearer(conn, forceRefresh), onProgress, signal)
@@ -522,7 +536,7 @@ async function multipartUpload(conn: ServerConn, file: File, onProgress: UploadP
     try {
       const job = (await res.json()) as Job
       onProgress?.(1, file.size, file.size)
-      return serverJob(job)
+      return startedJob(job)
     } catch {
       throw new ApiError('Malformed server response', 'internal', res.status)
     }

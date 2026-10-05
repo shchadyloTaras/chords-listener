@@ -5,7 +5,7 @@ import { useEffect, useId, useRef, useState, type ClipboardEvent, type FormEvent
 import { useT } from '../../i18n'
 import { useApp } from '../../store'
 import { toApiError, type ClientErrorCode } from '../../lib/api'
-import { onServerRequired, useConnection } from '../../lib/serverMode'
+import { holdCloudBusy, onServerRequired, useConnection } from '../../lib/serverMode'
 import { useJobs } from '../../hooks/useJobs'
 import { paths } from '../../hooks/useRoute'
 import { useCanListenInTab, useIsDesktopPointer, useMediaQuery } from '../../hooks/useMediaQuery'
@@ -177,6 +177,11 @@ export function SmartInput({ className }: { className?: string }) {
       setSlow(false)
     }
   }, [busy])
+
+  // the link is on its way to the cloud: the header chip may say it is waking up
+  useEffect(() => {
+    if (busy && onCloud) return holdCloudBusy()
+  }, [busy, onCloud])
 
   const live = (text: string): Hint => {
     if (!text.trim()) return { kind: 'idle' }
