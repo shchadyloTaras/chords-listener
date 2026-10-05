@@ -12,9 +12,12 @@ Publishing never fails the user's request: ``publish`` / ``unpublish`` / ``sweep
 return instead of raising. A transient failure is retried with a growing pause; a lasting one is written to
 ``users/<uid>/publish-pending.json`` (``{"ids": {trackId: "publish" | "unpublish"}}``) for ``sweep_pending``.
 Lock order: the per-track publish lock first, then ``TrackStore._lock``, never the reverse.
+
+``python -m app.publish backfill [--uid UID]`` publishes the tracks that exist already (see ``main``).
 """
 from __future__ import annotations
 
+import argparse
 import logging
 import threading
 import time
@@ -29,7 +32,7 @@ from google.api_core import exceptions as api_exceptions
 from google.auth import exceptions as auth_exceptions
 
 from .firestore import FirestoreIndex, IndexError_
-from .models import Track, TrackSummary
+from .models import Settings, Track, TrackSummary
 from .storage import AUDIO_FILE, META_FILE, STEMS_DIR, TrackStore, read_json, write_json_atomic
 from .users import user_context, valid_uid
 
@@ -129,6 +132,17 @@ class Publisher:
         with self._lock_for(uid, track_id):
             self._run(uid, track_id, "unpublish", lambda: self.index.delete(uid, track_id), self.attempts)
             remove()
+
+    def ensure_published(self, uid: str, track_id: str) -> bool:
+        """Publish the track unless the index has it already (self-heal for tracks that predate publishing).
+        True when it is published (or was); False when it was queued instead. An index that cannot say is
+        treated as lacking the track."""
+        try:
+            if self.index.exists(uid, track_id):
+                return True
+        except Exception as exc:
+            log.warning("could not check track %s of %s in the index: %s", track_id, uid, exc)
+        return self.publish(uid, track_id)
 
     def sweep_pending(self) -> int:
         """Try every queued entry of every user once; returns how many are done now. An entry is settled by
@@ -308,6 +322,9 @@ class NullPublisher:
     def unpublish(self, uid: Optional[str], track_id: str) -> bool:
         return True
 
+    def ensure_published(self, uid: Optional[str], track_id: str) -> bool:
+        return True
+
     def delete_track(self, uid: Optional[str], track_id: str, remove: Callable[[], None]) -> None:
         remove()
 
@@ -316,3 +333,38 @@ class NullPublisher:
 
     def backfill(self, uid: Optional[str] = None) -> int:
         return 0
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    """``python -m app.publish backfill [--uid UID]``: publish every complete track of every user (or of
+    ``UID``) and print how many; safe to repeat. Runs with the service's environment and credentials
+    (a Cloud Run job on the service image), so ``CHORDS_PUBLISH`` does not matter here."""
+    parser = argparse.ArgumentParser(
+        prog="python -m app.publish", description="Publish the library to Firestore and Storage."
+    )
+    commands = parser.add_subparsers(dest="command", required=True)
+    backfill = commands.add_parser("backfill", help="publish every complete track (idempotent)")
+    backfill.add_argument("--uid", help="only this user's tracks (default: every user)")
+    args = parser.parse_args(argv)
+    if args.uid is not None and not valid_uid(args.uid):
+        parser.error(f"invalid uid: {args.uid!r}")
+    settings = Settings.from_env()
+    if not (settings.cloud and settings.upload_bucket):
+        parser.error("needs CHORDS_AUTH=firebase and CHORDS_UPLOAD_BUCKET, like the service")
+    if not logging.getLogger().handlers:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    from .gcs import default_client
+
+    project = settings.firebase_project
+    publisher = Publisher(
+        TrackStore(settings),
+        FirestoreIndex(project),
+        bucket=settings.upload_bucket,
+        gcs_client_factory=lambda: default_client(project),
+    )
+    print(f"{publisher.backfill(args.uid)} track(s) published")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

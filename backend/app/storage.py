@@ -22,7 +22,9 @@ Cloud mode (``CHORDS_AUTH=firebase``, docs/CLOUD.md): every path above lives und
 (``track_dir``, ``audio_path``, ``user_dir``, ``uploads_dir``, ``media_url`` ...) and never builds user
 paths itself. Scratch space (``CHORDS_WORK_DIR``) may then be on another file system than the
 library (Cloud Run: /tmp vs. the bucket mount); tracks are installed by copying with ``meta.json``
-last, and a track only "exists" once its meta.json is there.
+last, and a track only "exists" once its meta.json is there. There every change is also published
+(``app.publish``: track.json + the Firestore index) by ``TrackStore.publisher``, after the change is on disk
+and ``TrackStore._lock`` is released (the publisher takes its own per-track lock first, then ``_lock``).
 """
 from __future__ import annotations
 
@@ -97,10 +99,13 @@ class TrackNotFound(Exception):
 
 
 class TrackStore:
-    def __init__(self, settings: Settings, signer: Optional[MediaSigner] = None) -> None:
+    def __init__(self, settings: Settings, signer: Optional[MediaSigner] = None, publisher: Any = None) -> None:
+        from .publish import NullPublisher  # app.publish imports this module
+
         self.settings = settings
         self.work_root = settings.work_dir
         self.signer = signer
+        self.publisher = publisher or NullPublisher()  # app.publish: Publisher (cloud) or NullPublisher
         self._lock = threading.RLock()
 
     # ------------------------------------------------------------------ per-user roots
@@ -314,6 +319,7 @@ class TrackStore:
             for tmp, _ in staged:
                 tmp.unlink(missing_ok=True)
         log.info("track %s: vocals installed (%d notes)", track_id, len(vocals.notes))
+        self._publish(track_id)
 
     # ------------------------------------------------------------------ create / update
 
@@ -336,6 +342,7 @@ class TrackStore:
                 _copy_tree_meta_last(staged_dir, dest)
                 shutil.rmtree(staged_dir, ignore_errors=True)
         log.info("track %s installed (%s)", track_id, meta.get("title"))
+        self._publish(track_id)
         return True
 
     def save_reanalysis(self, track_id: str, analysis: AnalysisResult, options: dict[str, Any]) -> None:
@@ -351,6 +358,7 @@ class TrackStore:
             meta.update({"updatedAt": now, "analyzedAt": now, "options": options, "engine": analysis.engine})
             _bump(meta)
             write_json_atomic(d / META_FILE, meta, pretty=True)
+        self._publish(track_id)
 
     def patch(self, track_id: str, patch: TrackPatch) -> Track:
         fields = patch.model_fields_set
@@ -375,26 +383,41 @@ class TrackStore:
                 meta["updatedAt"] = utc_now()
                 _bump(meta)
                 write_json_atomic(d / META_FILE, meta, pretty=True)
+        if meta_changed:
+            self._publish(track_id)
         return self.get_track(track_id)
 
     def reset(self, track_id: str) -> Track:
         with self._lock:
             d = self._require(track_id)
             edits = d / EDITS_FILE
-            if edits.exists():  # nothing to reset is not a change a reader can see
+            changed = edits.exists()
+            if changed:  # nothing to reset is not a change a reader can see
                 edits.unlink()
                 meta = read_json(d / META_FILE)
                 _bump(meta)
                 write_json_atomic(d / META_FILE, meta, pretty=True)
+        if changed:
+            self._publish(track_id)
         return self.get_track(track_id)
 
     def delete(self, track_id: str) -> None:
-        with self._lock:
-            d = self.track_dir(track_id)
-            if not d.exists():
-                raise TrackNotFound(track_id)
-            self._discard_dir(d)
+        def remove() -> None:
+            with self._lock:
+                d = self.track_dir(track_id)
+                if not d.exists():
+                    raise TrackNotFound(track_id)
+                self._discard_dir(d)
+
+        # Cloud mode: the index document goes first, then the directory, under the publisher's track lock.
+        self.publisher.delete_track(current_uid(), track_id, remove)
         log.info("track %s deleted", track_id)
+
+    def _publish(self, track_id: str) -> None:
+        """Cloud mode: bring the track's published copies up to date. Never raises; call it with ``_lock`` released."""
+        uid = current_uid()
+        if self.settings.cloud and uid:
+            self.publisher.publish(uid, track_id)
 
     def _discard_dir(self, path: Path) -> None:
         """Move a directory out of the library first (atomic), then remove it."""

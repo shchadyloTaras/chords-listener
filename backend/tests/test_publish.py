@@ -14,7 +14,8 @@ import pytest
 from google.api_core import exceptions as api_exceptions
 
 import app.publish as publish_module
-from app.firestore import to_value
+import app.gcs as gcs_module
+from app.firestore import IndexError_, to_value
 from app.models import AnalysisResult, Settings, TrackPatch, TrackSummary
 from app.publish import NullPublisher, Publisher
 from app.storage import TrackStore, read_json, write_json_atomic
@@ -228,6 +229,37 @@ def test_tracks_of_other_users_are_published_under_their_own_uid(pub, store, gcs
     pub.publish("bob", b)
     assert set(index.docs) == {("alice", a), ("bob", b)}
     assert track_json(store, b, uid="bob")["media"]["audio"]["path"] == f"users/bob/tracks/{b}/audio.mp3"
+
+
+# --------------------------------------------------------------------------- ensure_published (the dedup self-heal)
+
+
+def test_ensure_published_publishes_what_the_index_lacks(pub, index, tid):
+    assert pub.ensure_published("alice", tid) is True
+    assert index.docs[("alice", tid)]["version"] == 1
+
+
+def test_ensure_published_leaves_a_published_track_alone(pub, index, tid):
+    assert pub.publish("alice", tid)
+    index.docs[("alice", tid)]["title"] = "kept"
+    writes = index.calls
+    assert pub.ensure_published("alice", tid) is True
+    assert index.calls == writes and index.docs[("alice", tid)]["title"] == "kept"
+
+
+def test_ensure_published_publishes_when_the_index_cannot_say(pub, index, tid, monkeypatch):
+    def down(uid: str, track_id: str) -> bool:
+        raise IndexError_("down", retryable=True)
+
+    monkeypatch.setattr(index, "exists", down)
+    assert pub.ensure_published("alice", tid) is True
+    assert ("alice", tid) in index.docs
+
+
+def test_ensure_published_queues_a_failure_and_does_not_raise(pub, store, index, tid):
+    index.fail, index.retryable = 1, False
+    assert pub.ensure_published("alice", tid) is False
+    assert json.loads(pending_path(store).read_text()) == {"ids": {tid: "publish"}}
 
 
 # --------------------------------------------------------------------------- retries and the pending list
@@ -495,6 +527,7 @@ def test_null_publisher_does_nothing(store, tid):
     null = NullPublisher()
     assert null.publish("alice", tid) is True
     assert null.unpublish("alice", tid) is True
+    assert null.ensure_published("alice", tid) is True
     assert null.sweep_pending() == 0 and null.backfill() == 0
     assert not (store.user_dir("alice") / "tracks" / tid / "track.json").exists()
 
@@ -503,3 +536,65 @@ def test_null_publisher_still_removes_on_delete(tid):
     removed = []
     NullPublisher().delete_track(None, tid, lambda: removed.append(True))
     assert removed == [True]
+
+
+# --------------------------------------------------------------------------- python -m app.publish backfill
+
+
+@pytest.fixture
+def cli(store, gcs, index, monkeypatch, capsys):
+    """``main(argv)`` against the store's data dir with the fake clients; returns (exit code, printed text)."""
+    env = {"CHORDS_AUTH": "firebase", "CHORDS_DATA_DIR": str(store.settings.data_dir), "CHORDS_UPLOAD_BUCKET": BUCKET,
+           "CHORDS_FIREBASE_PROJECT": "my-project"}
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    projects: list[str] = []
+    monkeypatch.setattr(publish_module, "FirestoreIndex", lambda project: projects.append(project) or index)
+    monkeypatch.setattr(gcs_module, "default_client", lambda project=None: gcs)
+
+    def run(*argv: str) -> tuple[int, str]:
+        code = publish_module.main(list(argv))
+        return code, capsys.readouterr().out
+
+    run.projects = projects  # type: ignore[attr-defined]
+    return run
+
+
+def test_backfill_command_publishes_every_users_tracks(cli, store, gcs, index, tid):
+    bob = install(store, gcs, uid="bob", track_id="bbbbbbbbbbbb")
+    code, out = cli("backfill")
+    assert code == 0 and out.strip() == "2 track(s) published"
+    assert set(index.docs) == {("alice", tid), ("bob", bob)}
+    assert blob_of(gcs, f"users/alice/tracks/{tid}/audio.mp3").metadata[TOKEN_KEY]
+    assert cli.projects == ["my-project"]
+    assert cli("backfill")[1].strip() == "2 track(s) published"  # idempotent
+
+
+def test_backfill_command_can_be_limited_to_one_user(cli, store, gcs, index, tid):
+    install(store, gcs, uid="bob", track_id="bbbbbbbbbbbb")
+    code, out = cli("backfill", "--uid", "alice")
+    assert code == 0 and out.strip() == "1 track(s) published"
+    assert set(index.docs) == {("alice", tid)}
+
+
+def test_backfill_command_ignores_the_publish_switch(cli, monkeypatch, index, tid):
+    monkeypatch.setenv("CHORDS_PUBLISH", "off")  # that switch is for the service's own changes
+    assert cli("backfill")[1].strip() == "1 track(s) published" and ("alice", tid) in index.docs
+
+
+def test_backfill_command_needs_the_cloud_environment(cli, monkeypatch, index, tid):
+    monkeypatch.delenv("CHORDS_UPLOAD_BUCKET")
+    with pytest.raises(SystemExit) as exit_info:
+        cli("backfill")
+    assert exit_info.value.code == 2 and not index.docs
+    monkeypatch.setenv("CHORDS_UPLOAD_BUCKET", BUCKET)
+    monkeypatch.setenv("CHORDS_AUTH", "off")
+    with pytest.raises(SystemExit):
+        cli("backfill")
+
+
+@pytest.mark.parametrize("argv", [(), ("backfill", "--uid", "../x"), ("publish",)])
+def test_backfill_command_rejects_bad_arguments(cli, index, argv):
+    with pytest.raises(SystemExit) as exit_info:
+        cli(*argv)
+    assert exit_info.value.code == 2 and not index.docs

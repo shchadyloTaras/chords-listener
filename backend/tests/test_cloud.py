@@ -29,6 +29,7 @@ from app.auth import AuthError, FirebaseTokenVerifier, MediaSigner
 from app.firestore import IndexError_
 from app.main import create_app
 from app.models import AnalysisResult, Settings
+from app.publish import NullPublisher, Publisher
 from app.sources import NormalizedUrl, RemoteMedia, SourceError, _map_ytdlp_error, find_executable, youtube_thumbnail
 from app.users import SMOKE_UID, current_uid, user_context
 
@@ -265,15 +266,18 @@ def make_cloud(tmp_path: Path, media: SimpleNamespace):
         }
         defaults.update(overrides)
         settings = Settings(data_dir=data_dir or tmp_path / "data", frontend_dist=tmp_path / "no-dist", **defaults)
-        engine, fetcher, gcs = FakeEngine(), FakeFetcher(media.a), FakeGcs()
+        engine, fetcher, gcs, index = FakeEngine(), FakeFetcher(media.a), FakeGcs(), FakeIndex()
         app = create_app(
             settings, analyzer=engine, fetcher=fetcher, engine_info_fn=lambda: ENGINE_INFO,
             token_verifier=verifier or FakeVerifier(), gcs_client_factory=lambda: gcs,
+            publisher_factory=lambda store: Publisher(store, index, bucket=BUCKET, gcs_client_factory=lambda: gcs,
+                                                      backoff_s=0),
         )
         client = TestClient(app)
         client.__enter__()
         clients.append(client)
-        return SimpleNamespace(client=client, engine=engine, fetcher=fetcher, gcs=gcs, settings=settings, app=app)
+        return SimpleNamespace(client=client, engine=engine, fetcher=fetcher, gcs=gcs, index=index,
+                               settings=settings, app=app)
 
     yield factory
     for c in clients:
@@ -834,10 +838,192 @@ def test_install_across_file_systems(cloud: SimpleNamespace, media: SimpleNamesp
     monkeypatch.setattr(storage_module.os, "replace", replace)
     _, track = upload_and_wait(cloud, media.a, "alice")
     d = cloud.settings.data_dir / "users" / "alice" / "tracks" / track["id"]
-    assert sorted(p.name for p in d.iterdir()) == ["analysis.json", "audio.mp3", "meta.json"]
+    assert sorted(p.name for p in d.iterdir()) == ["analysis.json", "audio.mp3", "meta.json", "track.json"]
     assert list(cloud.settings.work_dir.iterdir()) == []
     assert cloud.client.delete(f"/api/tracks/{track['id']}", headers=H("alice")).status_code == 204
     assert not d.exists()
+
+
+# --------------------------------------------------------------------------- publishing (app.publish)
+
+
+def sweep_threads() -> list[threading.Thread]:
+    return [t for t in threading.enumerate() if t.name == "chords-publish-sweep"]
+
+
+def wait_for(condition: Callable[[], Any], timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not condition():
+        assert time.monotonic() < deadline, "timed out"
+        time.sleep(0.02)
+
+
+def track_dir_of(env: SimpleNamespace, uid: str, track_id: str) -> Path:
+    return env.settings.data_dir / "users" / uid / "tracks" / track_id
+
+
+@needs_ffmpeg
+def test_publishes_after_every_change(cloud: SimpleNamespace, media: SimpleNamespace) -> None:
+    c, docs = cloud.client, cloud.index.docs
+    _, track = upload_and_wait(cloud, media.a, "alice")
+    tid = track["id"]
+    assert docs[("alice", tid)]["version"] == 1 and not docs[("alice", tid)]["edited"]
+    track_file = track_dir_of(cloud, "alice", tid) / "track.json"
+    assert json.loads(track_file.read_text())["version"] == 1
+
+    assert c.patch(f"/api/tracks/{tid}", json={"title": "Renamed"}, headers=H("alice")).status_code == 200
+    assert docs[("alice", tid)]["title"] == "Renamed" and docs[("alice", tid)]["version"] == 2
+    assert json.loads(track_file.read_text())["title"] == "Renamed"
+
+    edit = {"chords": [{"start": 0, "end": 2, "label": "G"}]}
+    assert c.patch(f"/api/tracks/{tid}", json=edit, headers=H("alice")).status_code == 200
+    assert docs[("alice", tid)]["edited"] and docs[("alice", tid)]["version"] == 3
+    assert c.patch(f"/api/tracks/{tid}", json={}, headers=H("alice")).status_code == 200
+    assert docs[("alice", tid)]["version"] == 3  # nothing changed, nothing published
+
+    assert c.post(f"/api/tracks/{tid}/reset", headers=H("alice")).status_code == 200
+    assert not docs[("alice", tid)]["edited"] and docs[("alice", tid)]["version"] == 4
+    assert c.post(f"/api/tracks/{tid}/reset", headers=H("alice")).status_code == 200
+    assert docs[("alice", tid)]["version"] == 4  # no edits left to reset
+
+    job = wait_job(c, c.post(f"/api/tracks/{tid}/reanalyze", headers=H("alice")).json()["id"], H("alice"))
+    assert job["status"] == "done"
+    assert docs[("alice", tid)]["version"] == 5
+
+    assert c.delete(f"/api/tracks/{tid}", headers=H("alice")).status_code == 204
+    assert ("alice", tid) not in docs and not track_dir_of(cloud, "alice", tid).exists()
+
+
+@needs_ffmpeg
+def test_other_users_are_published_separately(cloud: SimpleNamespace, media: SimpleNamespace) -> None:
+    _, a = upload_and_wait(cloud, media.a, "alice")
+    _, b = upload_and_wait(cloud, media.a, "bob")
+    assert set(cloud.index.docs) == {("alice", a["id"]), ("bob", b["id"])}
+    assert (track_dir_of(cloud, "bob", b["id"]) / "track.json").is_file()
+
+
+@needs_ffmpeg
+def test_already_analyzed_republishes_what_the_index_lacks(cloud: SimpleNamespace, media: SimpleNamespace) -> None:
+    _, track = upload_and_wait(cloud, media.a, "alice")
+    key, writes = ("alice", track["id"]), cloud.index.calls
+    upload_and_wait(cloud, media.a, "alice")  # dedup path, the index has the track: nothing to do
+    assert cloud.index.calls == writes
+
+    cloud.index.docs.clear()
+    upload_and_wait(cloud, media.a, "alice")  # self-heal: a track that predates publishing
+    assert key in cloud.index.docs and cloud.index.docs[key]["version"] == 1
+
+    cloud.index.docs.clear()  # the same through a client upload to Storage
+    path = cloud.gcs.put("users/alice/uploads/u1/a.mp3", Path(media.a).read_bytes())
+    res = cloud.client.post("/api/jobs/storage", json={"path": path}, headers=H("alice"))
+    assert wait_job(cloud.client, res.json()["id"], H("alice"))["trackId"] == track["id"]
+    assert key in cloud.index.docs
+
+
+@needs_ffmpeg
+def test_publish_off_switch(make_cloud, media: SimpleNamespace) -> None:
+    env = make_cloud(publish=False)
+    assert isinstance(env.app.state.publisher, NullPublisher)
+    wait_for(lambda: not sweep_threads())  # earlier tests' apps are shut down; this one started none
+    _, track = upload_and_wait(env, media.a, "alice")
+    assert env.client.patch(f"/api/tracks/{track['id']}", json={"title": "x"}, headers=H("alice")).status_code == 200
+    assert not env.index.docs and env.index.calls == 0
+    assert not (track_dir_of(env, "alice", track["id"]) / "track.json").exists()
+    assert env.client.delete(f"/api/tracks/{track['id']}", headers=H("alice")).status_code == 204
+    assert not track_dir_of(env, "alice", track["id"]).exists()
+
+
+@needs_ffmpeg
+def test_local_mode_publishes_nothing(make_cloud, media: SimpleNamespace) -> None:
+    env = make_cloud(cloud=False, allowed_hosts=("testserver",))
+    assert isinstance(env.app.state.publisher, NullPublisher)
+    wait_for(lambda: not sweep_threads())
+    job = wait_job(env.client, upload(env.client, media.a, {}).json()["id"], {})
+    d = env.settings.data_dir / "tracks" / job["trackId"]
+    assert env.client.delete(f"/api/tracks/{job['trackId']}").status_code == 204
+    assert not d.exists() and not env.index.docs and env.index.calls == 0
+
+
+@needs_ffmpeg
+def test_delete_works_while_the_index_is_down(cloud: SimpleNamespace, media: SimpleNamespace) -> None:
+    _, track = upload_and_wait(cloud, media.a, "alice")
+    tid = track["id"]
+    cloud.index.fail, cloud.index.retryable = 99, False
+    assert cloud.client.delete(f"/api/tracks/{tid}", headers=H("alice")).status_code == 204  # the user is not told
+    assert not track_dir_of(cloud, "alice", tid).exists()
+    pending = cloud.settings.data_dir / "users" / "alice" / "publish-pending.json"
+    assert json.loads(pending.read_text()) == {"ids": {tid: "unpublish"}}
+    cloud.index.fail = 0
+    assert cloud.app.state.publisher.sweep_pending() == 1
+    assert ("alice", tid) not in cloud.index.docs and not pending.exists()
+    assert_error(cloud.client.delete(f"/api/tracks/{tid}", headers=H("alice")), 404, "not_found")
+
+
+@needs_ffmpeg
+def test_failed_publish_is_queued_and_swept_at_startup(make_cloud, media: SimpleNamespace) -> None:
+    env = make_cloud()
+    env.index.fail, env.index.retryable = 99, False
+    _, track = upload_and_wait(env, media.a, "alice")  # the request succeeds, publishing does not
+    key = ("alice", track["id"])
+    pending = env.settings.data_dir / "users" / "alice" / "publish-pending.json"
+    assert key not in env.index.docs and json.loads(pending.read_text()) == {"ids": {track["id"]: "publish"}}
+    again = make_cloud(env.settings.data_dir)  # a restart: the sweep thread works through the queue
+    wait_for(lambda: key in again.index.docs and not pending.exists())
+
+
+def test_publisher_choice(tmp_path: Path) -> None:
+    def app_for(**overrides: Any) -> Any:
+        fields: dict[str, Any] = {"auth": "firebase", "upload_bucket": BUCKET, **overrides}
+        settings = Settings(data_dir=tmp_path / "data", frontend_dist=tmp_path / "no-dist", signing_key=SIGNING_KEY,
+                            scratch_dir=tmp_path / "scratch", **fields)
+        return create_app(settings, analyzer=FakeEngine(), token_verifier=FakeVerifier())
+
+    app = app_for()
+    assert isinstance(app.state.publisher, Publisher) and app.state.store.publisher is app.state.publisher
+    assert app.state.publisher.bucket_name == BUCKET
+    assert isinstance(app_for(publish=False).state.publisher, NullPublisher)
+    assert isinstance(app_for(upload_bucket="").state.publisher, NullPublisher)
+    assert isinstance(app_for(auth="off").state.publisher, NullPublisher)
+
+
+def test_pending_sweep_repeats_and_stops_with_the_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.main as main_module
+
+    class CountingPublisher:
+        calls = 0
+
+        def sweep_pending(self) -> int:
+            CountingPublisher.calls += 1
+            if CountingPublisher.calls == 2:
+                raise RuntimeError("a sweep that fails does not stop the loop")
+            return 0
+
+    monkeypatch.setattr(main_module, "PUBLISH_SWEEP_INTERVAL_S", 0.01)
+    settings = Settings(data_dir=tmp_path / "data", frontend_dist=tmp_path / "no-dist", auth="firebase",
+                        signing_key=SIGNING_KEY, scratch_dir=tmp_path / "scratch", upload_bucket=BUCKET)
+    app = create_app(settings, analyzer=FakeEngine(), token_verifier=FakeVerifier(),
+                     publisher_factory=lambda store: CountingPublisher())
+    wait_for(lambda: not sweep_threads())  # earlier tests' apps are shut down
+    with TestClient(app):
+        assert [t.daemon for t in sweep_threads()] == [True]
+        wait_for(lambda: CountingPublisher.calls >= 4)
+    wait_for(lambda: not sweep_threads())  # the app's shutdown ends the loop
+    stopped = CountingPublisher.calls
+    time.sleep(0.1)
+    assert CountingPublisher.calls == stopped
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [(None, True), ("", True), ("1", True), ("on", True), ("yes", True), ("0", False), ("false", False),
+     ("OFF", False), (" Off ", False)],
+)
+def test_chords_publish_switch(monkeypatch: pytest.MonkeyPatch, raw: Optional[str], expected: bool) -> None:
+    if raw is None:
+        monkeypatch.delenv("CHORDS_PUBLISH", raising=False)
+    else:
+        monkeypatch.setenv("CHORDS_PUBLISH", raw)
+    assert Settings.from_env().publish is expected
 
 
 # --------------------------------------------------------------------------- YouTube on servers

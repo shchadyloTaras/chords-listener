@@ -28,7 +28,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from app.engine import engine_info
 
 from .auth import AuthMiddleware, FirebaseTokenVerifier, MediaSigner
-from .gcs import UploadBucket
+from .firestore import FirestoreIndex
+from .gcs import UploadBucket, default_client
 from .jobs import Analyzer, JobManager, too_long_message
 from .models import (
     AnalysisOptions,
@@ -49,6 +50,7 @@ from .models import (
     VocalsRequest,
     normalize_origin,
 )
+from .publish import NullPublisher, Publisher
 from .sources import (
     SourceError,
     UrlFetcher,
@@ -64,6 +66,8 @@ from .storage import TrackNotFound, TrackStore
 from .users import current_uid
 
 log = logging.getLogger("chords.api")
+
+PUBLISH_SWEEP_INTERVAL_S = 600.0  # how often the pending publishes (publish-pending.json) are retried
 
 STATUS_BY_CODE: dict[str, int] = {
     "invalid_url": 400,
@@ -187,9 +191,12 @@ def create_app(
     token_verifier: Any = None,
     gcs_client_factory: Optional[Callable[[], Any]] = None,
     vocal_transcriber: Optional[Callable[..., dict]] = None,
+    publisher_factory: Optional[Callable[[TrackStore], Any]] = None,
 ) -> FastAPI:
     """``token_verifier`` (``.verify(token) -> uid``) and ``gcs_client_factory`` replace the Firebase token
-    check and the google-cloud-storage client (tests); ``vocal_transcriber`` replaces app.vocals.transcribe."""
+    check and the google-cloud-storage client (tests); ``vocal_transcriber`` replaces app.vocals.transcribe;
+    ``publisher_factory(store)`` replaces the ``Publisher`` that publishes track changes in cloud mode
+    (tests; ``CHORDS_PUBLISH`` off still wins)."""
     settings = settings or Settings.from_env()
     ensure_tool_path()
     if not logging.getLogger().handlers:
@@ -211,16 +218,39 @@ def create_app(
         else None
     )
     get_engine_info = engine_info_fn or engine_info
+    if not (settings.cloud and settings.publish):
+        publisher: Any = NullPublisher()
+    elif publisher_factory:
+        publisher = publisher_factory(store)
+    elif settings.upload_bucket:
+        publisher = Publisher(
+            store,
+            FirestoreIndex(settings.firebase_project),
+            bucket=settings.upload_bucket,
+            gcs_client_factory=gcs_client_factory or (lambda: default_client(settings.firebase_project)),
+        )
+    else:
+        log.warning("CHORDS_UPLOAD_BUCKET is not set: track changes are not published")
+        publisher = NullPublisher()
+    store.publisher = publisher
+    stop_background = threading.Event()  # set at shutdown: ends the sweep thread
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         store.init()
         log.info("data dir: %s (auth: %s)", settings.data_dir, settings.auth)
         if settings.cloud:
-            _start_cloud_background_tasks(preload_engine=analyzer is None, bucket=bucket, work_dir=settings.work_dir)
+            _start_cloud_background_tasks(
+                preload_engine=analyzer is None,
+                bucket=bucket,
+                work_dir=settings.work_dir,
+                publisher=None if isinstance(publisher, NullPublisher) else publisher,
+                stop=stop_background,
+            )
         try:
             yield
         finally:
+            stop_background.set()
             jobs.shutdown()
 
     app = FastAPI(
@@ -235,6 +265,7 @@ def create_app(
     app.state.store = store
     app.state.jobs = jobs
     app.state.bucket = bucket
+    app.state.publisher = publisher
 
     if settings.cloud:  # innermost: CORS (below) also decorates its 401 responses
         app.add_middleware(
@@ -291,9 +322,17 @@ def _warm_analysis(work_dir: Path) -> None:
         path.unlink(missing_ok=True)
 
 
-def _start_cloud_background_tasks(*, preload_engine: bool, bucket: Optional[UploadBucket], work_dir: Path) -> None:
+def _start_cloud_background_tasks(
+    *,
+    preload_engine: bool,
+    bucket: Optional[UploadBucket],
+    work_dir: Path,
+    publisher: Any,
+    stop: threading.Event,
+) -> None:
     """Cloud start-up: load the chord models (and run one tiny analysis) while the first request is still
-    on its way, and remove uploads abandoned by clients (older than a day)."""
+    on its way, remove uploads abandoned by clients (older than a day) and retry the publishes that failed
+    earlier (``publisher``, unless None: now, then every ``PUBLISH_SWEEP_INTERVAL_S`` until ``stop`` is set)."""
 
     def preload() -> None:
         try:
@@ -315,10 +354,21 @@ def _start_cloud_background_tasks(*, preload_engine: bool, bucket: Optional[Uplo
         except Exception as exc:  # pragma: no cover - best effort
             log.warning("stale upload sweep failed: %s", exc)
 
+    def sweep_publishes() -> None:
+        while True:
+            try:
+                publisher.sweep_pending()
+            except Exception:  # sweep_pending does not raise; the loop must outlive a surprise all the same
+                log.warning("pending publish sweep failed", exc_info=True)
+            if stop.wait(PUBLISH_SWEEP_INTERVAL_S):  # not time.sleep: the app's shutdown ends the wait
+                return
+
     if preload_engine:
         threading.Thread(target=preload, name="chords-preload", daemon=True).start()
     if bucket is not None:
         threading.Thread(target=sweep, name="chords-upload-sweep", daemon=True).start()
+    if publisher is not None:
+        threading.Thread(target=sweep_publishes, name="chords-publish-sweep", daemon=True).start()
 
 
 def _install_error_handlers(app: FastAPI) -> None:

@@ -16,9 +16,11 @@ import app.vocals as vocals_pkg
 from app.auth import AuthError
 from app.main import create_app
 from app.models import AnalysisResult, Settings
+from app.publish import Publisher
 from app.storage import read_json, write_json_atomic
 from app.users import user_context
 from app.vocals import VocalsError
+from tests.test_cloud import BUCKET, FakeGcs, FakeIndex
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
@@ -338,10 +340,18 @@ def H(uid: str) -> dict[str, str]:
 
 
 def test_cloud_per_user_signed_stems_and_quota(make_client, tmp_path: Path) -> None:
+    index, gcs = FakeIndex(), FakeGcs()
+
+    def publisher(store: Any) -> Publisher:
+        return Publisher(store, index, bucket=BUCKET, gcs_client_factory=lambda: gcs, backoff_s=0)
+
     c = make_client(auth="firebase", signing_key="test-signing-key-0123456789abcdef", quota_vocals=1,
-                    scratch_dir=tmp_path / "scratch", app_kw={"token_verifier": FakeVerifier()})
+                    scratch_dir=tmp_path / "scratch",
+                    app_kw={"token_verifier": FakeVerifier(), "publisher_factory": publisher})
     with user_context("alice"):
         install(c)
+    published = index.docs[("alice", TRACK_ID)]
+    assert published["vocals"] is False and published["version"] == 1
     assert_error(c.post(f"/api/tracks/{TRACK_ID}/vocals"), 401, "unauthorized")
     assert_error(c.post(f"/api/tracks/{TRACK_ID}/vocals", headers=H("bob")), 404, "not_found")  # not bob's
 
@@ -350,6 +360,9 @@ def test_cloud_per_user_signed_stems_and_quota(make_client, tmp_path: Path) -> N
     assert c.get(f"/api/jobs/{job['id']}", headers=H("bob")).status_code == 404
     stems_dir = tmp_path / "data" / "users" / "alice" / "tracks" / TRACK_ID / "stems"
     assert (stems_dir / "vocals.mp3").is_file()
+    published = index.docs[("alice", TRACK_ID)]  # the transcription is published like any other change
+    assert published["vocals"] is True and published["stems"] == ["vocals", "instruments"]
+    assert published["version"] == 2
 
     track = c.get(f"/api/tracks/{TRACK_ID}", headers=H("alice")).json()
     url = track["stemUrls"]["vocals"]
