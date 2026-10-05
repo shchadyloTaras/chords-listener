@@ -32,14 +32,14 @@ Decisions taken with the owner:
 
 ## 1. Model and UI
 
-- `Instrument = 'guitar' | 'bass' | 'ukulele' | 'piano' | 'harmonium' | 'handpan'` in `store.ts`, plus
-  one exported `INSTRUMENTS` constant in that order. It replaces the five copies of the list
-  (`Toolbar.tsx`, `NowPlaying.tsx`, `LiveChordsView.tsx`, `hotkeys.ts`, `syncedSettings.ts`); `I`
-  cycles in this order.
+- `Instrument = 'guitar' | 'bass' | 'ukulele' | 'piano' | 'harmonium' | 'handpan'` in `store.ts`; one
+  exported `INSTRUMENTS` constant in that order in a new `lib/instruments.ts`. It replaces the five
+  copies of the list (`Toolbar.tsx`, `NowPlaying.tsx`, `LiveChordsView.tsx`, `hotkeys.ts`,
+  `syncedSettings.ts`); `I` cycles in this order.
 - Labels: `chords.instrument.bass` «Бас» / "Bass", `chords.instrument.harmonium` «Фісгармонія» /
   "Harmonium".
-- Helpers in `store.ts` (or a small `lib/instruments.ts`): `isKeyboard(i)` (piano, harmonium),
-  `isFretted(i)` (guitar, bass, ukulele).
+- Helpers in `lib/instruments.ts`: `isKeyboard(i)` (piano, harmonium), `isFretted(i)` (guitar, bass,
+  ukulele), `hasCapo(i)` (guitar, ukulele), `nextInstrument(i)` (the `I` cycle).
 - New `components/chords/InstrumentPicker.tsx`, used by the now-playing hero and the live view:
   `Segmented` from the `sm` breakpoint (640 px) up; below it a `Menu` whose trigger shows the current
   instrument's name and a chevron, items checked like other menus. The toolbar settings panel keeps
@@ -67,9 +67,10 @@ It returns the chords-db `Voicing` shape (`frets` relative to `baseFret`, `finge
 Search (4 strings, frets 0–12):
 
 - **Tones.** The chord's pitch classes from `QUALITY_INTERVALS`; the bass is the slash bass, else the
-  root. When the tones (bass included) outnumber the strings available above the bass string, the
-  perfect fifth is dropped first (only for qualities whose fifth is perfect — never for `dim`, `aug`,
-  `dim7`, `hdim7`).
+  root. The perfect fifth (only for qualities whose fifth is perfect — never `dim`, `aug`, `dim7`,
+  `hdim7` — and never when it is the bass) is left out when the tones outnumber the strings from the
+  bass string up, and in a second pass when no shape at all holds every tone (e.g. `Fadd9`: no
+  4-fret position has F A C G).
 - **Bass note** on string E or A, lowest note of the shape; strings below it muted.
 - **Every higher string**: one chord tone or muted. Pitches strictly ascending in string order.
 - **Hand span**: fretted notes within 4 frets (max − min ≤ 3); open strings allowed.
@@ -131,8 +132,11 @@ Written first (red), in the repo's vitest layout:
   least one shape; the first shape is the lowest position.
 - `lib/sound/chordNotes.test.ts`: bass = arpeggio of the shown voicing (offsets ~110 ms, ascending);
   harmonium = the piano diagram's notes, near-simultaneous.
-- `lib/sound/synth.test.ts`: bass pluck pitch within ~1 cent for E1–G3; harmonium envelope length /
-  release and level bounds; both buses within the shared loudness window.
+- `lib/sound/synth.test.ts`: bass plucks finite, decaying and in tune (< 3 cents, like the existing
+  pluck test) for E1–G3; harmonium envelope (swell, tremolo depth, release, length) and reed spectrum.
+- Loudness: there is no `OfflineAudioContext` under vitest, so the bus levels are measured in the
+  dev page with `window.__chordSound.renderOffline` (a scripted console check, numbers recorded in the
+  commit message).
 - `lib/syncedSettings.test.ts` and `firestore.rules.test.mjs`: `bass` and `harmonium` accepted, an
   unknown instrument rejected.
 - Picker: menu below `sm`, segmented above; `I` cycles all six.
