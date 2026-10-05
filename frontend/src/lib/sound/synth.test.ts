@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { volumeGain } from './engine'
 import { handpanDecay, handpanPartials, handpanRelease } from './handpanTone'
+import { CELESTE_CENTS, HARMONIUM_RELEASE, HARMONIUM_STEP, harmoniumAttack, harmoniumEnvelope, reedAmplitude, reedWave } from './harmonium'
 import { inharmonicity, pianoEnvelope, pianoPartials } from './piano'
 import { allpassCoefficient, pluckParams, pluckRelease, renderPluck, type PluckInstrument } from './pluck'
 import { roomImpulse } from './reverb'
@@ -181,6 +182,46 @@ describe('handpan tone', () => {
       expect(handpanRelease(m)).toBeGreaterThanOrEqual(2.5)
       expect(handpanRelease(m)).toBeLessThanOrEqual(4)
     }
+  })
+})
+
+describe('harmonium reeds', () => {
+  it('have a dense, slightly nasal spectrum (odd harmonics a bit stronger)', () => {
+    const { real, imag } = reedWave()
+    expect(real.every((v) => v === 0)).toBe(true)
+    expect(imag[0]).toBe(0)
+    expect(imag.length).toBeGreaterThanOrEqual(20)
+    for (let n = 3; n < imag.length; n += 2) {
+      expect(reedAmplitude(n)).toBeGreaterThan(reedAmplitude(n - 1))
+      expect(reedAmplitude(n)).toBeGreaterThan(reedAmplitude(n + 1))
+    }
+    expect(reedAmplitude(10)).toBeGreaterThan(reedAmplitude(1) * 0.1) // still rich up top
+    expect(CELESTE_CENTS).toBeGreaterThan(0)
+  })
+
+  it('swell with the bellows, hold with a faint tremolo, then release', () => {
+    const hold = 2.6
+    const env = harmoniumEnvelope(60, hold)
+    const at = (t: number) => env[Math.round(t / HARMONIUM_STEP)]
+    expect(env.length).toBe(Math.ceil((hold + HARMONIUM_RELEASE) / HARMONIUM_STEP) + 1)
+    expect(env[0]).toBe(0)
+    expect(env[env.length - 1]).toBe(0)
+    const attack = harmoniumAttack(60)
+    expect(at(attack / 2)).toBeGreaterThan(0.2)
+    expect(at(attack / 2)).toBeLessThan(0.8)
+    // the hold: flat within the tremolo's ±2 %, and it does move
+    const held = Array.from(env.slice(Math.ceil((attack + 0.01) / HARMONIUM_STEP), Math.floor(hold / HARMONIUM_STEP)))
+    expect(Math.min(...held)).toBeGreaterThan(0.975)
+    expect(Math.max(...held)).toBeLessThan(1.025)
+    expect(Math.max(...held) - Math.min(...held)).toBeGreaterThan(0.02)
+    // released within HARMONIUM_RELEASE
+    expect(at(hold + HARMONIUM_RELEASE / 2)).toBeLessThan(0.6)
+  })
+
+  it('speak slower in the bass', () => {
+    expect(harmoniumAttack(36)).toBeCloseTo(0.08, 6)
+    expect(harmoniumAttack(72)).toBeCloseTo(0.04, 6)
+    expect(harmoniumAttack(48)).toBeGreaterThan(harmoniumAttack(60))
   })
 })
 
