@@ -43,7 +43,10 @@ vi.mock('../lib/api', () => ({
 }))
 
 import { recentServerJobs, rememberServerJob } from '../lib/cloud/activity'
+import { useConnection } from '../lib/serverMode'
 import { ensureJob, JOB_POLL_MS, syncServerJobs, useJobs } from './useJobs'
+
+const CLOUD_API = 'https://cloud.example/api'
 
 const running = (id = 'j1'): Job => ({
   id,
@@ -62,6 +65,7 @@ beforeEach(() => {
   vi.stubGlobal('document', doc)
   doc.hidden = false
   localStorage.clear()
+  useConnection.setState({ status: 'server', backend: 'cloud', apiBase: CLOUD_API })
   useJobs.setState({ jobs: {}, acknowledged: {}, uploads: [] })
   api.getJob.mockReset()
   api.listJobs.mockReset().mockResolvedValue([])
@@ -152,6 +156,39 @@ describe('syncServerJobs (page load, another server)', () => {
   it('keeps them when the server cannot be asked right now', async () => {
     rememberServerJob('j1')
     api.listJobs.mockRejectedValue({ code: 'network', message: 'offline' })
+    await syncServerJobs()
+    expect(recentServerJobs()).toEqual(['j1'])
+  })
+
+  it('keeps them when no server answered (the session came back too late: browser mode for now)', async () => {
+    rememberServerJob('j1')
+    useConnection.setState({ status: 'browser', backend: null, apiBase: null })
+    // browser mode: the listing holds this browser's jobs only
+    api.listJobs.mockResolvedValue([])
+    await syncServerJobs()
+    expect(recentServerJobs()).toEqual(['j1'])
+    // the cloud is selected later: the running job is picked up then
+    api.listJobs.mockResolvedValue([running('j1')])
+    useConnection.setState({ status: 'server', backend: 'cloud', apiBase: CLOUD_API })
+    await vi.waitFor(() => expect(useJobs.getState().jobs.j1?.status).toBe('analyzing'))
+  })
+
+  it('keeps a job started while the listing was on its way (it cannot be in it)', async () => {
+    rememberServerJob('j1')
+    api.listJobs.mockImplementation(async () => {
+      rememberServerJob('j3')
+      return [running('j1')]
+    })
+    await syncServerJobs()
+    expect(recentServerJobs()).toEqual(['j1', 'j3'])
+  })
+
+  it('keeps them when another server answers meanwhile', async () => {
+    rememberServerJob('j1')
+    api.listJobs.mockImplementationOnce(async () => {
+      useConnection.setState({ apiBase: 'http://localhost:8765/api', backend: 'local' })
+      return []
+    })
     await syncServerJobs()
     expect(recentServerJobs()).toEqual(['j1'])
   })

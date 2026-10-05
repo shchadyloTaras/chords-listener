@@ -3,7 +3,7 @@ import * as api from '../lib/api'
 import { toApiError, type JobOptions, type UploadMeta } from '../lib/api'
 import { forgetServerJob, recentServerJobs } from '../lib/cloud/activity'
 import { isLocalId } from '../lib/local'
-import { useConnection } from '../lib/serverMode'
+import { useConnection, whenSettled } from '../lib/serverMode'
 import { t } from '../i18n'
 import { useApp } from '../store'
 import type { Job, JobStatus } from '../types'
@@ -186,11 +186,18 @@ export function syncServerJobs(): Promise<void> {
 
 async function doSyncServerJobs(): Promise<void> {
   try {
+    const conn = await whenSettled()
+    // what the listing can tell about: a job started after the request went out is not in it
+    const remembered = recentServerJobs()
     const jobs = await api.listJobs()
     const running = jobs.filter(isActiveJob)
-    // the ones that are over (or unknown to this server) need no looking for after the next reload
-    const runningIds = new Set(running.map((j) => j.id))
-    for (const id of recentServerJobs()) if (!runningIds.has(id)) forgetServerJob(id)
+    // the ones that are over (or unknown to this server) need no looking for after the next reload — only when
+    // a server answered (not browser mode while the session is still being restored) and is still the one
+    const now = useConnection.getState()
+    if (conn.status === 'server' && now.status === 'server' && now.apiBase === conn.apiBase) {
+      const runningIds = new Set(running.map((j) => j.id))
+      for (const id of remembered) if (!runningIds.has(id)) forgetServerJob(id)
+    }
     if (!running.length) return
     useJobs.setState((s) => {
       const next = { ...s.jobs }
