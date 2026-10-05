@@ -8,6 +8,7 @@ import { AudioWaveform, Crosshair, FileMusic, Minus, Plus, RotateCcw, Rows3, Sli
 import { useT } from '../../i18n'
 import { chordTone } from '../../lib/music/color'
 import { formatTranspose } from '../../lib/music/key'
+import { INSTRUMENTS, isKeyboard, liveKeysInstrument } from '../../lib/instruments'
 import { nextRealChord } from '../../lib/music/display'
 import { playTestSound } from '../../lib/sound'
 import { useApp, type Accidentals, type ChordView, type Instrument } from '../../store'
@@ -239,7 +240,7 @@ function SettingsMenu() {
               label={t('chords.instrument')}
               value={instrument}
               onChange={(v) => setSetting('instrument', v)}
-              options={(['guitar', 'ukulele', 'piano', 'handpan'] as const).map((v) => ({ value: v, label: t(`chords.instrument.${v}`) }))}
+              options={INSTRUMENTS.map((v) => ({ value: v, label: t(`chords.instrument.${v}`) }))}
               className="flex-wrap"
             />
           </Row>
@@ -275,17 +276,17 @@ function SettingsMenu() {
   )
 }
 
-/** Live piano under the hero (piano only); turning it on also picks the piano. */
+/** Live piano under the hero (keyboards only); turning it on picks the piano unless a keyboard is chosen. */
 function LiveKeysSwitch() {
   const t = useT()
-  const on = useApp((s) => s.liveKeys && s.instrument === 'piano')
+  const on = useApp((s) => s.liveKeys && isKeyboard(s.instrument))
   const setSetting = useApp((s) => s.setSetting)
   return (
     <Switch
       checked={on}
       onChange={(v) => {
         setSetting('liveKeys', v)
-        if (v) setSetting('instrument', 'piano')
+        if (v) setSetting('instrument', liveKeysInstrument(useApp.getState().instrument))
       }}
       label={t('keys.settings.toggle')}
       hint={t('keys.settings.hint')}

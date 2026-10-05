@@ -64,7 +64,7 @@ export interface Settings {
   /** clicking a chord plays its sound (explicit play buttons always play) */
   chordSound: boolean
   chordSoundVolume: number // 0..1
-  /** live piano (transcribed notes lighting the keys) shown under the hero when the instrument is piano */
+  /** live piano (transcribed notes lighting the keys) shown under the hero when the instrument is a keyboard (piano, harmonium) */
   liveKeys: boolean
   /** manual audio/visual sync correction for the live piano, ms (positive = keys light later) */
   syncOffsetMs: number

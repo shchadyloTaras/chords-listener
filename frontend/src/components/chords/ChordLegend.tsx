@@ -6,6 +6,7 @@ import { memo } from 'react'
 import clsx from 'clsx'
 import { Check, Copy } from 'lucide-react'
 import { useT } from '../../i18n'
+import { isKeyboard } from '../../lib/instruments'
 import { chordTone } from '../../lib/music/color'
 import type { UniqueChord } from '../../lib/music/display'
 import { clickChordSound } from '../../lib/sound'
@@ -32,7 +33,7 @@ export const ChordLegend = memo(function ChordLegend() {
         className={clsx(
           'grid gap-2',
           showDiagrams
-            ? instrument === 'piano'
+            ? isKeyboard(instrument)
               ? 'grid-cols-[repeat(auto-fill,minmax(150px,1fr))]'
               : 'grid-cols-[repeat(auto-fill,minmax(112px,1fr))]'
             : 'grid-cols-[repeat(auto-fill,minmax(104px,1fr))]',

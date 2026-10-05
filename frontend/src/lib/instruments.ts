@@ -3,6 +3,7 @@
 
 import type { Instrument } from '../store'
 import type { FretInstrument } from './diagrams/chordsDb'
+import type { CapoInstrument } from './music/capo'
 
 export const INSTRUMENTS: readonly Instrument[] = ['guitar', 'bass', 'ukulele', 'piano', 'harmonium', 'handpan']
 
@@ -19,4 +20,19 @@ export function isFretted(i: Instrument): i is FretInstrument {
 /** What a key of a keyboard diagram sounds like: the harmonium when it is the instrument, else the piano. */
 export function keyInstrument(i: Instrument | undefined): 'piano' | 'harmonium' {
   return i === 'harmonium' ? 'harmonium' : 'piano'
+}
+
+/** Instruments a capo suggestion makes sense for. */
+export function hasCapo(i: Instrument): i is CapoInstrument {
+  return i === 'guitar' || i === 'ukulele'
+}
+
+/** The instrument after `i` in the I-key cycle. */
+export function nextInstrument(i: Instrument): Instrument {
+  return INSTRUMENTS[(INSTRUMENTS.indexOf(i) + 1) % INSTRUMENTS.length]
+}
+
+/** The instrument once the live keys are turned on: the chosen keyboard, else the piano. */
+export function liveKeysInstrument(i: Instrument): Instrument {
+  return isKeyboard(i) ? i : 'piano'
 }

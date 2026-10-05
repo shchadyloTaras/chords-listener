@@ -4,6 +4,7 @@ import { createContext, useContext, useMemo } from 'react'
 import { useApp } from '../../store'
 import type { Track } from '../../types'
 import { buildBarGrid, fillBars, type Bar } from '../../lib/music/bars'
+import { hasCapo } from '../../lib/instruments'
 import { suggestCapo, type CapoSuggestion } from '../../lib/music/capo'
 import { buildDisplayChords, uniqueChords, type DisplayChord, type UniqueChord } from '../../lib/music/display'
 import type { ExportInput } from '../../lib/music/formats'
@@ -62,7 +63,7 @@ export function useBuildChordModel(track: Track): ChordModel {
   const unique = useMemo(() => uniqueChords(chords), [chords])
   const capo = useMemo(
     () =>
-      instrument === 'guitar' || instrument === 'ukulele'
+      hasCapo(instrument)
         ? suggestCapo(
             unique.map((u) => ({ label: u.label, weight: u.count })),
             instrument,

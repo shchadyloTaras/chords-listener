@@ -3,15 +3,14 @@
 
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { t } from '../../i18n'
+import { nextInstrument } from '../../lib/instruments'
 import { barIndexAt } from '../../lib/music/bars'
 import { playHotkeyChord } from '../../lib/sound'
-import { useApp, type Instrument } from '../../store'
+import { useApp } from '../../store'
 import { getClockTime } from './clock'
 import type { ChordModel } from './model'
 import { selectionRange, useChordUi } from './uiStore'
 import { copyAll } from './useCopy'
-
-const INSTRUMENTS: Instrument[] = ['guitar', 'ukulele', 'piano', 'handpan']
 
 export function isTypingTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null
@@ -104,7 +103,7 @@ export function useChordHotkeys(model: ChordModel): void {
           toggleLoop(ref.current)
           break
         case 'KeyI': {
-          const next = INSTRUMENTS[(INSTRUMENTS.indexOf(app.instrument) + 1) % INSTRUMENTS.length]
+          const next = nextInstrument(app.instrument)
           app.setSetting('instrument', next)
           app.toast(t(`chords.instrument.${next}`), 'info')
           break
