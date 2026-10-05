@@ -8,8 +8,9 @@
 // The signed-in user's cloud library is read without waking the cloud API while the live library answers
 // (docs/CLOUD.md "Library in Firestore"): the list from the Firestore index (lib/cloud/library), track data,
 // notes and vocal notes from Storage (lib/cloud/files), each kept on the device (lib/cloud/cache) and used
-// while its version is the index's; the audio streams through download-token URLs. Any gap — the index not
-// there or failed, a file missing or unreadable — takes the API path below, as it was before the index:
+// while its version and createdAt are the index's; the audio streams through download-token URLs (one that
+// Storage refuses gets the track read once more, see healedTrack). Any gap — the index not there or failed, a
+// file missing or unreadable — takes the API path below, as it was before the index:
 // the list, opened tracks, their audio and notes are kept on the device and served from there for a while,
 // kept in step with edits, deletes and finished jobs; a track deleted here never comes back from it
 // (lib/cloud/deleted). Nothing is kept or read this way for a local server or a guest.
@@ -262,6 +263,13 @@ interface LiveLibrary {
   versions: Record<string, number>
 }
 
+/** Track `id` as the live library publishes it (what a copy kept here must match); undefined: not in the index. */
+function publishedOf(live: LiveLibrary, id: string): cache.Published | undefined {
+  const version = live.versions[id]
+  const createdAt = live.tracks.find((t) => t.id === id)?.createdAt
+  return version === undefined || createdAt === undefined ? undefined : { version, createdAt }
+}
+
 /** The live library as it answers for `uid` right now: followed for them, listed, no failure. Else null. */
 function liveNow(uid: string): LiveLibrary | null {
   const s = useLibrary.getState()
@@ -274,25 +282,40 @@ function liveStarting(uid: string): boolean {
   return s.uid === uid && s.tracks === null && !s.error
 }
 
-/** Resolves once the live library of `uid` has answered, failed or stopped — at the latest after libraryWait.ms. */
-function liveAnswered(uid: string): Promise<void> {
-  if (!liveStarting(uid)) return Promise.resolve()
+/**
+ * The live library's state when its first answer did not come within libraryWait.ms (offline, Firestore
+ * unreachable while the API is not): while it stays that state, reads take the API path at once instead of
+ * waiting again each time. An answer, a failure, a stop or a new start (also another account) is a new state.
+ */
+let unanswered: object | null = null
+
+/**
+ * Resolves once the live library of `uid` has answered, failed or stopped — at the latest after libraryWait.ms,
+ * at once when it did not answer in time before, or when `signal` aborts.
+ */
+function liveAnswered(uid: string, signal?: AbortSignal): Promise<void> {
+  if (!liveStarting(uid) || useLibrary.getState() === unanswered || signal?.aborted) return Promise.resolve()
   return new Promise((resolve) => {
     const done = () => {
       clearTimeout(timer)
       unsubscribe()
+      signal?.removeEventListener('abort', done)
       resolve()
     }
-    const timer = setTimeout(done, libraryWait.ms)
+    const timer = setTimeout(() => {
+      unanswered = useLibrary.getState()
+      done()
+    }, libraryWait.ms)
     const unsubscribe = useLibrary.subscribe(() => {
       if (!liveStarting(uid)) done()
     })
+    signal?.addEventListener('abort', done)
   })
 }
 
 /** The live library of `uid`, its first answer waited for when on its way. Null: the API path (TTLs, tombstones). */
-async function liveLibrary(uid: string): Promise<LiveLibrary | null> {
-  await liveAnswered(uid)
+async function liveLibrary(uid: string, signal?: AbortSignal): Promise<LiveLibrary | null> {
+  await liveAnswered(uid, signal)
   return liveNow(uid)
 }
 
@@ -316,13 +339,13 @@ async function liveList(uid: string): Promise<TrackSummary[] | null> {
 }
 
 /**
- * A cloud track while the live library answers (`version`: the index's for it): the copy kept here at that
- * version, else track.json from Storage (kept with its version), else the API. Not in the index — brand new
+ * A cloud track while the live library answers (`at`: the index's version and createdAt for it): the copy kept
+ * here at that, else track.json from Storage (kept with its version), else the API. Not in the index — brand new
  * (not published yet) or deleted — the API says which.
  */
-async function publishedTrack(uid: string, id: string, version: number | undefined, signal?: AbortSignal): Promise<Track> {
-  if (version === undefined) return askTrack(uid, id, signal)
-  const kept = await cache.cachedTrackAt(uid, id, version)
+async function publishedTrack(uid: string, id: string, at: cache.Published | undefined, signal?: AbortSignal): Promise<Track> {
+  if (!at) return askTrack(uid, id, signal)
+  const kept = await cache.cachedTrackAt(uid, id, at)
   if (kept) return withServerUrls(kept)
   const file = await readTrackFile(uid, id).catch(() => null)
   throwIfAborted(signal)
@@ -331,15 +354,23 @@ async function publishedTrack(uid: string, id: string, version: number | undefin
 
 /**
  * Live-piano notes ('notes') or vocal notes ('vocals') of a cloud track while the live library answers for `uid`:
- * the copy kept here at the track's version, else notes.json / vocals.json from Storage, else `ask` (the API) —
- * what is found is kept at that version. Null: not computed yet; that is never kept, so notes saved later (also
- * on another device: PUT /notes leaves the version as it is) show on the next open. Undefined: the live library
- * does not answer for this track — the caller's API path.
+ * the copy kept here at the track's version and createdAt, else notes.json / vocals.json from Storage, else `ask`
+ * (the API) — what is found is kept at those. Null: not computed yet; that is never kept, so notes saved later
+ * (also on another device: PUT /notes leaves the version as it is) show on the next open. Undefined: the live
+ * library does not answer for this track — the caller's API path.
  */
-export async function publishedJson<T>(uid: string, kind: cache.JsonKind, id: string, ask: () => Promise<T | null>): Promise<T | null | undefined> {
-  const version = (await liveLibrary(uid))?.versions[id]
-  if (version === undefined) return undefined
-  const kept = await cache.cachedJsonAt<T>(uid, kind, id, version)
+export async function publishedJson<T>(
+  uid: string,
+  kind: cache.JsonKind,
+  id: string,
+  ask: () => Promise<T | null>,
+  signal?: AbortSignal,
+): Promise<T | null | undefined> {
+  const live = await liveLibrary(uid, signal)
+  throwIfAborted(signal)
+  const at = live ? publishedOf(live, id) : undefined
+  if (!at) return undefined
+  const kept = await cache.cachedJsonAt<T>(uid, kind, id, at)
   if (kept !== null) return kept
   let value: T | null
   try {
@@ -347,8 +378,65 @@ export async function publishedJson<T>(uid: string, kind: cache.JsonKind, id: st
   } catch {
     value = await ask()
   }
-  if (value !== null && stillKeeping(uid)) await cache.saveJson(uid, kind, id, value, version)
+  if (value !== null && stillKeeping(uid)) await cache.saveJson(uid, kind, id, value, at)
   return value
+}
+
+// ------------------------------------------------------------------ token URLs Storage refuses
+
+/** What each cloud track was healed to this session (healedTrack), for `uid`. */
+let healing: { uid: string; tracks: Map<string, Promise<Track | null>> } = { uid: '', tracks: new Map() }
+
+/** Tests: forget which tracks were healed this session. */
+export function resetMediaHealing(): void {
+  healing = { uid: '', tracks: new Map() }
+}
+
+const isStorageUrl = (href: string) => href.startsWith(`${STORAGE_DOWNLOAD_ORIGIN}/`)
+
+/**
+ * Storage refused `failedUrl`, a download-token URL of cloud track `id` (403/404): its objects were made again
+ * with new tokens (the track deleted and added again, re-published without a new version) or a token was
+ * revoked. What is kept of the track is forgotten and track.json read once more; when that brings nothing new
+ * (missing, unreadable, or still `failedUrl`), the API's track. Once per track per session: every later refusal
+ * (its audio, a stem, another open) gets this same answer, and nothing is read or asked again — no loops.
+ * Null: nothing came of it.
+ */
+function healedTrack(uid: string, id: string, failedUrl: string): Promise<Track | null> {
+  if (healing.uid !== uid) healing = { uid, tracks: new Map() }
+  let healed = healing.tracks.get(id)
+  if (!healed) {
+    healed = heal(uid, id, failedUrl).catch(() => null)
+    healing.tracks.set(id, healed)
+  }
+  return healed
+}
+
+async function heal(uid: string, id: string, failedUrl: string): Promise<Track | null> {
+  await cache.forgetTrack(uid, id, ['track'])
+  const file = await readTrackFile(uid, id).catch(() => null)
+  const track = file ? trackFromFile(file) : null
+  const urls = track ? [track.audioUrl, ...Object.values(track.stemUrls ?? {})] : []
+  return track && !urls.includes(failedUrl) ? keepTrack(uid, track) : askTrack(uid, id)
+}
+
+/**
+ * The response for `url`, a media file of cloud track `id` (its audio, or a stem: `pick` finds that file's URL
+ * in a track). A download-token URL Storage refuses is tried once more, with the healed track's (healedTrack).
+ */
+async function trackMedia(
+  uid: string | null,
+  id: string,
+  url: string,
+  pick: (t: Track) => string | null | undefined,
+  signal?: AbortSignal,
+): Promise<Response> {
+  const res = await mediaResponse(url, signal)
+  if (!uid || (res.status !== 403 && res.status !== 404) || !isStorageUrl(url)) return res
+  const healed = await healedTrack(uid, id, url)
+  throwIfAborted(signal)
+  const next = healed ? pick(healed) : null
+  return next && next !== url ? mediaResponse(next, signal) : res
 }
 
 // ------------------------------------------------------------------ requests
@@ -540,9 +628,9 @@ export async function listCachedTracks(): Promise<TrackSummary[] | null> {
 export async function getTrack(id: string, signal?: AbortSignal): Promise<Track> {
   if (isLocalId(id)) return local(() => getLocalTrack(id))
   const uid = cloudCacheUid(await whenSettled())
-  const live = uid ? await liveLibrary(uid) : null
+  const live = uid ? await liveLibrary(uid, signal) : null
   throwIfAborted(signal)
-  if (uid && live) return publishedTrack(uid, id, live.versions[id], signal)
+  if (uid && live) return publishedTrack(uid, id, publishedOf(live, id), signal)
   const kept = uid && !isDeleted(uid, id) ? await cache.cachedTrack(uid, id) : null
   if (kept) return withServerUrls(kept)
   return askTrack(uid, id, signal)
@@ -629,7 +717,7 @@ export async function getTrackNotes(id: string, signal?: AbortSignal): Promise<T
       throw e
     }
   }
-  const published = uid ? await publishedJson(uid, 'notes', id, ask) : undefined
+  const published = uid ? await publishedJson(uid, 'notes', id, ask, signal) : undefined
   if (published !== undefined) return published
   const kept = uid ? await cache.cachedJson<TrackNotes>(uid, 'notes', id) : null
   if (kept) return kept
@@ -644,7 +732,9 @@ export async function saveTrackNotes(id: string, notes: TrackNotes): Promise<voi
   const uid = cloudCacheUid()
   await request<unknown>(`/tracks/${enc(id)}/notes`, { method: 'PUT', body: JSON.stringify(notes) })
   // PUT /notes leaves the track's version as it is: kept at the live library's, they stay valid
-  if (stillKeeping(uid)) await cache.saveJson(uid, 'notes', id, notes, liveNow(uid)?.versions[id])
+  if (!stillKeeping(uid)) return
+  const live = liveNow(uid)
+  await cache.saveJson(uid, 'notes', id, notes, live ? publishedOf(live, id) : undefined)
 }
 
 async function mediaResponse(url: string, signal?: AbortSignal): Promise<Response> {
@@ -657,7 +747,7 @@ async function mediaResponse(url: string, signal?: AbortSignal): Promise<Respons
   } catch (err) {
     const e = toApiError(err)
     // Storage unreachable (offline, no CORS) says nothing about the API server: asking it would wake the cloud
-    if (e.code === 'network' && !href.startsWith(`${STORAGE_DOWNLOAD_ORIGIN}/`)) noteServerTrouble()
+    if (e.code === 'network' && !isStorageUrl(href)) noteServerTrouble()
     throw e
   }
 }
@@ -671,15 +761,20 @@ async function mediaBlob(res: Response): Promise<Blob> {
   }
 }
 
-/** A media file of a server (e.g. a cloud stem by its signed URL), downloaded whole and not kept. */
-export async function fetchMedia(url: string, signal?: AbortSignal): Promise<Blob> {
-  return mediaBlob(await mediaResponse(url, signal))
+/**
+ * A media file of a server (e.g. a cloud stem by its signed URL), downloaded whole and not kept. `stemOf`: the
+ * track and stem it is — a download-token URL Storage refuses is then healed (see trackMedia).
+ */
+export async function fetchMedia(url: string, signal?: AbortSignal, stemOf?: { trackId: string; stem: string }): Promise<Blob> {
+  if (!stemOf) return mediaBlob(await mediaResponse(url, signal))
+  return mediaBlob(await trackMedia(cloudCacheUid(), stemOf.trackId, url, (t) => t.stemUrls?.[stemOf.stem], signal))
 }
 
 /**
  * The whole audio file of a track, for analysis in the page (the stored Blob for browser tracks). A cloud track's
  * comes from this device when kept there, and what is downloaded is kept (lib/cloud/cache). A signed URL the cloud
- * refuses (401: it ran out) gets the track asked again once, for a fresh one.
+ * refuses (401: it ran out) gets the track asked again once, for a fresh one; a token URL Storage refuses, see
+ * trackMedia.
  */
 export async function fetchTrackAudio(track: Pick<Track, 'id' | 'audioUrl'>, signal?: AbortSignal): Promise<Blob> {
   if (isLocalId(track.id)) return local(() => localAudio(track.id))
@@ -687,7 +782,7 @@ export async function fetchTrackAudio(track: Pick<Track, 'id' | 'audioUrl'>, sig
   const kept = uid ? await cache.cachedAudio(uid, track.id) : null
   if (kept) return kept
   if (!track.audioUrl) throw new ApiError('This track has no audio', 'not_found', 404)
-  let res = await mediaResponse(track.audioUrl, signal)
+  let res = await trackMedia(uid, track.id, track.audioUrl, (t) => t.audioUrl, signal)
   if (res.status === 401 && uid) {
     await cache.forgetTrack(uid, track.id, ['track'])
     const fresh = await getTrack(track.id, signal)

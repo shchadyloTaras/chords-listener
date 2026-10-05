@@ -8,13 +8,13 @@
 //               paint, or as GET /tracks sent it, asked again after LIST_TTL_MS; each list the server sends
 //               drops what is kept of tracks it no longer lists or lists changed
 //  · "tracks" — key `${uid}|${id}`: the track — as track.json in Storage has it (lib/cloud/files: with its
-//               `version` and token URLs), valid while that version is the live library's; or as GET
-//               /tracks/{id} sent it (signed media URLs, no version), for TRACK_TTL_MS
+//               `version`, `createdAt` and token URLs), valid while both are the live library's (Published); or
+//               as GET /tracks/{id} sent it (signed media URLs, no version), for TRACK_TTL_MS
 //  · "audio"  — key `${uid}|${id}`: the audio file, least recently played evicted over AUDIO_BUDGET_BYTES
-//  · "json"   — key `${uid}|${kind}|${id}`: live-piano notes and vocal notes, with the track's version they
-//               were found at when the live library gave one
-// Rows are `{ key, value, savedAt, size?, version? }`. Nothing here throws: without IndexedDB (or with a broken
-// one) every read is null and every write does nothing.
+//  · "json"   — key `${uid}|${kind}|${id}`: live-piano notes and vocal notes, with the track's version and
+//               createdAt they were found at when the live library gave them
+// Rows are `{ key, value, savedAt, size?, version?, createdAt? }`. Nothing here throws: without IndexedDB (or
+// with a broken one) every read is null and every write does nothing.
 import type { Track, TrackSummary } from '../../types'
 import { clearDeleted } from './deleted'
 
@@ -40,6 +40,16 @@ export function isFresh(savedAt: number, ttl: number): boolean {
 }
 
 export type JsonKind = 'notes' | 'vocals'
+
+/**
+ * A track as the live library publishes it: its version, and its createdAt — a track deleted and added again
+ * (ids come from the content) starts at version 1 again, with new media tokens; only createdAt tells the two apart.
+ */
+export interface Published {
+  version: number
+  createdAt: string
+}
+
 /** What `forgetTrack` can drop: the track's JSON, audio, notes, vocal notes, its entry in the list. */
 export type TrackPart = 'track' | 'audio' | 'notes' | 'vocals' | 'listed'
 
@@ -61,6 +71,8 @@ interface Row<T> {
   size?: number
   /** json rows: the track's published version they are valid at (none: found without the live library) */
   version?: number
+  /** json rows: the track's createdAt that goes with `version` */
+  createdAt?: string
 }
 
 /** A stored audio file: a Blob, or its bytes where the browser cannot keep Blobs in IndexedDB (older WebKit). */
@@ -319,16 +331,16 @@ export function cachedTrack(uid: string, id: string): Promise<Track | null> {
 }
 
 /**
- * The track kept for `uid` as track.json had it at `version` (the live library's for it), whatever its age: its
- * token URLs do not run out, and the version says whether it is current. Null otherwise — also for a track the
- * API sent (no version).
+ * The track kept for `uid` as track.json had it at `at` (the live library's version and createdAt for it),
+ * whatever its age: its token URLs do not run out, and `at` says whether it is current. Null otherwise — also
+ * for a track the API sent (no version).
  */
-export function cachedTrackAt(uid: string, id: string, version: number): Promise<Track | null> {
+export function cachedTrackAt(uid: string, id: string, at: Published): Promise<Track | null> {
   return safely(
     () =>
       transact([TRACKS], 'readonly', async (tx) => {
         const row = await getRow<Track>(tx.objectStore(TRACKS), trackKey(uid, id))
-        return row && row.value.version === version ? row.value : null
+        return row && row.value.version === at.version && row.value.createdAt === at.createdAt ? row.value : null
       }),
     null,
   )
@@ -469,21 +481,21 @@ export function cachedJson<T>(uid: string, kind: JsonKind, id: string): Promise<
   )
 }
 
-/** Notes or vocal notes kept for `uid` at the track's `version` (the live library's for it); else null. */
-export function cachedJsonAt<T>(uid: string, kind: JsonKind, id: string, version: number): Promise<T | null> {
+/** Notes or vocal notes kept for `uid` at `at` (the live library's version and createdAt of the track); else null. */
+export function cachedJsonAt<T>(uid: string, kind: JsonKind, id: string, at: Published): Promise<T | null> {
   return safely(
     () =>
       transact([JSON_STORE], 'readonly', async (tx) => {
         const row = await getRow<T>(tx.objectStore(JSON_STORE), jsonKey(uid, kind, id))
-        return row && row.version === version ? row.value : null
+        return row && row.version === at.version && row.createdAt === at.createdAt ? row.value : null
       }),
     null,
   )
 }
 
-/** Keeps notes or vocal notes; `version`: the track's published version they are valid at, when known. */
-export function saveJson<T>(uid: string, kind: JsonKind, id: string, value: T, version?: number): Promise<void> {
-  const row: Row<T> = { key: jsonKey(uid, kind, id), value, savedAt: Date.now(), ...(version === undefined ? {} : { version }) }
+/** Keeps notes or vocal notes; `at`: the track as published when they were found (valid while it is), when known. */
+export function saveJson<T>(uid: string, kind: JsonKind, id: string, value: T, at?: Published): Promise<void> {
+  const row: Row<T> = { key: jsonKey(uid, kind, id), value, savedAt: Date.now(), ...(at && { version: at.version, createdAt: at.createdAt }) }
   return safely(
     () =>
       transact([JSON_STORE], 'readwrite', async (tx) => {

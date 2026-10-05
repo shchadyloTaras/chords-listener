@@ -96,10 +96,13 @@ export function useStems(track: (Pick<Track, 'id'> & Partial<Pick<Track, 'stems'
   return [...known].sort()
 }
 
-/** Downloads a stem's audio: a signed URL from the track when the server gives one, else the API path. */
+/**
+ * Downloads a stem's audio: the URL the track has for it (signed by the API, or a download token from track.json:
+ * one Storage refuses is healed, see lib/api fetchMedia), else the API path.
+ */
 export async function fetchStem(track: Pick<Track, 'id'> & { stemUrls?: Partial<Record<StemName, string>> | null }, name: StemName, signal?: AbortSignal): Promise<Blob> {
   const signed = track.stemUrls?.[name]
-  if (signed) return fetchMedia(signed, signal)
+  if (signed) return fetchMedia(signed, signal, { trackId: track.id, stem: name })
   const res = await apiFetch(`/tracks/${encodeURIComponent(track.id)}/stems/${name}`, { signal })
   if (!res.ok) {
     let detail = res.statusText || `HTTP ${res.status}`

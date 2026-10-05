@@ -32,7 +32,8 @@ rules_version = '2';
 // Fields (written only by the API's service account, which bypasses these rules; clients never write):
 //   - the TrackSummary fields of GET /api/tracks: id, title, artist, duration, thumbnail, source, key,
 //       tempo, chordCount, edited, vocals, stems, createdAt (ISO string)
-//   - version: int - grows with every change of the track; a copy kept on a device is valid while equal
+//   - version: int - grows with every change of the track; a copy kept on a device is valid while it and
+//       createdAt are equal (a track deleted and added again starts at version 1 again)
 //   - publishedAt: timestamp
 //   The fields are not validated here: nobody but the service account can write them.
 //
