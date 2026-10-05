@@ -67,6 +67,16 @@ def _transient(exc: BaseException) -> bool:
     return False
 
 
+def _listing(what: str, list_fn: Callable[[], Any]) -> list[Any]:
+    """A directory listing that cannot fail the caller: on the bucket mount an outage shows up as an OSError
+    (EIO ...) from glob / iterdir / is_dir; the listing is then empty and the next run tries again."""
+    try:
+        return list(list_fn())
+    except OSError as exc:
+        log.warning("could not list %s: %s", what, exc)
+        return []
+
+
 def _read_pending(path: Path) -> dict[str, str]:
     try:
         ids = read_json(path).get("ids")
@@ -124,8 +134,9 @@ class Publisher:
         """Try every queued entry of every user once; returns how many are done now. An entry is settled by
         the track's state on disk (``publish`` removes the document of a track that is gone), so a stale
         "unpublish" cannot take down a track that exists again."""
+        users_dir = self.store.settings.users_dir
         done = 0
-        for path in sorted(self.store.settings.users_dir.glob(f"*/{PENDING_FILE}")):
+        for path in _listing(PENDING_FILE + " files", lambda: sorted(users_dir.glob(f"*/{PENDING_FILE}"))):
             uid = path.parent.name
             if not valid_uid(uid):
                 continue
@@ -143,20 +154,22 @@ class Publisher:
         users_dir = self.store.settings.users_dir
         if uid is not None:
             uids = [uid] if valid_uid(uid) else []
-        elif users_dir.is_dir():
-            uids = sorted(p.name for p in users_dir.iterdir() if p.is_dir() and valid_uid(p.name))
         else:
-            uids = []
+            uids = _listing(
+                "users", lambda: sorted(p.name for p in users_dir.iterdir() if valid_uid(p.name) and p.is_dir())
+            )
         published = 0
         for user in uids:
             tracks = self.store.user_dir(user) / "tracks"
-            if not tracks.is_dir():
-                continue
-            for d in sorted(tracks.iterdir()):
-                if not (d.is_dir() and self.store.valid_id(d.name)):
+            for d in _listing(f"the tracks of {user}", lambda: sorted(tracks.iterdir()) if tracks.is_dir() else []):
+                try:
+                    if not (self.store.valid_id(d.name) and d.is_dir()):
+                        continue
+                    with user_context(user):
+                        complete = self.store.exists(d.name)
+                except OSError as exc:
+                    log.warning("could not check track %s of %s: %s", d.name, user, exc)
                     continue
-                with user_context(user):
-                    complete = self.store.exists(d.name)
                 if complete and self.publish(user, d.name):
                     published += 1
         log.info("backfill: %d track(s) published", published)

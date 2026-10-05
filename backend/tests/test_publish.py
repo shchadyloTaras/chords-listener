@@ -2,7 +2,9 @@
 token and upserts the Firestore index document. Offline: the index is ``FakeIndex``, GCS is ``FakeGcs``."""
 from __future__ import annotations
 
+import errno
 import json
+import logging
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -442,6 +444,48 @@ def test_backfill_counts_only_what_was_published(pub, index, tid):
 
 def test_backfill_with_no_users(pub):
     assert pub.backfill() == 0
+
+
+# --------------------------------------------------------------------------- the bucket mount fails
+
+
+def eio(*_a: Any, **_k: Any) -> Any:
+    raise OSError(errno.EIO, "Input/output error")
+
+
+def test_sweep_survives_a_failing_listing(pub, store, index, tid, monkeypatch, caplog):
+    write_json_atomic(pending_path(store), {"ids": {tid: "publish"}})
+    with monkeypatch.context() as m:
+        m.setattr(Path, "glob", eio)
+        with caplog.at_level(logging.WARNING, logger="chords.publish"):
+            assert pub.sweep_pending() == 0
+    assert "could not list" in caplog.text
+    assert not index.docs and pending_path(store).exists()  # nothing lost: the next sweep does it
+    assert pub.sweep_pending() == 1
+
+
+@pytest.mark.parametrize("uid", [None, "alice"])
+def test_backfill_survives_a_failing_listing(pub, index, tid, monkeypatch, uid):
+    with monkeypatch.context() as m:
+        m.setattr(Path, "iterdir", eio)
+        assert pub.backfill(uid) == 0
+    assert not index.docs
+    assert pub.backfill(uid) == 1
+
+
+@pytest.mark.parametrize("failing", ["is_dir", "is_file"])
+def test_backfill_skips_a_track_it_cannot_check(pub, store, gcs, index, tid, monkeypatch, failing):
+    other = install(store, gcs, track_id="bbbbbbbbbbbb")
+    real = getattr(Path, failing)
+
+    def flaky(self: Path) -> bool:
+        if "bbbbbbbbbbbb" in self.parts:
+            eio()
+        return real(self)
+
+    monkeypatch.setattr(Path, failing, flaky)
+    assert pub.backfill() == 1
+    assert set(index.docs) == {("alice", tid)} and other not in {t for _, t in index.docs}
 
 
 # --------------------------------------------------------------------------- the null publisher
