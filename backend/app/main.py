@@ -230,7 +230,9 @@ def create_app(
             gcs_client_factory=gcs_client_factory or (lambda: default_client(settings.firebase_project)),
         )
     else:
-        log.warning("CHORDS_UPLOAD_BUCKET is not set: track changes are not published")
+        # Not a mere warning: clients that read the index keep reading it, so nothing new or changed would show
+        # anywhere (docs/CLOUD.md "Library in Firestore" → turning publishing off)
+        log.error("CHORDS_UPLOAD_BUCKET is not set: track changes are not published")
         publisher = NullPublisher()
     store.publisher = publisher
     stop_background = threading.Event()  # set at shutdown: ends the sweep thread

@@ -8,6 +8,7 @@ import errno
 import fnmatch
 import hashlib
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -984,6 +985,17 @@ def test_publisher_choice(tmp_path: Path) -> None:
     assert isinstance(app_for(publish=False).state.publisher, NullPublisher)
     assert isinstance(app_for(upload_bucket="").state.publisher, NullPublisher)
     assert isinstance(app_for(auth="off").state.publisher, NullPublisher)
+
+
+def test_publishing_on_without_a_bucket_is_an_error(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    # Clients that read the index never fall back while it answers: nothing published is an outage, not a warning.
+    settings = Settings(data_dir=tmp_path / "data", frontend_dist=tmp_path / "no-dist", signing_key=SIGNING_KEY,
+                        scratch_dir=tmp_path / "scratch", auth="firebase", upload_bucket="")
+    with caplog.at_level(logging.WARNING, logger="chords.api"):
+        app = create_app(settings, analyzer=FakeEngine(), token_verifier=FakeVerifier())
+    assert isinstance(app.state.publisher, NullPublisher)
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR and "CHORDS_UPLOAD_BUCKET" in r.getMessage()]
+    assert errors, caplog.text
 
 
 def test_pending_sweep_repeats_and_stops_with_the_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

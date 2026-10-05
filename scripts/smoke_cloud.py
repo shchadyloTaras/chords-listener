@@ -249,7 +249,7 @@ def run_all(api: Api, songs: dict[str, Path], tmp: Path, youtube: Optional[str],
             check("track has chords", len(labels) >= 4,
                   f"key {track.get('key', {}).get('name')}, tempo {track.get('tempo')}, chords {labels[:10]}")
     if track and firestore_token:
-        # -- the published library: index document + track.json (checked before the notes edit below bumps the version)
+        # -- the published library: index document + track.json at the same version (the notes PUT below leaves it as it is)
         res = index_doc(api, firestore_token, track["id"])
         fields = res.json().get("fields", {}) if res.status == 200 else {}
         version = int(fields.get("version", {}).get("integerValue", 0))
