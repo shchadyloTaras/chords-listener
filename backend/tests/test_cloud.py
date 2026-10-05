@@ -26,6 +26,7 @@ import app.jobs as jobs_module
 import app.quotas as quotas_module
 import app.storage as storage_module
 from app.auth import AuthError, FirebaseTokenVerifier, MediaSigner
+from app.firestore import IndexError_
 from app.main import create_app
 from app.models import AnalysisResult, Settings
 from app.sources import NormalizedUrl, RemoteMedia, SourceError, _map_ytdlp_error, find_executable, youtube_thumbnail
@@ -137,6 +138,7 @@ class NotFound(Exception):  # same class name as google.api_core.exceptions.NotF
 class FakeBlob:
     def __init__(self, gcs: FakeGcs, bucket: str, name: str) -> None:
         self.gcs, self.bucket_name, self.name = gcs, bucket, name
+        self._staged: dict[str, Any] = {}
 
     @property
     def _obj(self) -> dict[str, Any]:
@@ -151,11 +153,33 @@ class FakeBlob:
 
     @property
     def content_type(self) -> str:
-        return self._obj["content_type"]
+        return self._staged.get("content_type", self._obj["content_type"])
+
+    @content_type.setter
+    def content_type(self, value: str) -> None:
+        self._staged["content_type"] = value
+
+    @property
+    def metadata(self) -> Optional[dict[str, str]]:
+        meta = self._staged.get("metadata", self._obj.get("metadata"))
+        return None if meta is None else dict(meta)
+
+    @metadata.setter
+    def metadata(self, value: Optional[dict[str, str]]) -> None:
+        self._staged["metadata"] = value
 
     @property
     def time_created(self) -> datetime:
         return self._obj["created"]
+
+    def patch(self) -> None:
+        """Send the staged content type / metadata to the object (like the real client, nothing is stored before)."""
+        self._obj.update(self._staged)
+        self._staged.clear()
+        self.gcs.patched.append(self.name)
+
+    def reload(self) -> None:
+        """The fake always reads the stored object, so there is nothing to refresh."""
 
     def download_to_file(self, fh: Any) -> None:
         data = self._obj["data"]
@@ -183,10 +207,13 @@ class FakeGcs:
     def __init__(self) -> None:
         self.objects: dict[tuple[str, str], dict[str, Any]] = {}
         self.deleted: list[str] = []
+        self.patched: list[str] = []
 
-    def put(self, name: str, data: bytes, *, bucket: str = BUCKET, age_s: float = 0, content_type: str = "audio/mpeg") -> str:
+    def put(self, name: str, data: bytes, *, bucket: str = BUCKET, age_s: float = 0, content_type: str = "audio/mpeg",
+            metadata: Optional[dict[str, str]] = None) -> str:
         created = datetime.now(timezone.utc) - timedelta(seconds=age_s)
-        self.objects[(bucket, name)] = {"data": data, "content_type": content_type, "created": created}
+        self.objects[(bucket, name)] = {"data": data, "content_type": content_type, "created": created,
+                                        "metadata": metadata}
         return name
 
     def bucket(self, name: str) -> FakeBucket:
@@ -195,6 +222,32 @@ class FakeGcs:
     def list_blobs(self, bucket: str, match_glob: Optional[str] = None) -> list[FakeBlob]:
         return [FakeBlob(self, b, n) for (b, n) in list(self.objects)
                 if b == bucket and (match_glob is None or fnmatch.fnmatch(n, match_glob.replace("**", "*")))]
+
+
+class FakeIndex:
+    """Stands in for ``FirestoreIndex``: the documents by (uid, trackId). ``fail`` makes the next that many
+    upserts / deletes raise (``retryable`` tells whether a retry may help)."""
+
+    def __init__(self) -> None:
+        self.docs: dict[tuple[str, str], dict[str, Any]] = {}
+        self.fail, self.retryable, self.calls = 0, True, 0
+
+    def _check(self) -> None:
+        self.calls += 1
+        if self.fail:
+            self.fail -= 1
+            raise IndexError_("down", retryable=self.retryable)
+
+    def upsert(self, uid: str, tid: str, data: dict[str, Any]) -> None:
+        self._check()
+        self.docs[(uid, tid)] = data
+
+    def delete(self, uid: str, tid: str) -> None:
+        self._check()
+        self.docs.pop((uid, tid), None)
+
+    def exists(self, uid: str, tid: str) -> bool:
+        return (uid, tid) in self.docs
 
 
 @pytest.fixture
