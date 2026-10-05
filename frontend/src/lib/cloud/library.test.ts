@@ -73,11 +73,16 @@ function indexDoc(id: string, version: number, extra: Record<string, unknown> = 
   }
 }
 
-function snapshot(docs: Array<ReturnType<typeof indexDoc>>, fromCache = false) {
+/**
+ * A query snapshot. `changes`: what its docChanges() lists — by default one change (the documents are news); an
+ * empty list is a metadata-only snapshot (online ↔ offline, cache ↔ server) with the same documents.
+ */
+function snapshot(docs: Array<ReturnType<typeof indexDoc>>, fromCache = false, changes: unknown[] = [{ type: 'modified' }]) {
   return {
     empty: docs.length === 0,
     metadata: { fromCache },
     docs: docs.map((d) => ({ id: d.id, data: () => d })),
+    docChanges: () => changes,
   }
 }
 
@@ -198,6 +203,24 @@ describe('the live library', () => {
     fs.listeners[0].next(snapshot([], false))
     expect(useLibrary.getState().tracks).toEqual([])
     expect(libraryReady()).toBe(true)
+  })
+
+  it('a metadata-only snapshot (online ↔ offline, cache ↔ server) leaves the store as it is', async () => {
+    const { startLibrary, useLibrary } = await boot()
+    startLibrary('u1')
+    await vi.waitFor(() => expect(fs.listeners).toHaveLength(1))
+    fs.listeners[0].next(snapshot([indexDoc('a', 1)], true))
+    const before = useLibrary.getState()
+    const seen = vi.fn()
+    useLibrary.subscribe(seen)
+    // the server confirms the cached list, then the connection drops and comes back
+    fs.listeners[0].next(snapshot([indexDoc('a', 1)], false, []))
+    fs.listeners[0].next(snapshot([indexDoc('a', 1)], true, []))
+    expect(seen).not.toHaveBeenCalled()
+    expect(useLibrary.getState()).toBe(before)
+    // a real change still lands
+    fs.listeners[0].next(snapshot([indexDoc('a', 2)]))
+    expect(useLibrary.getState().versions).toEqual({ a: 2 })
   })
 
   it('a cache-only list that has tracks is used', async () => {

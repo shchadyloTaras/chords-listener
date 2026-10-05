@@ -3,8 +3,9 @@
 //   POST /api/tracks/{id}/vocals → Job (kind 'vocals': Demucs separation, then melody tracking),
 //        polled until done; 501 / code 'unavailable' when the server has no vocal transcription.
 //   GET  /api/tracks/{id}/stems/{vocals|instruments} → the separated audio (mp3)
-// Browser tracks (ids "local-…") and browser mode have no server to do this. Vocal notes found in the cloud are
-// kept on the device (lib/cloud/cache) and read from there next time. Loading asks nothing the track already
+// Browser tracks (ids "local-…") and browser mode have no server to do this. A signed-in user's vocal notes are
+// read from Storage (vocals.json) while the live library answers, else from the API; what is found is kept on
+// the device (lib/cloud/cache) and read from there next time. Loading asks nothing the track already
 // answers: a track with `vocals: false` has none to read, and the job list is asked only when a job started on
 // this device may still be making them (opening a song must not wake the cloud).
 import { useEffect } from 'react'
@@ -12,7 +13,7 @@ import { create } from 'zustand'
 import { useJobs } from '../hooks/useJobs'
 import { useApp } from '../store'
 import type { Job, Track, TrackNotes, VocalNotes } from '../types'
-import { ApiError, apiFetch, apiRequest, cloudCacheUid, fetchMedia, getJob, listJobs, toApiError } from './api'
+import { ApiError, apiFetch, apiRequest, cloudCacheUid, fetchMedia, getJob, listJobs, publishedJson, toApiError } from './api'
 import { recentServerJobs, rememberServerJob } from './cloud/activity'
 import { cachedJson, saveJson } from './cloud/cache'
 import { isLocalId } from './local'
@@ -137,12 +138,19 @@ function markTrack(id: string): void {
 const loading = new Map<string, Promise<void>>()
 const polling = new Set<string>()
 
-/** The track's vocal notes: kept on this device (cloud), else the server's — kept from then on. */
+/**
+ * The track's vocal notes. Cloud: from Storage while the live library answers (lib/api publishedJson: kept here
+ * at the track's version); else kept on this device, else the server's — kept from then on.
+ */
 async function vocalNotes(id: string): Promise<VocalNotes> {
   const uid = cloudCacheUid()
+  const ask = () => apiRequest<VocalNotes>(`/tracks/${encodeURIComponent(id)}/vocals`, { cache: 'no-store' })
+  const published = uid ? await publishedJson(uid, 'vocals', id, ask) : undefined
+  if (published === null) throw new ApiError('Vocals are not transcribed yet', 'not_found', 404)
+  if (published !== undefined) return published
   const kept = uid ? await cachedJson<VocalNotes>(uid, 'vocals', id) : null
   if (kept) return kept
-  const data = await apiRequest<VocalNotes>(`/tracks/${encodeURIComponent(id)}/vocals`, { cache: 'no-store' })
+  const data = await ask()
   if (uid && cloudCacheUid() === uid) await saveJson(uid, 'vocals', id, data)
   return data
 }

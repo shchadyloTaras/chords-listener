@@ -55,10 +55,10 @@ A signed-in user's library, track data, notes, vocals and audio are read by the 
   1. `audio.mp3` and every `stems/<name>.mp3` get a `firebaseStorageDownloadTokens` metadata token and `contentType` `audio/mpeg` (an existing token is kept);
   2. `users/<uid>/tracks/<id>/track.json` is written: the Track JSON without `audioUrl` / `stemUrls`, plus `version` and `media: {audio: {path, token}, stems: {<name>: {path, token}}}`;
   3. the index document `users/{uid}/tracks/{trackId}` is upserted over the Firestore REST API with the runtime service account (no gRPC client): the `TrackSummary` fields of `GET /api/tracks` + `version` + `publishedAt`.
-- A track kept on a device is valid exactly while its `version` equals the index document's. `version` is bumped in every mode (a meta field, not part of the API's JSON); local mode publishes nothing and writes no `track.json`.
+- A track (and its notes) kept on a device from Storage is valid exactly while its `version` equals the index document's. `version` is bumped in every mode (a meta field, not part of the API's JSON); local mode publishes nothing and writes no `track.json`.
 - **Delete** unpublishes first (removes the index document), then removes the directory, under the same lock, so a late publish cannot bring a deleted track back. "Already analyzed" duplicates publish the track when the index lacks it (self-heal for tracks that predate publishing).
 - **Failures never fail the user's request.** A publish or unpublish that still fails after 3 attempts (HTTP 408/429/5xx, network) puts the track id into `users/<uid>/publish-pending.json`; the API retries those at start-up and every 10 minutes while an instance is up. The file is never client-readable.
-- **Fallback.** When the index or a Storage read fails (permission, network, a track that is not published yet), the site uses the API path as before; a missing rollout step breaks nothing.
+- **Fallback.** When the index or a Storage read fails (permission, network, a track that is not published yet), the site uses the API path as before; a missing rollout step breaks nothing. A failed index, and each kind of Storage file (`track.json`, `notes.json`, `vocals.json`) once a read of it failed (anything but a missing object), stay on the API path for the rest of the session: a reload, or another account, tries again (no retry storms). Client side: docs/SPEC.md "Live library".
 
 ### Rules
 

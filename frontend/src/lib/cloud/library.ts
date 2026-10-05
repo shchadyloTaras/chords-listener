@@ -45,6 +45,9 @@ function apply(snap: QuerySnapshot): void {
   // Offline with nothing cached Firestore answers "empty" from the cache: that is not the library being empty.
   // The server's own answer follows (metadata changes are listened to for exactly this).
   if (snap.empty && snap.metadata.fromCache) return
+  // Only the metadata changed (online ↔ offline, cache ↔ server): the same list. Not written, so readers that
+  // follow `tracks` (components/history/tracksStore) are not woken by every connectivity blip.
+  if (useLibrary.getState().tracks !== null && snap.docChanges().length === 0) return
   const tracks = snap.docs.map((d) => toSummary(d.id, d.data()))
   const versions: Record<string, number> = {}
   for (const t of tracks) if (typeof t.version === 'number') versions[t.id] = t.version

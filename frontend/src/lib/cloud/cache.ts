@@ -4,13 +4,17 @@
 // keyed by the account's uid, and the whole database goes on sign-out or when another account signs in
 // (lib/auth.ts). Callers (lib/api.ts, lib/vocals.ts, the player) use it only while the API is the cloud and
 // someone is signed in — never for a local server or a guest.
-//  · "lists"  — key uid: the library list (GET /tracks) as the server sent it, asked again after LIST_TTL_MS;
-//               each list the server sends drops what is kept of tracks it no longer lists or lists changed
-//  · "tracks" — key `${uid}|${id}`: the track (GET /tracks/{id}), its signed media URLs included, for TRACK_TTL_MS
+//  · "lists"  — key uid: the library list — the live library's (lib/cloud/library), kept for the next first
+//               paint, or as GET /tracks sent it, asked again after LIST_TTL_MS; each list the server sends
+//               drops what is kept of tracks it no longer lists or lists changed
+//  · "tracks" — key `${uid}|${id}`: the track — as track.json in Storage has it (lib/cloud/files: with its
+//               `version` and token URLs), valid while that version is the live library's; or as GET
+//               /tracks/{id} sent it (signed media URLs, no version), for TRACK_TTL_MS
 //  · "audio"  — key `${uid}|${id}`: the audio file, least recently played evicted over AUDIO_BUDGET_BYTES
-//  · "json"   — key `${uid}|${kind}|${id}`: live-piano notes and vocal notes
-// Rows are `{ key, value, savedAt, size? }`. Nothing here throws: without IndexedDB (or with a broken one)
-// every read is null and every write does nothing.
+//  · "json"   — key `${uid}|${kind}|${id}`: live-piano notes and vocal notes, with the track's version they
+//               were found at when the live library gave one
+// Rows are `{ key, value, savedAt, size?, version? }`. Nothing here throws: without IndexedDB (or with a broken
+// one) every read is null and every write does nothing.
 import type { Track, TrackSummary } from '../../types'
 import { clearDeleted } from './deleted'
 
@@ -55,6 +59,8 @@ interface Row<T> {
   savedAt: number
   /** bytes, audio rows only */
   size?: number
+  /** json rows: the track's published version they are valid at (none: found without the live library) */
+  version?: number
 }
 
 /** A stored audio file: a Blob, or its bytes where the browser cannot keep Blobs in IndexedDB (older WebKit). */
@@ -249,6 +255,22 @@ export function saveList(uid: string, tracks: TrackSummary[]): Promise<void> {
   )
 }
 
+/**
+ * Keeps the live library's list (lib/cloud/library) for the next first paint. Nothing else changes: what is kept
+ * of a track is checked against its version when it is opened, and a track that left the list is forgotten
+ * when it is opened (the API answers 404) or on sign-out.
+ */
+export function saveLiveList(uid: string, tracks: TrackSummary[]): Promise<void> {
+  const row: Row<TrackSummary[]> = { key: uid, value: tracks, savedAt: Date.now() }
+  return safely(
+    () =>
+      transact([LISTS], 'readwrite', async (tx) => {
+        tx.objectStore(LISTS).put(row)
+      }),
+    undefined,
+  )
+}
+
 /** The kept list is to be asked again (a job ended: a new or changed song); it still shows meanwhile. */
 export function markListStale(uid: string): Promise<void> {
   return safely(
@@ -297,7 +319,24 @@ export function cachedTrack(uid: string, id: string): Promise<Track | null> {
 }
 
 /**
- * Keeps a track the server just sent (opened, edited, reset) and refreshes its entry in the kept list, if
+ * The track kept for `uid` as track.json had it at `version` (the live library's for it), whatever its age: its
+ * token URLs do not run out, and the version says whether it is current. Null otherwise — also for a track the
+ * API sent (no version).
+ */
+export function cachedTrackAt(uid: string, id: string, version: number): Promise<Track | null> {
+  return safely(
+    () =>
+      transact([TRACKS], 'readonly', async (tx) => {
+        const row = await getRow<Track>(tx.objectStore(TRACKS), trackKey(uid, id))
+        return row && row.value.version === version ? row.value : null
+      }),
+    null,
+  )
+}
+
+/**
+ * Keeps a track the server just sent (opened, edited, reset) or read from Storage (with its version) and
+ * refreshes its entry in the kept list, if
  * listed there — the list keeps its age (it is not asked again any sooner or later because of this).
  */
 export function saveTrack(uid: string, track: Track): Promise<void> {
@@ -418,7 +457,7 @@ export function saveAudio(uid: string, id: string, blob: Blob): Promise<void> {
 
 // ------------------------------------------------------------------ notes, vocals
 
-/** Live-piano notes ('notes') or vocal notes ('vocals') kept for `uid`. */
+/** Live-piano notes ('notes') or vocal notes ('vocals') kept for `uid`, whatever version they were found at. */
 export function cachedJson<T>(uid: string, kind: JsonKind, id: string): Promise<T | null> {
   return safely(
     () =>
@@ -430,8 +469,21 @@ export function cachedJson<T>(uid: string, kind: JsonKind, id: string): Promise<
   )
 }
 
-export function saveJson<T>(uid: string, kind: JsonKind, id: string, value: T): Promise<void> {
-  const row: Row<T> = { key: jsonKey(uid, kind, id), value, savedAt: Date.now() }
+/** Notes or vocal notes kept for `uid` at the track's `version` (the live library's for it); else null. */
+export function cachedJsonAt<T>(uid: string, kind: JsonKind, id: string, version: number): Promise<T | null> {
+  return safely(
+    () =>
+      transact([JSON_STORE], 'readonly', async (tx) => {
+        const row = await getRow<T>(tx.objectStore(JSON_STORE), jsonKey(uid, kind, id))
+        return row && row.version === version ? row.value : null
+      }),
+    null,
+  )
+}
+
+/** Keeps notes or vocal notes; `version`: the track's published version they are valid at, when known. */
+export function saveJson<T>(uid: string, kind: JsonKind, id: string, value: T, version?: number): Promise<void> {
+  const row: Row<T> = { key: jsonKey(uid, kind, id), value, savedAt: Date.now(), ...(version === undefined ? {} : { version }) }
   return safely(
     () =>
       transact([JSON_STORE], 'readwrite', async (tx) => {

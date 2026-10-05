@@ -5,15 +5,21 @@
 //    media URLs in the cloud) are resolved against it;
 //  · browser mode — no server: files and recordings are analyzed in the page (lib/local), tracks live in
 //    IndexedDB. Ids starting with "local-" always belong to the browser library, in any mode.
-// The signed-in user's cloud library is kept on the device (lib/cloud/cache): the list, opened tracks, their
-// audio and notes are served from there without waking the cloud, and kept in step with edits, deletes and
-// finished jobs; a track deleted here never comes back from it (lib/cloud/deleted). Nothing is kept for a local
-// server or a guest.
+// The signed-in user's cloud library is read without waking the cloud API while the live library answers
+// (docs/CLOUD.md "Library in Firestore"): the list from the Firestore index (lib/cloud/library), track data,
+// notes and vocal notes from Storage (lib/cloud/files), each kept on the device (lib/cloud/cache) and used
+// while its version is the index's; the audio streams through download-token URLs. Any gap — the index not
+// there or failed, a file missing or unreadable — takes the API path below, as it was before the index:
+// the list, opened tracks, their audio and notes are kept on the device and served from there for a while,
+// kept in step with edits, deletes and finished jobs; a track deleted here never comes back from it
+// (lib/cloud/deleted). Nothing is kept or read this way for a local server or a guest.
 import type { ChordSegment, ErrorCode, Health, Job, Track, TrackNotes, TrackSource, TrackSummary } from '../types'
 import { getIdToken, requestSignIn, useAuth } from './auth'
 import { forgetServerJob, recentServerJobs, rememberServerJob } from './cloud/activity'
 import * as cache from './cloud/cache'
 import { deleteConfirmed, forgetDeleted, isDeleted, rememberDeleted, settleDeleted, withoutDeleted } from './cloud/deleted'
+import { readJsonFile, readTrackFile, STORAGE_DOWNLOAD_ORIGIN, trackFromFile } from './cloud/files'
+import { libraryReady, useLibrary } from './cloud/library'
 import { StorageUploadError, uploadToStorage } from './cloud/storage'
 import {
   cancelLocalTrackJobs,
@@ -244,6 +250,110 @@ function byNewest(tracks: TrackSummary[]): TrackSummary[] {
   return tracks.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 }
 
+// ------------------------------------------------------------------ the live library (Firestore index + Storage)
+
+/** How long a read waits for the live library's first answer before it takes the API path. */
+export const LIBRARY_WAIT_MS = 3000
+/** The live wait (tests shorten it). */
+export const libraryWait = { ms: LIBRARY_WAIT_MS }
+
+interface LiveLibrary {
+  tracks: TrackSummary[]
+  versions: Record<string, number>
+}
+
+/** The live library as it answers for `uid` right now: followed for them, listed, no failure. Else null. */
+function liveNow(uid: string): LiveLibrary | null {
+  const s = useLibrary.getState()
+  return s.uid === uid && libraryReady() && s.tracks ? { tracks: s.tracks, versions: s.versions } : null
+}
+
+/** The live library follows `uid`, its first answer still on its way. */
+function liveStarting(uid: string): boolean {
+  const s = useLibrary.getState()
+  return s.uid === uid && s.tracks === null && !s.error
+}
+
+/** Resolves once the live library of `uid` has answered, failed or stopped — at the latest after libraryWait.ms. */
+function liveAnswered(uid: string): Promise<void> {
+  if (!liveStarting(uid)) return Promise.resolve()
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer)
+      unsubscribe()
+      resolve()
+    }
+    const timer = setTimeout(done, libraryWait.ms)
+    const unsubscribe = useLibrary.subscribe(() => {
+      if (!liveStarting(uid)) done()
+    })
+  })
+}
+
+/** The live library of `uid`, its first answer waited for when on its way. Null: the API path (TTLs, tombstones). */
+async function liveLibrary(uid: string): Promise<LiveLibrary | null> {
+  await liveAnswered(uid)
+  return liveNow(uid)
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new ApiError('Request aborted', 'aborted')
+}
+
+/**
+ * The cloud list while the live library answers for `uid` (kept here for the next first paint). Before its first
+ * answer: the list kept here, unless `force` — else that answer is waited for. Null: the API path.
+ */
+async function liveList(uid: string, force = false): Promise<TrackSummary[] | null> {
+  if (!force && liveStarting(uid)) {
+    const kept = await cache.cachedList(uid)
+    if (kept && liveStarting(uid)) return withoutDeleted(uid, kept.tracks).map(withServerUrls)
+  }
+  await liveAnswered(uid)
+  // Read after the last await and saved without waiting, so nothing comes between this read and the caller: a
+  // list that changes while a refresh is in flight joins that refresh (tracksStore) and must not be missed.
+  const live = liveNow(uid)
+  if (!live) return null
+  if (stillKeeping(uid)) void cache.saveLiveList(uid, live.tracks)
+  return live.tracks.map(withServerUrls)
+}
+
+/**
+ * A cloud track while the live library answers (`version`: the index's for it): the copy kept here at that
+ * version, else track.json from Storage (kept with its version), else the API. Not in the index — brand new
+ * (not published yet) or deleted — the API says which.
+ */
+async function publishedTrack(uid: string, id: string, version: number | undefined, signal?: AbortSignal): Promise<Track> {
+  if (version === undefined) return askTrack(uid, id, signal)
+  const kept = await cache.cachedTrackAt(uid, id, version)
+  if (kept) return withServerUrls(kept)
+  const file = await readTrackFile(uid, id).catch(() => null)
+  throwIfAborted(signal)
+  return file ? keepTrack(uid, trackFromFile(file)) : askTrack(uid, id, signal)
+}
+
+/**
+ * Live-piano notes ('notes') or vocal notes ('vocals') of a cloud track while the live library answers for `uid`:
+ * the copy kept here at the track's version, else notes.json / vocals.json from Storage, else `ask` (the API) —
+ * what is found is kept at that version. Null: not computed yet; that is never kept, so notes saved later (also
+ * on another device: PUT /notes leaves the version as it is) show on the next open. Undefined: the live library
+ * does not answer for this track — the caller's API path.
+ */
+export async function publishedJson<T>(uid: string, kind: cache.JsonKind, id: string, ask: () => Promise<T | null>): Promise<T | null | undefined> {
+  const version = (await liveLibrary(uid))?.versions[id]
+  if (version === undefined) return undefined
+  const kept = await cache.cachedJsonAt<T>(uid, kind, id, version)
+  if (kept !== null) return kept
+  let value: T | null
+  try {
+    value = await readJsonFile<T>(uid, id, `${kind}.json`)
+  } catch {
+    value = await ask()
+  }
+  if (value !== null && stillKeeping(uid)) await cache.saveJson(uid, kind, id, value, version)
+  return value
+}
+
 // ------------------------------------------------------------------ requests
 
 async function fetchOnce(conn: ServerConn, path: string, init: RequestInit, forceRefresh: boolean): Promise<Response> {
@@ -379,13 +489,16 @@ export async function getJob(id: string, signal?: AbortSignal): Promise<Job> {
 
 /**
  * Server / cloud library (when connected) plus the tracks analyzed in this browser, newest first. The cloud's
- * list comes from this device while younger than LIST_TTL_MS (lib/cloud/cache); `force` asks the cloud now.
+ * list is the live library's while it answers (see liveList); else it comes from this device while younger
+ * than LIST_TTL_MS (lib/cloud/cache), and `force` asks the cloud now.
  */
 export async function listTracks(signal?: AbortSignal, opts: { force?: boolean } = {}): Promise<TrackSummary[]> {
   const conn = await whenSettled()
   const browserTracks = await local(listLocalTracks)
   if (conn.status !== 'server') return browserTracks
   const uid = cloudCacheUid(conn)
+  const live = uid ? await liveList(uid, opts.force) : null
+  if (live) return byNewest([...browserTracks, ...live])
   const kept = uid ? await cache.cachedList(uid) : null
   const keptTracks = () => (uid && kept ? withoutDeleted(uid, kept.tracks).map(withServerUrls) : [])
   if (kept && !opts.force && cache.isFresh(kept.savedAt, cache.LIST_TTL_MS)) return byNewest([...browserTracks, ...keptTracks()])
@@ -408,26 +521,38 @@ export async function listTracks(signal?: AbortSignal, opts: { force?: boolean }
 }
 
 /**
- * The library as this device last saw it, without asking anyone: the browser's tracks plus the cloud list
- * kept here, whatever its age. Null when no cloud list is kept (not the cloud, or never listed).
+ * The library as this device last saw it, without asking anyone: the browser's tracks plus the cloud list —
+ * the live library's when it answers, else the one kept here, whatever its age. Null when there is neither
+ * (not the cloud, or never listed).
  */
 export async function listCachedTracks(): Promise<TrackSummary[] | null> {
   const uid = cloudCacheUid(await whenSettled())
-  const kept = uid ? await cache.cachedList(uid) : null
-  if (!uid || !kept) return null
+  if (!uid) return null
+  const kept = liveNow(uid) ? null : await cache.cachedList(uid)
+  if (!kept && !liveNow(uid)) return null
   const browserTracks = await local(listLocalTracks).catch(() => [])
-  return byNewest([...browserTracks, ...withoutDeleted(uid, kept.tracks).map(withServerUrls)])
+  const cloudTracks = liveNow(uid)?.tracks ?? withoutDeleted(uid, kept?.tracks ?? [])
+  return byNewest([...browserTracks, ...cloudTracks.map(withServerUrls)])
 }
 
 /**
- * A cloud track opened in the last TRACK_TTL_MS comes from this device (lib/cloud/cache) — unless it was deleted
- * here: then the cloud says whether it is gone.
+ * A cloud track. While the live library answers, the version decides (see publishedTrack); else one opened in
+ * the last TRACK_TTL_MS comes from this device (lib/cloud/cache) — unless it was deleted here: then the cloud
+ * says whether it is gone.
  */
 export async function getTrack(id: string, signal?: AbortSignal): Promise<Track> {
   if (isLocalId(id)) return local(() => getLocalTrack(id))
   const uid = cloudCacheUid(await whenSettled())
+  const live = uid ? await liveLibrary(uid) : null
+  throwIfAborted(signal)
+  if (uid && live) return publishedTrack(uid, id, live.versions[id], signal)
   const kept = uid && !isDeleted(uid, id) ? await cache.cachedTrack(uid, id) : null
   if (kept) return withServerUrls(kept)
+  return askTrack(uid, id, signal)
+}
+
+/** GET /tracks/{id}, kept here; a track the cloud no longer has is forgotten here. */
+async function askTrack(uid: string | null, id: string, signal?: AbortSignal): Promise<Track> {
   try {
     return await keepTrack(uid, await request<Track>(`/tracks/${enc(id)}`, { signal }))
   } catch (err) {
@@ -491,21 +616,29 @@ export async function deleteTrack(id: string, opts: { keepalive?: boolean } = {}
 
 // ---------------------------------------------------------------- live piano notes
 
-/** The track's transcribed notes (live piano); null when they have not been computed yet. */
+/**
+ * The track's transcribed notes (live piano); null when they have not been computed yet. A cloud track's come
+ * from Storage while the live library answers (see publishedJson).
+ */
 export async function getTrackNotes(id: string, signal?: AbortSignal): Promise<TrackNotes | null> {
   if (isLocalId(id)) return local(() => getLocalNotes(id))
   const uid = cloudCacheUid(await whenSettled())
+  const ask = async (): Promise<TrackNotes | null> => {
+    try {
+      return await request<TrackNotes>(`/tracks/${enc(id)}/notes`, { signal, cache: 'no-store' })
+    } catch (err) {
+      const e = toApiError(err)
+      if (e.code === 'not_found') return null
+      throw e
+    }
+  }
+  const published = uid ? await publishedJson(uid, 'notes', id, ask) : undefined
+  if (published !== undefined) return published
   const kept = uid ? await cache.cachedJson<TrackNotes>(uid, 'notes', id) : null
   if (kept) return kept
-  try {
-    const notes = await request<TrackNotes>(`/tracks/${enc(id)}/notes`, { signal, cache: 'no-store' })
-    if (stillKeeping(uid)) await cache.saveJson(uid, 'notes', id, notes)
-    return notes
-  } catch (err) {
-    const e = toApiError(err)
-    if (e.code === 'not_found') return null
-    throw e
-  }
+  const notes = await ask()
+  if (notes && stillKeeping(uid)) await cache.saveJson(uid, 'notes', id, notes)
+  return notes
 }
 
 /** Stores (replaces) the track's transcribed notes, so they are computed only once. */
@@ -513,16 +646,21 @@ export async function saveTrackNotes(id: string, notes: TrackNotes): Promise<voi
   if (isLocalId(id)) return local(() => putLocalNotes(id, notes))
   const uid = cloudCacheUid()
   await request<unknown>(`/tracks/${enc(id)}/notes`, { method: 'PUT', body: JSON.stringify(notes) })
-  if (stillKeeping(uid)) await cache.saveJson(uid, 'notes', id, notes)
+  // PUT /notes leaves the track's version as it is: kept at the live library's, they stay valid
+  if (stillKeeping(uid)) await cache.saveJson(uid, 'notes', id, notes, liveNow(uid)?.versions[id])
 }
 
 async function mediaResponse(url: string, signal?: AbortSignal): Promise<Response> {
+  let href = url
   try {
-    // cloud media URLs are signed: no Authorization header needed (or wanted: it would force a preflight)
-    return await serverFetch(new URL(url, location.href).href, { signal })
+    href = new URL(url, location.href).href
+    // cloud media URLs are signed or carry a download token: no Authorization header needed (or wanted: it
+    // would force a preflight)
+    return await serverFetch(href, { signal })
   } catch (err) {
     const e = toApiError(err)
-    if (e.code === 'network') noteServerTrouble()
+    // Storage unreachable (offline, no CORS) says nothing about the API server: asking it would wake the cloud
+    if (e.code === 'network' && !href.startsWith(`${STORAGE_DOWNLOAD_ORIGIN}/`)) noteServerTrouble()
     throw e
   }
 }
