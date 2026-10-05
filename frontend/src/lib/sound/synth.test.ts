@@ -57,6 +57,10 @@ describe('Karplus-Strong plucks', () => {
     ['ukulele', 67], // G4
     ['ukulele', 69], // A4
     ['ukulele', 81], // A5, 12th fret
+    ['bass', 28], // E1, the low string
+    ['bass', 33], // A1
+    ['bass', 43], // G2, the high string
+    ['bass', 55], // G3, 12th fret
   ]
 
   for (const fs of [44100, 48000]) {
@@ -93,6 +97,19 @@ describe('Karplus-Strong plucks', () => {
     expect(high.t60).toBeGreaterThan(uke.t60)
     expect(pluckRelease(low)).toBeCloseTo(low.t60 / 2, 6)
     expect(pluckRelease(uke)).toBeLessThan(pluckRelease(high))
+  })
+
+  it('gives the bass a long, dark, round string', () => {
+    const e1 = pluckParams('bass', 28, 48000)
+    const g2 = pluckParams('bass', 43, 48000)
+    const guitarG2 = pluckParams('guitar', 43, 48000)
+    expect(e1.t60).toBeGreaterThan(g2.t60)
+    expect(e1.t60).toBeGreaterThanOrEqual(5)
+    // darker than a guitar at the same pitch: high partials die sooner, softer finger attack
+    expect(g2.damping).toBeGreaterThan(guitarG2.damping)
+    expect(g2.pickCutoff).toBeLessThan(guitarG2.pickCutoff)
+    // no acoustic body: a pickup's low bump and a mid growl for small speakers
+    expect(e1.body.map((b) => b.freq)).toEqual([90, 700])
   })
 
   it('renders the same pluck every time (cacheable)', () => {

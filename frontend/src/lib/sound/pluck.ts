@@ -1,5 +1,6 @@
-// Plucked strings for the guitar (steel) and ukulele (nylon) chord sound: extended Karplus-Strong
-// rendered offline into a Float32Array, once per pitch per sample rate (the engine caches them).
+// Plucked strings for the guitar (steel), ukulele (nylon) and bass (round-wound, fingerstyle) chord
+// sound: extended Karplus-Strong rendered offline into a Float32Array, once per pitch per sample rate
+// (the engine caches them).
 //
 // Loop: y[n] = allpass(lowpass(y[n − N])), the delay line primed with one period of noise.
 //  - tuning: N integer samples + the loop lowpass' phase delay + a first-order allpass solved for
@@ -11,7 +12,7 @@
 
 import { clamp, filterInPlace, lowpassBiquad, midiToFreq, mulberry32, peakingEq } from './dsp'
 
-export type PluckInstrument = 'guitar' | 'ukulele'
+export type PluckInstrument = 'guitar' | 'ukulele' | 'bass'
 
 export interface BodyResonance {
   freq: number
@@ -83,9 +84,25 @@ const MODELS: Record<PluckInstrument, PluckModel> = {
     ],
     lowpass: 9000,
   },
+  // Electric bass, fingerstyle: long sustain, a dark round tone (the finger's soft attack, high
+  // partials damped fast), no acoustic body — a pickup's low bump and a mid "growl" that keeps it
+  // audible on small speakers, which cannot reproduce E1 (41 Hz).
+  bass: {
+    t60: (f) => clamp(5.8 * Math.pow(41.2 / f, 0.25), 3.2, 6),
+    damping: (f) => clamp(0.42 * Math.pow(41.2 / f, 0.3), 0.18, 0.45),
+    position: 0.18,
+    tilt: 1.1,
+    pickCutoff: 2500,
+    maxDuration: 4,
+    body: [
+      { freq: 90, q: 1.2, gain: 3 },
+      { freq: 700, q: 1.1, gain: 4 },
+    ],
+    lowpass: 3500,
+  },
 }
 
-const INSTRUMENT_SEED: Record<PluckInstrument, number> = { guitar: 7919, ukulele: 104729 }
+const INSTRUMENT_SEED: Record<PluckInstrument, number> = { guitar: 7919, ukulele: 104729, bass: 15485863 }
 
 /** Rendering parameters for one string of the instrument sounding `midi`. */
 export function pluckParams(instrument: PluckInstrument, midi: number, sampleRate: number): PluckParams {
