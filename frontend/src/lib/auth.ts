@@ -189,8 +189,11 @@ export async function getIdToken(forceRefresh = false): Promise<string | null> {
 // ------------------------------------------------------------------ account dialog
 
 export type AuthDialogMode = 'signIn' | 'signUp'
-/** why the app itself opened the dialog: the session ran out, or the action needs an account */
-export type AuthDialogReason = 'expired' | 'required' | null
+/**
+ * why the app itself opened the dialog: the session ran out, the action needs an account, or an
+ * account would do it better (more precise chords, vocals)
+ */
+export type AuthDialogReason = 'expired' | 'required' | 'accuracy' | 'vocals' | null
 
 interface AuthDialogState {
   open: boolean
@@ -237,7 +240,7 @@ export function closeAuthDialog(signedIn?: boolean): void {
  * Asks the user to sign in (e.g. the cloud rejected the session) and waits: true once signed in,
  * false when the dialog was dismissed.
  */
-export function requestSignIn(reason: Exclude<AuthDialogReason, null> = 'required'): Promise<boolean> {
+export function requestSignIn(reason: 'expired' | 'required' = 'required'): Promise<boolean> {
   openAuthDialog('signIn', reason)
   return new Promise((resolve) => signInWaiters.push(resolve))
 }

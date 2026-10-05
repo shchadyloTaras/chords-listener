@@ -12,11 +12,16 @@ export const account: Dict = {
     'account.syncedSettings': 'Налаштування синхронізуються між пристроями',
     'account.intro.signIn': 'Увійди, щоб розпізнавати пісні в хмарі й бачити свою бібліотеку на будь-якому пристрої.',
     'account.intro.signUp':
-      'Безкоштовний акаунт: акорди з YouTube, точний аналіз на сервері й бібліотека пісень на всіх твоїх пристроях.',
+      'Безкоштовний акаунт: сервер точніше розпізнає акорди й вокал, а пісні будуть на всіх твоїх пристроях.',
     'account.intro.reset': 'Введи пошту акаунта — надішлемо посилання для нового пароля.',
     'account.intro.expired': 'Сесія завершилась — увійди ще раз, і продовжимо з того ж місця.',
     'account.intro.required': 'Для цього потрібен акаунт — увійди або зареєструйся, це безкоштовно.',
+    'account.intro.accuracy': 'Увійди — і сервер розпізнає цю пісню точніше.',
+    'account.intro.vocals': 'Увійди — і сервер розпізнає вокал цієї пісні.',
     'account.intro.local': 'Увійди, щоб тема, мова, інструмент і вигляд акордів були однакові на всіх твоїх пристроях.',
+    // a song analyzed in the browser: one calm hint for a guest
+    'account.note.browser':
+      'Ці акорди розпізнано в браузері. З безкоштовним акаунтом сервер визначає їх точніше (7, maj7, sus), розпізнає вокал і зберігає пісні на всіх пристроях.',
 
     'account.title.signIn': 'Вхід',
     'account.title.signUp': 'Новий акаунт',
@@ -67,11 +72,15 @@ export const account: Dict = {
     'account.synced': 'Library and settings on every device',
     'account.syncedSettings': 'Settings sync across your devices',
     'account.intro.signIn': 'Sign in to analyze songs in the cloud and see your library on any device.',
-    'account.intro.signUp': 'A free account: chords from YouTube, accurate server analysis and your song library on every device.',
+    'account.intro.signUp': 'A free account: the server detects chords and vocals more precisely, and your songs follow you to every device.',
     'account.intro.reset': 'Enter your account email and we will send a link to set a new password.',
     'account.intro.expired': 'Your session has ended — sign in again and we will pick up where you left off.',
     'account.intro.required': 'This needs an account — sign in or create one, it is free.',
+    'account.intro.accuracy': 'Sign in and the server will recognize this song more precisely.',
+    'account.intro.vocals': 'Sign in and the server will recognize the vocals of this song.',
     'account.intro.local': 'Sign in to keep your theme, language, instrument and chord view the same on every device.',
+    'account.note.browser':
+      'These chords were recognized in your browser. With a free account the server detects them more precisely (7, maj7, sus), recognizes vocals and keeps your songs on every device.',
 
     'account.title.signIn': 'Sign in',
     'account.title.signUp': 'Create account',

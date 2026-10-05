@@ -1,19 +1,27 @@
 import clsx from 'clsx'
 import { Sparkles } from 'lucide-react'
 import { useT } from '../../i18n'
-import { openAuthDialog } from '../../lib/auth'
+import { openAuthDialog, type AuthDialogReason } from '../../lib/auth'
 import { Button } from '../ui/IconButton'
 import { useCloudInvite } from './cloudInvite'
 
-/** «Зареєструватися» (primary) + «Увійти». */
-export function AccountButtons({ size = 'md', className }: { size?: 'sm' | 'md'; className?: string }) {
+/** «Зареєструватися» (primary) + «Увійти». `reason` tells the dialog what the account is wanted for. */
+export function AccountButtons({
+  size = 'md',
+  className,
+  reason,
+}: {
+  size?: 'sm' | 'md'
+  className?: string
+  reason?: Exclude<AuthDialogReason, null>
+}) {
   const t = useT()
   return (
     <div className={clsx('flex flex-wrap gap-2', className)}>
-      <Button variant="primary" size={size} onClick={() => openAuthDialog('signUp')}>
+      <Button variant="primary" size={size} onClick={() => openAuthDialog('signUp', reason)}>
         {t('account.signUp')}
       </Button>
-      <Button variant="secondary" size={size} onClick={() => openAuthDialog('signIn')}>
+      <Button variant="secondary" size={size} onClick={() => openAuthDialog('signIn', reason)}>
         {t('account.signIn')}
       </Button>
     </div>

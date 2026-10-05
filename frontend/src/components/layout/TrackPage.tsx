@@ -8,6 +8,7 @@ import { toApiError, type ClientErrorCode } from '../../lib/api'
 import { useApp } from '../../store'
 import { useDocumentTitle } from '../../hooks/useDocumentTitle'
 import { navigate, paths } from '../../hooks/useRoute'
+import { BrowserAnalysisNote } from '../account/BrowserAnalysisNote'
 import { errorText, errorTitle } from '../jobs/errorText'
 import { PlayerBar } from '../player/PlayerBar'
 import { PlayerHost } from '../player/PlayerHost'
@@ -88,6 +89,7 @@ export function TrackPage({ id, demo = false }: { id: string; demo?: boolean }) 
         className="w-full pt-[var(--video-dock-top,0px)] [--chords-sticky-top:calc(56px+var(--video-dock-top,0px))] lg:pt-0 lg:pr-[var(--video-dock-right,0px)] lg:[--chords-sticky-top:56px]"
         style={{ '--chords-bottom-offset': 'calc(var(--player-h, 96px) + 12px)' } as CSSProperties}
       >
+        <BrowserAnalysisNote trackId={id} className="mx-auto w-full max-w-[1180px] px-4 pt-4 sm:px-6 sm:pt-6" />
         <ChordWorkspace />
       </div>
       <PlayerHost track={track} />

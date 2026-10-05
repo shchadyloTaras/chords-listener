@@ -21,8 +21,7 @@ export const web: Dict = {
     'web.server.what': 'Посилання на YouTube, файли й записи з мікрофона розпізнає програма на твоєму компʼютері.',
     'web.browser.what':
       'Файли й записи з мікрофона розпізнаються прямо в браузері та зберігаються лише на цьому пристрої.',
-    'web.browser.needServer': 'Відео з YouTube слухаємо прямо на сторінці.',
-    'web.browser.cta': 'Увійди — і отримаєш акорди з YouTube, точний аналіз і бібліотеку на всіх пристроях.',
+    'web.browser.cta': 'Увійди — і отримаєш точніші акорди, вокал і бібліотеку на всіх пристроях.',
     'web.browser.localNote': 'Пісні, розпізнані в браузері, лишаються на цьому пристрої.',
 
     'web.advanced.summary': 'Розширено: власний сервер',
@@ -92,8 +91,7 @@ export const web: Dict = {
     'web.server.connected': 'Connected to {url}',
     'web.server.what': 'YouTube links, files and microphone recordings are analyzed by the app on your computer.',
     'web.browser.what': 'Files and microphone recordings are analyzed right in the browser and stay on this device.',
-    'web.browser.needServer': 'YouTube videos are listened to right on the page.',
-    'web.browser.cta': 'Sign in for chords from YouTube, accurate analysis and your library on every device.',
+    'web.browser.cta': 'Sign in for more precise chords, vocals and your library on every device.',
     'web.browser.localNote': 'Songs analyzed in the browser stay on this device.',
 
     'web.advanced.summary': 'Advanced: your own server',

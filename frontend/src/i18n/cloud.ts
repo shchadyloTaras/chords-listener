@@ -26,7 +26,7 @@ export const cloud: Dict = {
     'cloud.connected': 'Хмару підключено — бібліотека на всіх пристроях',
 
     // home: account call to action + the three ways in
-    'cloud.cta.benefit': 'Акорди з YouTube, точний аналіз і бібліотека на всіх пристроях',
+    'cloud.cta.benefit': 'Точніші акорди, вокал і бібліотека на всіх пристроях',
     'cloud.cta.title': 'Безкоштовний акаунт',
     'cloud.cta.guest': 'Без акаунта файли й мікрофон працюють прямо в браузері, а пісні зберігаються на цьому пристрої.',
     'cloud.ways.label': 'Як почати',
@@ -170,7 +170,7 @@ export const cloud: Dict = {
     'cloud.quota.inBrowser': 'In the browser',
     'cloud.connected': 'Cloud connected — your library on every device',
 
-    'cloud.cta.benefit': 'Chords from YouTube, accurate analysis and your library on every device',
+    'cloud.cta.benefit': 'More precise chords, vocals and your library on every device',
     'cloud.cta.title': 'Free account',
     'cloud.cta.guest': 'Without an account, files and the microphone work right in the browser and songs stay on this device.',
     'cloud.ways.label': 'Ways to start',

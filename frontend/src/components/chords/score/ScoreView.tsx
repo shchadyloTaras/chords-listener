@@ -300,7 +300,7 @@ function VocalsCard({ state }: { state: VocalsState }) {
               <p className="font-medium">{t('score.vocals.guest.title')}</p>
               <p className="mt-0.5 text-xs leading-relaxed text-muted">{t(local ? 'score.vocals.guestLocal.text' : 'score.vocals.guest.text')}</p>
             </div>
-            <AccountButtons size="sm" className="shrink-0" />
+            <AccountButtons size="sm" className="shrink-0" reason="vocals" />
           </>,
           'accent',
         )

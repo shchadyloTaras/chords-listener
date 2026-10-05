@@ -207,7 +207,7 @@ function PanelBody({ onConnected }: { onConnected(): void }) {
         title={kind === 'checking' ? t('web.mode.checking') : t('web.mode.browser')}
       >
         <p className="mt-0.5 text-sm text-muted">{t('web.browser.what')}</p>
-        <p className="mt-1 text-sm text-muted">{t(tabCapable ? 'web.browser.needServer' : 'cloud.input.hintYoutubeHere')}</p>
+        <p className="mt-1 text-sm text-muted">{t(tabCapable ? 'cloud.input.hintYoutubeGuest' : 'cloud.input.hintYoutubeHere')}</p>
       </PanelHead>
       {invite && (
         <div className="mt-4 rounded-xl border border-accent/30 bg-accent-soft p-3">
