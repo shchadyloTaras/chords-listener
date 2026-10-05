@@ -30,6 +30,8 @@ type Hint =
   | { kind: 'error'; code: ClientErrorCode }
   /** a link to another site and no server connected: only the cloud can fetch it (sign in) */
   | { kind: 'account' }
+  /** a YouTube page that is not one video (a playlist, a channel): nothing to listen to, nothing sent */
+  | { kind: 'notVideo' }
 
 function UploadProgress() {
   const t = useT()
@@ -186,8 +188,10 @@ export function SmartInput({ className }: { className?: string }) {
   const live = (text: string): Hint => {
     if (!text.trim()) return { kind: 'idle' }
     const c = checkUrl(text)
-    if (c.ok) return { kind: c.kind === 'youtube' ? 'youtube' : 'other' }
-    return { kind: 'idle' }
+    if (!c.ok) return { kind: 'idle' }
+    if (c.kind !== 'youtube') return { kind: 'other' }
+    // a local server tries any YouTube link itself; elsewhere only a video can be listened to
+    return c.videoId || localServer ? { kind: 'youtube' } : { kind: 'notVideo' }
   }
 
   const submit = async (text: string) => {
@@ -202,8 +206,8 @@ export function SmartInput({ className }: { className?: string }) {
     setBusy(true)
     try {
       const started = await startLink(c.url, ctrl.signal)
-      if (started.kind === 'account') {
-        setHint({ kind: 'account' })
+      if (started.kind === 'account' || started.kind === 'notVideo') {
+        setHint({ kind: started.kind })
         return
       }
       setValue('')
@@ -219,13 +223,13 @@ export function SmartInput({ className }: { className?: string }) {
   }
 
   // signed in from the notice: once the cloud is connected, start the waiting link (editing, clearing or
-  // dismissing it, another submit or leaving the page forgets it). Never a YouTube video: that opens the
-  // capture page without an account.
+  // dismissing it, another submit or leaving the page forgets it). Never a YouTube link: the cloud is not sent
+  // those (a video opens the capture page without an account).
   const submitRef = useRef(submit)
   useEffect(() => {
     submitRef.current = submit
   })
-  const waiting = hint.kind === 'account' && !checkUrl(value).videoId ? value : ''
+  const waiting = hint.kind === 'account' && checkUrl(value).kind === 'other' ? value : ''
   useEffect(() => {
     if (!waiting) return
     return submitWhenConnected(waiting, (url) => void submitRef.current(url))
@@ -317,6 +321,13 @@ export function SmartInput({ className }: { className?: string }) {
             {t('core.input.hintOther')}
           </span>
         )
+      case 'notVideo':
+        return (
+          <span className="flex items-center gap-1.5 text-text">
+            <CircleAlert className="size-3.5 shrink-0 text-accent" aria-hidden="true" />
+            {t('cloud.input.notVideo')}
+          </span>
+        )
       case 'invalid':
         return bad(t('core.input.hintInvalid'))
       case 'error':
@@ -340,7 +351,7 @@ export function SmartInput({ className }: { className?: string }) {
     }
   })()
 
-  const isYoutube = hint.kind === 'youtube'
+  const isYoutube = hint.kind === 'youtube' || hint.kind === 'notVideo'
 
   return (
     <div className={className}>

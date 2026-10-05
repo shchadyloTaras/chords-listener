@@ -29,6 +29,7 @@ vi.mock('../../hooks/useRoute', async (importOriginal) => ({
 
 import { useConnection, type ConnectionState } from '../../lib/serverMode'
 import { linkTarget, startLink, submitWhenConnected } from './startLink'
+import { parseYouTubeId } from './url'
 
 const VIDEO = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
 const CLOUD = 'https://chords-api-abc123-ew.a.run.app'
@@ -66,6 +67,48 @@ describe('linkTarget', () => {
   ] as const)('%s', (_name, conn, url, target) => {
     expect(linkTarget(url, conn)).toBe(target)
   })
+
+  // every shape the server reads as a single video (backend/app/sources.py) is listened to here, never sent
+  const VIDEOS = [
+    'https://www.youtube.com/attribution_link?u=%2Fwatch%3Fv%3DdQw4w9WgXcQ',
+    'https://www.youtube.com/attribution_link?a=x&u=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DdQw4w9WgXcQ',
+    'https://gaming.youtube.com/watch?v=dQw4w9WgXcQ',
+    'https://www.youtube.com/e/dQw4w9WgXcQ',
+    'https://www.youtube.com/watch/dQw4w9WgXcQ',
+    'https://www.youtube.com/watch?vi=dQw4w9WgXcQ',
+    'https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ',
+    'https://youtube.com./watch?v=dQw4w9WgXcQ',
+  ]
+  // YouTube, but not one video: nothing to listen to, and nothing for the cloud either
+  const NOT_VIDEOS = [
+    'https://www.youtube.com/playlist?list=PLx0sYbCqOb8TBPRdmBHs5Iftvv9TPboYG',
+    'https://www.youtube.com/@SomeChannel',
+    'https://www.youtube.com/clip/UgkxAbCdEfGhIjKlMnOpQrStUvWxYz',
+    'https://m.youtube.com/channel/UC1234567890',
+    'https://youtu.be/',
+  ]
+  const GUEST = { status: 'browser', backend: null } as const
+  const CLOUD_CONN = { status: 'server', backend: 'cloud' } as const
+  const LOCAL = { status: 'server', backend: 'local' } as const
+
+  it.each(VIDEOS)('a video, %s: listened to here on the cloud and as a guest; a local server downloads it', (url) => {
+    expect(parseYouTubeId(url)).toBe('dQw4w9WgXcQ')
+    expect(linkTarget(url, CLOUD_CONN)).toBe('capture')
+    expect(linkTarget(url, GUEST)).toBe('capture')
+    expect(linkTarget(url, LOCAL)).toBe('server')
+  })
+
+  it.each(NOT_VIDEOS)('not one video, %s: neither the cloud nor an account; a local server may try', (url) => {
+    expect(parseYouTubeId(url)).toBeNull()
+    expect(linkTarget(url, CLOUD_CONN)).toBe('notVideo')
+    expect(linkTarget(url, GUEST)).toBe('notVideo')
+    expect(linkTarget(url, LOCAL)).toBe('server')
+  })
+
+  it('a look-alike host is another site', () => {
+    expect(linkTarget('https://youtube.com.example.org/watch?v=dQw4w9WgXcQ', CLOUD_CONN)).toBe('server')
+    expect(linkTarget('https://notyoutube.com/watch?v=dQw4w9WgXcQ', GUEST)).toBe('account')
+  })
 })
 
 describe('startLink', () => {
@@ -94,6 +137,15 @@ describe('startLink', () => {
     cloud()
     expect(await startLink(VIDEO)).toEqual({ kind: 'capture', videoId: 'dQw4w9WgXcQ' })
     expect(route.navigate).toHaveBeenCalledWith('/listen/youtube/dQw4w9WgXcQ')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('a playlist / channel / clip, on the cloud or as a guest: says so, nothing is sent or opened', async () => {
+    for (const conn of [cloud, guest]) {
+      conn()
+      expect(await startLink('https://www.youtube.com/playlist?list=PLx0sYbCqOb8TBPRdmBHs5Iftvv9TPboYG')).toEqual({ kind: 'notVideo' })
+    }
+    expect(route.navigate).not.toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()
   })
 

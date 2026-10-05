@@ -12,6 +12,8 @@ export type LinkStart =
   | { kind: 'job'; job: Job }
   /** a YouTube video: played and listened to on the capture page (tab, or the on-device ways) */
   | { kind: 'capture'; videoId: string }
+  /** a YouTube page that is not one video (a playlist, a channel): nothing to listen to, nothing sent */
+  | { kind: 'notVideo' }
   /** another site and no server: only the cloud can fetch it (sign in) */
   | { kind: 'account' }
 
@@ -29,6 +31,7 @@ export async function startLink(url: string, signal?: AbortSignal): Promise<Link
     navigate(paths.capture(videoId))
     return { kind: 'capture', videoId }
   }
+  if (target === 'notVideo') return { kind: 'notVideo' }
   if (target === 'account') return { kind: 'account' }
   try {
     return { kind: 'job', job: await submitUrl(url, undefined, signal) }

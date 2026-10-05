@@ -328,13 +328,16 @@ export async function retryJob(job: Job, opts?: { inBrowser?: boolean }): Promis
   acknowledgeJob(job.id)
   const file = retryFiles.get(job.id)
   if (job.source?.type !== 'file' && job.source?.url) {
-    // the cloud cannot download YouTube: the video is listened to in the browser instead
-    const videoId = parseYouTubeId(job.source.url)
-    if (videoId && linkTarget(job.source.url, useConnection.getState()) === 'capture') {
+    const { url } = job.source
+    const target = linkTarget(url, useConnection.getState())
+    // the cloud is never sent YouTube links: the video is listened to in the browser instead
+    if (target === 'capture' || target === 'notVideo') {
+      const videoId = job.source.videoId ?? parseYouTubeId(url)
+      if (!videoId) return false
       navigate(paths.capture(videoId))
       return true
     }
-    await submitUrl(job.source.url)
+    await submitUrl(url)
     return true
   }
   if (file) {

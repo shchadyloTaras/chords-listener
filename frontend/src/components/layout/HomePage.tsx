@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { useT } from '../../i18n'
+import { t as tNow, useT } from '../../i18n'
 import { useApp } from '../../store'
 import { isTypingTarget } from '../../hooks/useHotkeys'
 import { useDocumentTitle } from '../../hooks/useDocumentTitle'
@@ -33,6 +33,8 @@ function useGlobalPaste() {
             // another site without a server: the link field takes it and explains the account
             if (started.kind === 'account' && !announceServerRequired(link))
               useApp.getState().toast(errorText('server_required'), 'info')
+            // a YouTube playlist or channel: nothing was sent, say what to paste instead
+            if (started.kind === 'notVideo') useApp.getState().toast(tNow('cloud.input.notVideo'), 'info')
           },
           (err) => useApp.getState().toast(errorText(toApiError(err).code), 'error'),
         )

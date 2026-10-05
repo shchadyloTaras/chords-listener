@@ -11,47 +11,75 @@ export interface UrlCheck {
   videoId?: string | null
 }
 
-const YT_HOSTS = new Set([
-  'youtube.com',
-  'www.youtube.com',
-  'm.youtube.com',
-  'music.youtube.com',
-  'youtu.be',
-  'www.youtu.be',
-  'youtube-nocookie.com',
-  'www.youtube-nocookie.com',
-])
+/** YouTube's own hosts, as the server reads them (backend/app/sources.py `_is_youtube_host`). */
+function isYouTubeHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, '')
+  if (['youtu.be', 'www.youtu.be', 'youtube-nocookie.com', 'www.youtube-nocookie.com'].includes(host)) return true
+  return host === 'youtube.com' || host.endsWith('.youtube.com')
+}
 
-const ID_RE = /^[A-Za-z0-9_-]{11}$/
-
-/** Extracts an 11-char video id from common YouTube URL shapes. */
-export function parseYouTubeId(raw: string): string | null {
-  let u: URL
+/** The link parsed, when it points at YouTube (any page: a video, a playlist, a channel). */
+function youTubeUrl(raw: string): URL | null {
   try {
-    u = new URL(raw)
+    const u = new URL(raw)
+    return isYouTubeHost(u.hostname) ? u : null
   } catch {
     return null
   }
-  const host = u.hostname.toLowerCase()
-  if (!YT_HOSTS.has(host)) return null
-  if (host.endsWith('youtu.be')) {
-    const id = u.pathname.split('/')[1] ?? ''
-    return ID_RE.test(id) ? id : null
+}
+
+const ID_RE = /^[A-Za-z0-9_-]{11}$/
+const ID_PATHS = new Set(['shorts', 'embed', 'v', 'e', 'live', 'watch'])
+
+/** `decodeURIComponent` that leaves a malformed escape as it is (like Python's `unquote`). */
+function unquote(text: string): string {
+  try {
+    return decodeURIComponent(text)
+  } catch {
+    return text
   }
-  const v = u.searchParams.get('v')
-  if (v && ID_RE.test(v)) return v
-  const m = /^\/(?:shorts|embed|live|v)\/([A-Za-z0-9_-]{11})/.exec(u.pathname)
-  return m ? m[1] : null
+}
+
+/** The server's reading of a YouTube link (backend/app/sources.py `_youtube_id_from`): keep the two in step. */
+function idFrom(host: string, path: string, query: URLSearchParams): string | null {
+  const segments = path.split('/').filter(Boolean)
+  if (host.endsWith('youtu.be')) return segments[0] && ID_RE.test(segments[0]) ? segments[0] : null
+  const v = query.get('v') || query.get('vi') || ''
+  if (ID_RE.test(v)) return v
+  if (segments.length >= 2 && ID_PATHS.has(segments[0]) && ID_RE.test(segments[1])) return segments[1]
+  if (segments[0] === 'attribution_link') {
+    // a shared link: the video's own link (often just "/watch?v=…") is in `u`
+    const inner = unquote(query.get('u') ?? '')
+    if (!inner) return null
+    try {
+      const u = new URL(inner.includes('://') ? inner : `https://www.youtube.com${inner}`)
+      return idFrom('www.youtube.com', u.pathname, u.searchParams)
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+/** Extracts the 11-char video id from every YouTube URL shape the server knows; null for anything else. */
+export function parseYouTubeId(raw: string): string | null {
+  const u = youTubeUrl(raw)
+  return u ? idFrom(u.hostname.toLowerCase().replace(/\.$/, ''), u.pathname, u.searchParams) : null
 }
 
 /**
- * Where a link goes. YouTube refuses the cloud's servers, so on the cloud (and without a server) a
- * YouTube video is listened to in the browser; a local server (home connection) downloads it.
- * Lives here, not in startLink.ts, so hooks/useJobs.ts can use it without an import cycle.
+ * Where a link goes. YouTube refuses the cloud's servers, so on the cloud (and without a server) a YouTube
+ * video is listened to in the browser, and any other YouTube page (a playlist, a channel, a clip) is not one
+ * video to listen to: 'notVideo', nothing is sent anywhere. A local server (home connection) downloads every
+ * link itself. Lives here, not in startLink.ts, so hooks/useJobs.ts can use it without an import cycle.
  */
-export function linkTarget(url: string, conn: Pick<ConnectionState, 'status' | 'backend'>): 'capture' | 'server' | 'account' {
+export function linkTarget(
+  url: string,
+  conn: Pick<ConnectionState, 'status' | 'backend'>,
+): 'capture' | 'notVideo' | 'server' | 'account' {
   const server = conn.status === 'server'
-  if (parseYouTubeId(url)) return server && conn.backend === 'local' ? 'server' : 'capture'
+  if (server && conn.backend === 'local') return 'server'
+  if (youTubeUrl(url)) return parseYouTubeId(url) ? 'capture' : 'notVideo'
   return server ? 'server' : 'account'
 }
 
@@ -75,7 +103,7 @@ export function checkUrl(input: string): UrlCheck {
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return { ok: false }
   if (!u.hostname.includes('.') && u.hostname !== 'localhost') return { ok: false }
   const url = u.toString()
-  const isYt = YT_HOSTS.has(u.hostname.toLowerCase())
+  const isYt = isYouTubeHost(u.hostname)
   return { ok: true, url, kind: isYt ? 'youtube' : 'other', videoId: isYt ? parseYouTubeId(url) : null }
 }
 

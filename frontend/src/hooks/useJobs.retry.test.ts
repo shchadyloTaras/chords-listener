@@ -1,4 +1,5 @@
-// Retrying an upload that the cloud refused for today's limit: the same file, analyzed in this browser.
+// Retrying an upload that the cloud refused for today's limit: the same file, analyzed in this browser. Retrying
+// a YouTube job on the cloud: the video is listened to here (the cloud is never sent YouTube links).
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Job } from '../types'
 
@@ -20,17 +21,19 @@ vi.mock('./useRoute', async (importOriginal) => ({
   navigate: vi.fn(),
 }))
 
-const api = vi.hoisted(() => ({ uploadFile: vi.fn() }))
+const api = vi.hoisted(() => ({ uploadFile: vi.fn(), createJob: vi.fn() }))
 vi.mock('../lib/api', () => ({
   uploadFile: api.uploadFile,
   toApiError: (e: unknown) => e,
   getJob: vi.fn(),
   listJobs: vi.fn(),
-  createJob: vi.fn(),
+  createJob: api.createJob,
   reanalyzeTrack: vi.fn(),
 }))
 
+import { useConnection, type ConnectionState } from '../lib/serverMode'
 import { retryJob, uploadAndFollow } from './useJobs'
+import { navigate } from './useRoute'
 
 // done, so following it opens the track and starts no polling
 const stored: Job = {
@@ -49,6 +52,8 @@ beforeEach(async () => {
   api.uploadFile.mockReset().mockResolvedValue(stored)
   await uploadAndFollow(file) // remembers the file for "Retry"
   api.uploadFile.mockClear()
+  api.createJob.mockReset().mockResolvedValue({ ...stored, id: 'j3' })
+  vi.mocked(navigate).mockClear()
 })
 
 describe('retryJob', () => {
@@ -69,5 +74,40 @@ describe('retryJob', () => {
     api.uploadFile.mockReset().mockResolvedValue({ ...stored, id: 'j2' })
     expect(await retryJob({ ...stored, id: 'unknown' })).toBe(false)
     expect(api.uploadFile).not.toHaveBeenCalled()
+  })
+})
+
+describe('retryJob, a link', () => {
+  const VIDEO = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+  const failed = (source: Job['source']): Job => ({ ...stored, id: 'y1', status: 'error', errorCode: 'download_failed', trackId: null, source })
+  const connect = (patch: Partial<ConnectionState>) =>
+    useConnection.setState({ probing: false, failure: null, checkedAt: 1, health: null, permission: 'unsupported', ...patch })
+  const cloud = () => connect({ status: 'server', backend: 'cloud', apiBase: 'https://api.example.run.app/api', remote: true })
+
+  it('a YouTube video on the cloud: opens it on the capture page, nothing is sent', async () => {
+    cloud()
+    expect(await retryJob(failed({ type: 'youtube', videoId: 'dQw4w9WgXcQ', url: VIDEO }))).toBe(true)
+    expect(navigate).toHaveBeenCalledWith('/listen/youtube/dQw4w9WgXcQ')
+    expect(api.createJob).not.toHaveBeenCalled()
+  })
+
+  it('the video the job knows wins over what its link says', async () => {
+    cloud()
+    expect(await retryJob(failed({ type: 'youtube', videoId: 'dQw4w9WgXcQ', url: 'https://www.youtube.com/playlist?list=PL1' }))).toBe(true)
+    expect(navigate).toHaveBeenCalledWith('/listen/youtube/dQw4w9WgXcQ')
+    expect(api.createJob).not.toHaveBeenCalled()
+  })
+
+  it('a YouTube page that is not one video, on the cloud: nothing is sent, nothing to retry', async () => {
+    cloud()
+    expect(await retryJob(failed({ type: 'url', url: 'https://www.youtube.com/playlist?list=PL1' }))).toBe(false)
+    expect(navigate).not.toHaveBeenCalled()
+    expect(api.createJob).not.toHaveBeenCalled()
+  })
+
+  it('a local server downloads the video again', async () => {
+    connect({ status: 'server', backend: 'local', apiBase: '/api', remote: false })
+    expect(await retryJob(failed({ type: 'youtube', videoId: 'dQw4w9WgXcQ', url: VIDEO }))).toBe(true)
+    expect(api.createJob).toHaveBeenCalledWith(VIDEO, undefined, undefined)
   })
 })

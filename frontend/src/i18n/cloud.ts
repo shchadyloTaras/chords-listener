@@ -45,6 +45,8 @@ export const cloud: Dict = {
     'cloud.input.hintGuestNoTab':
       'Файли й мікрофон працюють без акаунта. Відео з YouTube відкриємо тут і підкажемо, як його послухати. Посилання з інших сайтів — після входу.',
     'cloud.input.hintYoutubeHere': 'Відео з YouTube — відкриємо його тут і підкажемо, як його послухати',
+    // a YouTube playlist, channel or clip: nothing to listen to (and the cloud never gets YouTube links)
+    'cloud.input.notVideo': 'Це не окреме відео — відкрий на YouTube саме відео й скопіюй його посилання',
 
     // "listen in the tab" (YouTube)
     'cloud.capture.title': 'Слухати у вкладці',
@@ -189,6 +191,7 @@ export const cloud: Dict = {
     'cloud.input.hintGuestNoTab':
       "Files and the microphone work without an account. We'll open YouTube videos here and show how to listen to them. Links to other sites need an account.",
     'cloud.input.hintYoutubeHere': "YouTube video — we'll open it here and show how to listen to it",
+    'cloud.input.notVideo': "This isn't a single video — open the video itself on YouTube and copy its link",
 
     'cloud.capture.title': 'Listen in the tab',
     'cloud.capture.blocked':
