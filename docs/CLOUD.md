@@ -55,10 +55,11 @@ A signed-in user's library, track data, notes, vocals and audio are read by the 
   1. `audio.mp3` and every `stems/<name>.mp3` get a `firebaseStorageDownloadTokens` metadata token and `contentType` `audio/mpeg` (an existing token is kept);
   2. `users/<uid>/tracks/<id>/track.json` is written: the Track JSON without `audioUrl` / `stemUrls`, plus `version` and `media: {audio: {path, token}, stems: {<name>: {path, token}}}`;
   3. the index document `users/{uid}/tracks/{trackId}` is upserted over the Firestore REST API with the runtime service account (no gRPC client): the `TrackSummary` fields of `GET /api/tracks` + `version` + `publishedAt`.
-- A track (and its notes) kept on a device from Storage is valid exactly while its `version` equals the index document's. `version` is bumped in every mode (a meta field, not part of the API's JSON); local mode publishes nothing and writes no `track.json`.
+- A track, its notes and vocal notes, kept on a device with a version, are valid exactly while that version equals the index document's. `version` is bumped in every mode (a meta field, not part of the API's JSON); local mode publishes nothing and writes no `track.json`.
 - **Delete** unpublishes first (removes the index document), then removes the directory, under the same lock, so a late publish cannot bring a deleted track back. "Already analyzed" duplicates publish the track when the index lacks it (self-heal for tracks that predate publishing).
 - **Failures never fail the user's request.** A publish or unpublish that still fails after 3 attempts (HTTP 408/429/5xx, network) puts the track id into `users/<uid>/publish-pending.json`; the API retries those at start-up and every 10 minutes while an instance is up. The file is never client-readable.
-- **Fallback.** When the index or a Storage read fails (permission, network, a track that is not published yet), the site uses the API path as before; a missing rollout step breaks nothing. A failed index, and each kind of Storage file (`track.json`, `notes.json`, `vocals.json`) once a read of it failed (anything but a missing object), stay on the API path for the rest of the session: a reload, or another account, tries again (no retry storms). Client side: docs/SPEC.md "Live library".
+- **Fallback.** When the index or a Storage read fails (permission, network, no answer within a few seconds, a track that is not published yet), the site uses the API path as before: missing Firestore / Storage rules or bucket CORS break nothing. A failed index, and each kind of Storage file (`track.json`, `notes.json`, `vocals.json`) once a read of it failed (anything but a missing object), stay on the API path for the rest of the session: a reload, or another account, tries again (no retry storms). Client side: docs/SPEC.md "Live library".
+- **The backfill must run before the site.** An index that answers is taken as the whole library: a track without an index document (one that predates publishing, before the backfill ran) is not listed — opened by its link, it still comes from the API. So the site with the new read path is deployed only after a verified backfill (Rollout order, below).
 
 ### Rules
 
@@ -80,7 +81,7 @@ A signed-in user's library, track data, notes, vocals and audio are read by the 
 
 ### Rollout order and backfill
 
-1. Deploy the API with publishing (it writes the index and `track.json`; current clients ignore them). 2. IAM role `roles/datastore.user` for the runtime service account. 3. Firestore and Storage rules, bucket CORS. 4. Backfill. 5. Deploy the site with the new read path. `scripts/deploy_cloud.sh` does steps 1–3 in one run (Deploy, below); the smoke test runs after 1, 4 and 5.
+1. Deploy the API with publishing (it writes the index and `track.json`; current clients ignore them). 2. IAM role `roles/datastore.user` for the runtime service account. 3. Firestore and Storage rules, bucket CORS. 4. Backfill, and verify it (every track of a user has its index document). 5. Deploy the site with the new read path — only then: it lists what the index has, and without the backfill older tracks would be missing from the list. `scripts/deploy_cloud.sh` does steps 1–3 in one run (Deploy, below); the smoke test runs after 1, 4 and 5.
 
 Backfill publishes the tracks that exist already: `python -m app.publish backfill [--uid UID]` (every user, or one) prints `N track(s) published`. It is idempotent: a track that is published already is simply published again. Run it once as a Cloud Run job with the service image and the service account:
 

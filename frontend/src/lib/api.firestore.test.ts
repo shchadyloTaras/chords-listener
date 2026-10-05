@@ -34,7 +34,7 @@ const files = vi.hoisted(() => ({
 vi.mock('./cloud/files', async (importOriginal) => ({ ...(await importOriginal<typeof import('./cloud/files')>()), ...files }))
 
 import * as api from './api'
-import { cachedAudio, cachedList, cachedTrack, cachedTrackAt, saveList, saveTrack, TRACK_TTL_MS } from './cloud/cache'
+import { cachedAudio, cachedList, cachedTrack, cachedTrackAt, LIST_TTL_MS, saveList, saveTrack, TRACK_TTL_MS } from './cloud/cache'
 import { useLibrary } from './cloud/library'
 import { createMemoryRepo, setLocalRepo, type LocalRepo } from './local'
 import { useConnection, type ConnectionState } from './serverMode'
@@ -196,31 +196,50 @@ describe('the library list', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('before the index answers: the list kept here, nothing asked', async () => {
-    await saveList(UID, [summary('a', 3)])
-    indexStarting()
-    expect((await api.listTracks()).map((t) => t.id)).toEqual(['a'])
-    expect(fetchMock).not.toHaveBeenCalled()
-  })
-
-  it('before the index answers, nothing kept (or asked for now): its first answer is waited for', async () => {
-    indexStarting()
-    const listed = api.listTracks()
-    await new Promise((r) => setTimeout(r, 10))
-    index([summary('a', 1)])
-    expect((await listed).map((t) => t.id)).toEqual(['a'])
-
+  it('before the index answers: the list kept here is painted at once, the list itself waits for the index', async () => {
     await saveList(UID, [summary('kept', 1)])
     indexStarting()
+    expect((await api.listCachedTracks())?.map((t) => t.id)).toEqual(['kept'])
+    const listed = api.listTracks()
     const forced = api.listTracks(undefined, { force: true })
     await new Promise((r) => setTimeout(r, 10))
     index([summary('new', 1)])
+    expect((await listed).map((t) => t.id)).toEqual(['new'])
     expect((await forced).map((t) => t.id)).toEqual(['new'])
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('the index does not answer in time: the API path', async () => {
     api.libraryWait.ms = 20
+    indexStarting()
+    fetchMock.mockResolvedValueOnce(json([summary('a', 1)]))
+    expect((await api.listTracks()).map((t) => t.id)).toEqual(['a'])
+    expect(urls()).toEqual([`${CLOUD}/api/tracks`])
+  })
+
+  it('a list kept here and an index that fails (no rules, SDK blocked): the API path with its TTL', async () => {
+    await saveList(UID, [summary('kept', 1)])
+    // still fresh: served from this device, as before the index
+    indexStarting()
+    const fresh = api.listTracks()
+    useLibrary.setState({ error: true })
+    expect((await fresh).map((t) => t.id)).toEqual(['kept'])
+    expect(fetchMock).not.toHaveBeenCalled()
+    // older than LIST_TTL_MS: the cloud is asked, however long the index takes to fail
+    vi.setSystemTime(Date.now() + LIST_TTL_MS + 1)
+    indexStarting()
+    const stale = api.listTracks()
+    await new Promise((r) => setTimeout(r, 10))
+    fetchMock.mockResolvedValueOnce(json([summary('a', 1), summary('kept', 1)]))
+    useLibrary.setState({ error: true })
+    expect((await stale).map((t) => t.id).sort()).toEqual(['a', 'kept'])
+    expect(urls()).toEqual([`${CLOUD}/api/tracks`])
+  })
+
+  it('a list kept here and an index that never answers: after the wait, the API path with its TTL', async () => {
+    api.libraryWait.ms = 20
+    await saveList(UID, [summary('kept', 1)])
+    vi.setSystemTime(Date.now() + LIST_TTL_MS + 1)
     indexStarting()
     fetchMock.mockResolvedValueOnce(json([summary('a', 1)]))
     expect((await api.listTracks()).map((t) => t.id)).toEqual(['a'])

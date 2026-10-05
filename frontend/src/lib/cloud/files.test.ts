@@ -4,30 +4,33 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const sdk = vi.hoisted(() => ({
-  /** object path → its bytes, or the error reading it throws */
-  objects: new Map<string, ArrayBuffer | Error>(),
+  /** object path → its bytes, the error reading it throws, or 'hang' (no answer, ever) */
+  objects: new Map<string, ArrayBuffer | Error | 'hang'>(),
   reads: [] as string[],
+  /** the FirebaseStorage instance */
+  storage: { maxOperationRetryTime: 120_000 },
 }))
 
 vi.mock('./storage', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./storage')>()),
   loadStorage: async () => ({
-    storage: { app: 'chords' },
+    storage: sdk.storage,
     sdk: {
       ref: (_storage: unknown, path: string) => ({ fullPath: path }),
-      getBytes: async (ref: { fullPath: string }) => {
+      getBytes: (ref: { fullPath: string }) => {
         sdk.reads.push(ref.fullPath)
         const answer = sdk.objects.get(ref.fullPath)
-        if (answer instanceof Error) throw answer
-        if (!answer) throw storageError('storage/object-not-found')
-        return answer
+        if (answer === 'hang') return new Promise<ArrayBuffer>(() => undefined)
+        if (answer instanceof Error) return Promise.reject(answer)
+        if (!answer) return Promise.reject(storageError('storage/object-not-found'))
+        return Promise.resolve(answer)
       },
     },
   }),
 }))
 
 import { ApiError } from '../api'
-import { mediaUrl, readJsonFile, readTrackFile, trackFromFile, type TrackFile } from './files'
+import { mediaUrl, readJsonFile, readTrackFile, STORAGE_READ_TIMEOUT_MS, STORAGE_RETRY_MS, trackFromFile, type TrackFile } from './files'
 
 const BUCKET = 'build-chords-listener.firebasestorage.app'
 
@@ -74,6 +77,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
@@ -155,6 +159,30 @@ describe('readTrackFile', () => {
     // another account starts afresh, and so does the first one after it
     expect(await readTrackFile('ivan', 'abc123')).toBeNull()
     expect(await readTrackFile('heidi', 'abc123')).toMatchObject({ version: 4 })
+  })
+})
+
+describe('a read is bounded', () => {
+  it('the SDK retries a read that fails at the network level (no CORS, blocked, offline) for seconds, not 2 minutes', async () => {
+    sdk.storage.maxOperationRetryTime = 120_000
+    await readTrackFile('lena', 'abc123')
+    expect(sdk.storage.maxOperationRetryTime).toBe(STORAGE_RETRY_MS)
+    expect(STORAGE_RETRY_MS).toBeLessThanOrEqual(5000)
+  })
+
+  it('no answer in time counts as a failure: ApiError network, and the file is not read again this session', async () => {
+    vi.useFakeTimers()
+    sdk.objects.set('users/mike/tracks/abc123/track.json', 'hang')
+    const read = readTrackFile('mike', 'abc123')
+    const failed = expect(read).rejects.toMatchObject({ name: 'ApiError', code: 'network' })
+    await vi.advanceTimersByTimeAsync(STORAGE_READ_TIMEOUT_MS - 1)
+    expect(console.warn).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    await failed
+    expect(console.warn).toHaveBeenCalledTimes(1)
+    await expect(readTrackFile('mike', 'other1')).rejects.toBeInstanceOf(ApiError)
+    expect(sdk.reads).toEqual(['users/mike/tracks/abc123/track.json'])
+    expect(STORAGE_READ_TIMEOUT_MS).toBeLessThanOrEqual(10_000)
   })
 })
 

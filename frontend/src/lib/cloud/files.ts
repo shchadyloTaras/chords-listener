@@ -2,10 +2,10 @@
 // (docs/CLOUD.md "Library in Firestore"): the API publishes users/{uid}/tracks/{id}/track.json next to
 // notes.json and vocals.json, readable by their owner only (/storage.rules). The audio and the stems stream
 // through download-token URLs built from track.json's `media`. lib/api.ts and lib/vocals.ts read through here
-// while the live library (lib/cloud/library) answers, and take the API path on any gap. A file whose read
-// failed (rules, CORS, network) is not read again this session: the API answers for it until a reload or
-// another account (no retry storms). firebase/storage is loaded on demand (lib/cloud/storage): guests never
-// download it.
+// while the live library (lib/cloud/library) answers, and take the API path on any gap. Every read is bounded
+// (STORAGE_RETRY_MS, STORAGE_READ_TIMEOUT_MS), and a kind of file whose read failed (rules, CORS, network, no
+// answer in time) is not read again this session: the API answers for it until a reload or another account
+// (no retry storms). firebase/storage is loaded on demand (lib/cloud/storage): guests never download it.
 import type { Track } from '../../types'
 import { ApiError } from '../api'
 import { firebaseConfig } from '../firebaseConfig'
@@ -13,6 +13,14 @@ import { loadStorage } from './storage'
 
 /** Where download-token URLs point. */
 export const STORAGE_DOWNLOAD_ORIGIN = 'https://firebasestorage.googleapis.com'
+
+/**
+ * How long the Storage SDK keeps retrying a read that fails at the network level (no CORS, blocked, offline):
+ * by default 2 minutes, during which the track would not open — the API answers instead.
+ */
+export const STORAGE_RETRY_MS = 4000
+/** A read that has not answered by then (a connection that hangs) counts as failed: the API answers. */
+export const STORAGE_READ_TIMEOUT_MS = 8000
 
 /** A media object of a track: its path in the bucket and its download token. */
 export interface MediaRef {
@@ -51,6 +59,15 @@ export function trackFromFile(file: TrackFile): Track {
 /** Files whose read failed for `failed.uid` this session: the API answers for them from then on. */
 let failed: { uid: string; names: Set<FileName> } = { uid: '', names: new Set() }
 
+/** `p`, or a rejection once `ms` have passed (the read itself cannot be cancelled: its answer is ignored). */
+function within<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Firebase Storage did not answer in ${ms} ms`)), ms)
+  })
+  return Promise.race([p, late]).finally(() => clearTimeout(timer))
+}
+
 /** The file parsed; null when there is no such object or it is not JSON. Throws ApiError when it cannot be read. */
 async function readFile(uid: string, id: string, name: FileName): Promise<unknown> {
   if (failed.uid !== uid) failed = { uid, names: new Set() }
@@ -59,7 +76,9 @@ async function readFile(uid: string, id: string, name: FileName): Promise<unknow
   let bytes: ArrayBuffer
   try {
     const { storage, sdk } = await loadStorage()
-    bytes = await sdk.getBytes(sdk.ref(storage, `users/${uid}/tracks/${id}/${name}`))
+    // getBytes retries for this long (uploads have their own maxUploadRetryTime and are not affected)
+    storage.maxOperationRetryTime = STORAGE_RETRY_MS
+    bytes = await within(sdk.getBytes(sdk.ref(storage, `users/${uid}/tracks/${id}/${name}`)), STORAGE_READ_TIMEOUT_MS)
   } catch (err) {
     const code = err && typeof err === 'object' && 'code' in err ? err.code : null
     if (code === 'storage/object-not-found') return null

@@ -74,10 +74,12 @@ useJobs.subscribe((s, prev) => {
 })
 
 // The live library (lib/cloud/library) has a new list: its first answer, or a change made on another device.
+// It failed: the API path takes over (the list kept here is trusted for its TTL only, then the cloud is asked).
 // Emptied (sign-out, another account, the API is no longer the cloud) it asks nothing: the session handler below
 // and the page's own reload on a change of API take care of that, and nothing loaded for the old account shows.
 useLibrary.subscribe((s, prev) => {
   if (s.tracks !== prev.tracks && s.tracks !== null) void refreshTracks()
+  else if (s.error && !prev.error && s.uid !== null) void refreshTracks()
 })
 
 // Signed in, out, or as someone else: a list on its way was asked for the previous session. After a sign-out

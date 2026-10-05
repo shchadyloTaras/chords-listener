@@ -170,13 +170,26 @@ describe('the live library (lib/cloud/library)', () => {
     expect(api.listTracks).toHaveBeenCalledTimes(2)
   })
 
-  it('a failure or anything but a new list asks nothing', async () => {
+  it('it fails: the list is loaded again (the API path, with its TTL, takes over)', async () => {
+    api.listCachedTracks.mockResolvedValue([song('days old')])
+    api.listTracks.mockResolvedValue([song('fresh')])
+    useLibrary.setState({ uid: 'uid42', tracks: null, versions: {}, error: false })
+    useLibrary.setState({ error: true })
+    await vi.waitFor(() => expect(ids()).toEqual(['fresh']))
+    expect(api.listTracks).toHaveBeenCalledTimes(1)
+    // already failed: nothing more to do
+    useLibrary.setState({ error: true, versions: {} })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(api.listTracks).toHaveBeenCalledTimes(1)
+  })
+
+  it('anything but a new list or a failure asks nothing', async () => {
     const tracks = [song('a')]
     api.listTracks.mockResolvedValue(tracks)
     useLibrary.setState({ uid: 'uid42', tracks, versions: { a: 1 }, error: false })
     await vi.waitFor(() => expect(api.listTracks).toHaveBeenCalledTimes(1))
-    useLibrary.setState({ error: true })
     useLibrary.setState({ versions: { a: 1 } })
+    useLibrary.setState({ tracks })
     await new Promise((r) => setTimeout(r, 0))
     expect(api.listTracks).toHaveBeenCalledTimes(1)
   })

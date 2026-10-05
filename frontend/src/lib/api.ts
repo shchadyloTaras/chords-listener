@@ -301,14 +301,11 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 /**
- * The cloud list while the live library answers for `uid` (kept here for the next first paint). Before its first
- * answer: the list kept here, unless `force` — else that answer is waited for. Null: the API path.
+ * The cloud list while the live library answers for `uid` (kept here for the next first paint). Its first answer
+ * is waited for when on its way — the home page shows the list kept here meanwhile (listCachedTracks). Null: the
+ * API path — the index failed or did not answer in time, and the list kept here is trusted for LIST_TTL_MS only.
  */
-async function liveList(uid: string, force = false): Promise<TrackSummary[] | null> {
-  if (!force && liveStarting(uid)) {
-    const kept = await cache.cachedList(uid)
-    if (kept && liveStarting(uid)) return withoutDeleted(uid, kept.tracks).map(withServerUrls)
-  }
+async function liveList(uid: string): Promise<TrackSummary[] | null> {
   await liveAnswered(uid)
   // Read after the last await and saved without waiting, so nothing comes between this read and the caller: a
   // list that changes while a refresh is in flight joins that refresh (tracksStore) and must not be missed.
@@ -497,7 +494,7 @@ export async function listTracks(signal?: AbortSignal, opts: { force?: boolean }
   const browserTracks = await local(listLocalTracks)
   if (conn.status !== 'server') return browserTracks
   const uid = cloudCacheUid(conn)
-  const live = uid ? await liveList(uid, opts.force) : null
+  const live = uid ? await liveList(uid) : null
   if (live) return byNewest([...browserTracks, ...live])
   const kept = uid ? await cache.cachedList(uid) : null
   const keptTracks = () => (uid && kept ? withoutDeleted(uid, kept.tracks).map(withServerUrls) : [])
