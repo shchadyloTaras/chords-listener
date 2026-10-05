@@ -16,6 +16,13 @@ vi.mock('./auth', () => ({
   useAuth: { getState: () => ({ user: auth.user, ready: true }), subscribe: () => () => undefined },
 }))
 
+// A network failure re-probes the server 300 ms later on a real timer: under load that probe lands in a later
+// test, takes the answers it queued on the fetch mock and switches the connection away from CLOUD.
+vi.mock('./serverMode', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./serverMode')>()),
+  noteServerTrouble: () => undefined,
+}))
+
 import * as api from './api'
 import { rememberServerJob } from './cloud/activity'
 import { cachedAudio, cachedList, cachedTrack, LIST_TTL_MS, saveTrack, TRACK_TTL_MS } from './cloud/cache'
