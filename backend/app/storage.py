@@ -192,6 +192,10 @@ class TrackStore:
     def read_meta(self, track_id: str) -> dict[str, Any]:
         return read_json(self._require(track_id) / META_FILE)
 
+    def version(self, track_id: str) -> int:
+        """The track's change counter; 0 for tracks written before versions existed."""
+        return int(self.read_meta(track_id).get("version") or 0)
+
     def read_analysis(self, track_id: str) -> dict[str, Any]:
         return read_json(self._require(track_id) / ANALYSIS_FILE)
 
@@ -304,6 +308,7 @@ class TrackStore:
                     "vocalsEngine": vocals.engine,
                     "vocalsAt": utc_now(),
                 })
+                _bump(meta)
                 write_json_atomic(d / META_FILE, meta, pretty=True)
         finally:
             for tmp, _ in staged:
@@ -317,7 +322,7 @@ class TrackStore:
         into the library. Returns False when a complete track with this id appeared meanwhile (the
         staged copy is then left for the caller to discard)."""
         write_json_atomic(staged_dir / ANALYSIS_FILE, analysis.model_dump(mode="json"))
-        write_json_atomic(staged_dir / META_FILE, meta, pretty=True)
+        write_json_atomic(staged_dir / META_FILE, {**meta, "version": 1}, pretty=True)
         with self._lock:
             if self.exists(track_id):
                 return False
@@ -344,6 +349,7 @@ class TrackStore:
             now = utc_now()
             meta.update(summary_fields(analysis))
             meta.update({"updatedAt": now, "analyzedAt": now, "options": options, "engine": analysis.engine})
+            _bump(meta)
             write_json_atomic(d / META_FILE, meta, pretty=True)
 
     def patch(self, track_id: str, patch: TrackPatch) -> Track:
@@ -367,13 +373,19 @@ class TrackStore:
                 meta_changed = True
             if meta_changed:
                 meta["updatedAt"] = utc_now()
+                _bump(meta)
                 write_json_atomic(d / META_FILE, meta, pretty=True)
         return self.get_track(track_id)
 
     def reset(self, track_id: str) -> Track:
         with self._lock:
             d = self._require(track_id)
-            (d / EDITS_FILE).unlink(missing_ok=True)
+            edits = d / EDITS_FILE
+            if edits.exists():  # nothing to reset is not a change a reader can see
+                edits.unlink()
+                meta = read_json(d / META_FILE)
+                _bump(meta)
+                write_json_atomic(d / META_FILE, meta, pretty=True)
         return self.get_track(track_id)
 
     def delete(self, track_id: str) -> None:
@@ -474,6 +486,11 @@ class TrackStore:
             "stems": _stems(meta),
             "createdAt": meta.get("createdAt") or utc_now(),
         }
+
+
+def _bump(meta: dict[str, Any]) -> None:
+    """Every change a reader can see gets a new version (phase 2: the published copies follow it)."""
+    meta["version"] = int(meta.get("version") or 0) + 1
 
 
 def _stems(meta: dict[str, Any]) -> list[str]:
