@@ -1,12 +1,13 @@
 // The instrument switch of the now-playing hero and the live view: segmented buttons from the sm
-// breakpoint up, a dropdown below it (six names do not fit a phone's width).
+// breakpoint up, below it a native select (six names do not fit a phone's width, and the phone's
+// own picker opens above the page, so the hero's overflow-hidden never clips it).
 
+import clsx from 'clsx'
 import { ChevronDown } from 'lucide-react'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 import { useT } from '../../i18n'
 import { INSTRUMENTS } from '../../lib/instruments'
 import { useApp, type Instrument } from '../../store'
-import { Menu, MenuItem } from '../ui/Menu'
 import { Segmented } from './ui/controls'
 
 /** Tailwind's `sm` breakpoint. */
@@ -34,27 +35,20 @@ export function InstrumentPicker({ className }: { className?: string }) {
     )
   }
   return (
-    <Menu
-      label={label}
-      className={className}
-      trigger={(props) => (
-        <button
-          type="button"
-          {...props}
-          title={title}
-          aria-label={`${label}: ${name(instrument)}`}
-          className="inline-flex h-7 items-center gap-1 rounded-lg bg-surface-2 px-2.5 text-xs font-medium text-text transition-colors duration-150 hover:bg-surface-3"
-        >
-          {name(instrument)}
-          <ChevronDown size={14} aria-hidden className="text-muted" />
-        </button>
-      )}
-    >
-      {INSTRUMENTS.map((v) => (
-        <MenuItem key={v} checked={v === instrument} onSelect={() => setSetting('instrument', v)}>
-          {name(v)}
-        </MenuItem>
-      ))}
-    </Menu>
+    <span className={clsx('relative inline-flex h-7 items-center rounded-lg bg-surface-2 text-xs font-medium text-text hover:bg-surface-3', className)} title={title}>
+      <select
+        aria-label={label}
+        value={instrument}
+        onChange={(e) => setSetting('instrument', e.target.value as Instrument)}
+        className="h-full cursor-pointer appearance-none rounded-lg bg-transparent pr-7 pl-2.5 [&>option]:bg-surface-2 [&>option]:text-text"
+      >
+        {INSTRUMENTS.map((v) => (
+          <option key={v} value={v}>
+            {name(v)}
+          </option>
+        ))}
+      </select>
+      <ChevronDown size={14} aria-hidden className="pointer-events-none absolute right-2 text-muted" />
+    </span>
   )
 }

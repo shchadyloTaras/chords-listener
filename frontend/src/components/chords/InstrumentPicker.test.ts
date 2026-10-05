@@ -11,14 +11,13 @@ let wide = true
 
 beforeEach(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
-  // jsdom has neither matchMedia nor CSS.escape (the menu restores focus with it)
+  // jsdom has no matchMedia
   window.matchMedia = ((query: string) => ({
     matches: query === WIDE_QUERY && wide,
     media: query,
     addEventListener() {},
     removeEventListener() {},
   })) as unknown as typeof window.matchMedia
-  if (!globalThis.CSS?.escape) (globalThis as { CSS?: unknown }).CSS = { escape: (s: string) => s }
   useApp.setState({ instrument: 'guitar', lang: 'uk' })
   host = document.createElement('div')
   document.body.append(host)
@@ -43,17 +42,19 @@ it('shows the six instruments as buttons on a wide screen', () => {
   expect(useApp.getState().instrument).toBe('harmonium')
 })
 
-it('folds them into a menu on a phone', () => {
+it("uses the phone's own picker on a narrow screen (never clipped by the hero)", () => {
   wide = false
   render()
   expect(host.querySelector('[role="radio"]')).toBeNull()
-  const trigger = host.querySelector('[aria-haspopup="menu"]')
-  expect(trigger?.textContent).toContain('Гітара')
-  click(trigger)
-  const items = [...host.querySelectorAll('[role="menuitemradio"]')]
-  expect(items.map((i) => i.textContent)).toEqual(['Гітара', 'Бас', 'Укулеле', 'Піаніно', 'Фісгармонія', 'Хендпан'])
-  expect(items[0].getAttribute('aria-checked')).toBe('true')
-  click(items[1])
+  expect(host.querySelector('[role="menu"], [aria-haspopup="menu"]')).toBeNull()
+  const select = host.querySelector('select')!
+  expect(select.getAttribute('aria-label')).toBe('Інструмент')
+  expect([...select.options].map((o) => o.textContent)).toEqual(['Гітара', 'Бас', 'Укулеле', 'Піаніно', 'Фісгармонія', 'Хендпан'])
+  expect(select.value).toBe('guitar')
+  act(() => {
+    select.value = 'bass'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+  })
   expect(useApp.getState().instrument).toBe('bass')
-  expect(host.querySelector('[aria-haspopup="menu"]')?.textContent).toContain('Бас')
+  expect(host.querySelector('select')!.value).toBe('bass')
 })
