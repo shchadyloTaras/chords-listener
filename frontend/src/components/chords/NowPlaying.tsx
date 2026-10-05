@@ -9,13 +9,13 @@ import { useT } from '../../i18n'
 import { chordTone } from '../../lib/music/color'
 import { nextRealChord, prevRealChord, type DisplayChord } from '../../lib/music/display'
 import { clickChordSound } from '../../lib/sound'
-import { useApp, type Instrument } from '../../store'
+import { useApp } from '../../store'
 import { ChordName } from './ChordName'
 import { useClockEffect } from './clock'
 import { ChordDiagram } from './diagrams/ChordDiagram'
 import { HandpanHint } from './handpan/HandpanHint'
+import { InstrumentPicker } from './InstrumentPicker'
 import { useChordModel } from './model'
-import { Segmented } from './ui/controls'
 import { useChordPos } from './usePlayhead'
 import { TempoReadout } from './tempo/TempoReadout'
 
@@ -38,7 +38,6 @@ export const NowPlaying = memo(
     const instrument = useApp((s) => s.instrument)
     const showDiagrams = useApp((s) => s.showDiagrams)
     const chordSound = useApp((s) => s.chordSound)
-    const setSetting = useApp((s) => s.setSetting)
     const reduce = useReducedMotion()
 
     const pos = useChordPos(chords)
@@ -87,17 +86,7 @@ export const NowPlaying = memo(
               </span>
             )}
           </div>
-          <Segmented<Instrument>
-            size="sm"
-            label={t('chords.instrument')}
-            value={instrument}
-            onChange={(v) => setSetting('instrument', v)}
-            options={(['guitar', 'ukulele', 'piano', 'handpan'] as const).map((v) => ({
-              value: v,
-              label: t(`chords.instrument.${v}`),
-              title: t('chords.instrument.title'),
-            }))}
-          />
+          <InstrumentPicker />
           {instrument === 'handpan' && <HandpanHint className="order-last basis-full" />}
         </div>
 

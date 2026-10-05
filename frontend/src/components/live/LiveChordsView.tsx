@@ -13,11 +13,11 @@ import { chordTone } from '../../lib/music/color'
 import { displayLabel } from '../../lib/music/display'
 import { resolveSpelling } from '../../lib/music/key'
 import type { Spelling } from '../../lib/music/notes'
-import { useApp, type Instrument } from '../../store'
+import { useApp } from '../../store'
 import type { ChordQuality, KeyInfo } from '../../types'
 import { ChordName } from '../chords/ChordName'
 import { ChordDiagram } from '../chords/diagrams/ChordDiagram'
-import { Segmented } from '../chords/ui/controls'
+import { InstrumentPicker } from '../chords/InstrumentPicker'
 import { formatTime } from '../ui/format'
 import { LiveLevelMeter } from './LiveLevelMeter'
 import { useLiveSession, type LiveView } from './useLiveSession'
@@ -93,7 +93,6 @@ export const LiveChordsView = memo(function LiveChordsView({ session, title, com
   const showDiagrams = useApp((s) => s.showDiagrams)
   const accidentals = useApp((s) => s.accidentals)
   const simplify = useApp((s) => s.simplify)
-  const setSetting = useApp((s) => s.setSetting)
   const reduce = useReducedMotion()
 
   const spelling = resolveSpelling(accidentals, view.key)
@@ -200,17 +199,7 @@ export const LiveChordsView = memo(function LiveChordsView({ session, title, com
               <ChordDiagram label={shown ? shown.label : 'N'} instrument={instrument} size="sm" spelling={spelling} />
             </div>
             <div className="hidden sm:block">
-              <Segmented<Instrument>
-                size="sm"
-                label={t('chords.instrument')}
-                value={instrument}
-                onChange={(v) => setSetting('instrument', v)}
-                options={(['guitar', 'ukulele', 'piano', 'handpan'] as const).map((v) => ({
-                  value: v,
-                  label: t(`chords.instrument.${v}`),
-                  title: t('chords.instrument.title'),
-                }))}
-              />
+              <InstrumentPicker />
             </div>
           </div>
         )}
