@@ -54,9 +54,9 @@ const KEY_HOLD: Record<PlayKind, number> = { chord: 2.6, note: 1.6 }
  */
 const BUS: Record<Instrument, { level: number; reverb: number }> = {
   piano: { level: 1.6, reverb: 0.16 },
-  harmonium: { level: 1.6, reverb: 0.2 },
+  harmonium: { level: 1.44, reverb: 0.2 },
   guitar: { level: 1.3, reverb: 0.12 },
-  bass: { level: 1.3, reverb: 0.06 },
+  bass: { level: 1.46, reverb: 0.06 },
   ukulele: { level: 1.45, reverb: 0.12 },
   handpan: { level: 0.7, reverb: 0.24 },
 }
