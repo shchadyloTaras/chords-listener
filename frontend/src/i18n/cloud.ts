@@ -50,6 +50,8 @@ export const cloud: Dict = {
 
     // "listen in the tab" (YouTube)
     'cloud.capture.title': 'Слухати у вкладці',
+    // the same page where this browser cannot listen to a tab (phones, Safari, Firefox): nothing is recorded here
+    'cloud.capture.videoBadge': 'Відео з YouTube',
     'cloud.capture.blocked':
       'YouTube не дав серверу завантажити це відео. Не біда — послухаємо його прямо тут: відео гратиме на сторінці, а сайт чутиме звук цієї вкладки.',
     'cloud.capture.intro':
@@ -194,6 +196,7 @@ export const cloud: Dict = {
     'cloud.input.notVideo': "This isn't a single video — open the video itself on YouTube and copy its link",
 
     'cloud.capture.title': 'Listen in the tab',
+    'cloud.capture.videoBadge': 'YouTube video',
     'cloud.capture.blocked':
       'YouTube did not let the server download this video. No problem — we will listen to it right here: the video plays on the page and the site hears this tab.',
     'cloud.capture.intro':

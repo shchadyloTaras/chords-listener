@@ -48,11 +48,14 @@ export async function findLegacySession(): Promise<boolean> {
     /* no localStorage */
   }
   try {
-    if (typeof indexedDB === 'undefined' || typeof indexedDB.databases !== 'function') return false
-    if (!(await indexedDB.databases()).some((db) => db.name === FIREBASE_DB)) return false
+    if (typeof indexedDB === 'undefined') return false
+    // where the browser can list its databases, a missing one is not even opened (older Firefox / Safari can't:
+    // opening it is the only way to know)
+    if (typeof indexedDB.databases === 'function' && !(await indexedDB.databases()).some((db) => db.name === FIREBASE_DB))
+      return false
     return await new Promise<boolean>((resolve) => {
       const open = indexedDB.open(FIREBASE_DB)
-      // gone meanwhile: do not create it
+      // not there (or gone meanwhile): do not create it
       open.onupgradeneeded = () => open.transaction?.abort()
       open.onerror = () => resolve(false)
       open.onsuccess = () => {

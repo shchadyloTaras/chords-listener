@@ -90,6 +90,23 @@ describe('findLegacySession', () => {
     expect(await findLegacySession()).toBe(true)
   })
 
+  describe('in a browser without indexedDB.databases() (Firefox < 126, Safari < 14)', () => {
+    const withoutDatabases = () => Object.defineProperty(indexedDB, 'databases', { value: undefined, configurable: true })
+    const databases = () => IDBFactory.prototype.databases.call(indexedDB)
+
+    it('finds a session saved in IndexedDB', async () => {
+      await firebaseDb([{ fbase_key: USER_KEY, value: { uid: 'uid42' } }])
+      withoutDatabases()
+      expect(await findLegacySession()).toBe(true)
+    })
+
+    it('finds nothing in a fresh browser, and creates no database', async () => {
+      withoutDatabases()
+      expect(await findLegacySession()).toBe(false)
+      expect(await databases()).toEqual([])
+    })
+  })
+
   it('finds a session saved in localStorage (no IndexedDB there)', async () => {
     localStorage.setItem(USER_KEY, '{"uid":"uid42"}')
     expect(await findLegacySession()).toBe(true)

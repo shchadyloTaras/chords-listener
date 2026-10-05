@@ -22,6 +22,8 @@ export const web: Dict = {
     'web.browser.what':
       'Файли й записи з мікрофона розпізнаються прямо в браузері та зберігаються лише на цьому пристрої.',
     'web.browser.cta': 'Увійди — і отримаєш точніші акорди, вокал і бібліотеку на всіх пристроях.',
+    // the mode popover, where this browser can listen to its tab (there is no link field to press Enter in)
+    'web.browser.youtube': 'Відео з YouTube слухаємо прямо на сторінці.',
     'web.browser.localNote': 'Пісні, розпізнані в браузері, лишаються на цьому пристрої.',
 
     'web.advanced.summary': 'Розширено: власний сервер',
@@ -68,7 +70,8 @@ export const web: Dict = {
 
     'web.error.serverRequired':
       'Посилання з цього сайту розпізнає сервер у хмарі — увійди або зареєструйся, це безкоштовно. Відео з YouTube можна послухати й без акаунта.',
-    // the same where this browser cannot listen to a tab (phones, Safari, Firefox): YouTube needs the cloud too
+    // the same where this browser cannot listen to a tab (phones, Safari, Firefox): no "YouTube without an account"
+    // promise there (the capture page offers the microphone, a file, or a computer instead)
     'web.error.serverRequiredNoTab':
       'Посилання розпізнає сервер у хмарі — увійди або зареєструйся, це безкоштовно. Файли й мікрофон працюють і без акаунта.',
     'web.errorTitle.serverRequired': 'Потрібен акаунт',
@@ -92,6 +95,7 @@ export const web: Dict = {
     'web.server.what': 'YouTube links, files and microphone recordings are analyzed by the app on your computer.',
     'web.browser.what': 'Files and microphone recordings are analyzed right in the browser and stay on this device.',
     'web.browser.cta': 'Sign in for more precise chords, vocals and your library on every device.',
+    'web.browser.youtube': 'YouTube videos are listened to right on the page.',
     'web.browser.localNote': 'Songs analyzed in the browser stay on this device.',
 
     'web.advanced.summary': 'Advanced: your own server',

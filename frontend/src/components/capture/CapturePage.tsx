@@ -19,7 +19,6 @@ import {
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { t as tNow, useT } from '../../i18n'
 import { openAuthDialog } from '../../lib/auth'
-import { copyText } from '../../lib/clipboard'
 import { useApp } from '../../store'
 import { useDocumentTitle } from '../../hooks/useDocumentTitle'
 import { useJobs } from '../../hooks/useJobs'
@@ -27,6 +26,7 @@ import { useCanListenInTab } from '../../hooks/useMediaQuery'
 import { navigate, paths } from '../../hooks/useRoute'
 import { toApiError } from '../../lib/api'
 import { useCloudInvite } from '../account/cloudInvite'
+import { copyWithToast } from '../chords/useCopy'
 import { errorText } from '../jobs/errorText'
 import { startFiles } from '../input/startFiles'
 import { FILE_ACCEPT } from '../input/url'
@@ -130,9 +130,7 @@ function NoTabCapture({ url, title }: { url: string; title: string | null }) {
         </Button>
         <Button
           icon={<Copy className="size-4 shrink-0" aria-hidden="true" />}
-          onClick={async () => {
-            if (await copyText(window.location.href)) useApp.getState().toast(t('cloud.capture.here.copied'), 'success')
-          }}
+          onClick={() => void copyWithToast(window.location.href, t('cloud.capture.here.copied'))}
           className="h-auto! min-h-10 py-2 text-left whitespace-normal!"
         >
           {t('cloud.capture.here.copy')}
@@ -211,7 +209,9 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
   })
   const { state, dispatch, current } = capture
 
-  useDocumentTitle(title ? `${t('cloud.capture.title')} · ${title}` : t('cloud.capture.title'))
+  // "listen in the tab" only where the tab can be heard: elsewhere it is just the video, with other ways to listen
+  const pageLabel = t(tabCapture ? 'cloud.capture.title' : 'cloud.capture.videoBadge')
+  useDocumentTitle(title ? `${pageLabel} · ${title}` : pageLabel)
 
   // ---- the embedded player (created once per video; again on "Try again")
   useEffect(() => {
@@ -428,7 +428,7 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
       <header className="mt-3 max-w-3xl">
         <p className="flex items-center gap-2 text-sm font-medium text-accent">
           <VideoSiteIcon className="size-4" />
-          {t('cloud.capture.title')}
+          {pageLabel}
         </p>
         <h1 className="mt-1.5 font-display text-2xl leading-tight font-semibold tracking-tight break-words sm:text-3xl">
           {title ?? t('cloud.capture.untitled')}
@@ -437,7 +437,8 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
         <p className="mt-2 text-[15px] leading-relaxed text-muted">
           {!tabCapture ? t('cloud.capture.here.intro') : blocked ? t('cloud.capture.blocked') : t('cloud.capture.intro')}
         </p>
-        {cloudInvite && (
+        {/* about the recording this page makes: none where the tab cannot be heard */}
+        {cloudInvite && tabCapture && (
           <p className="mt-1.5 text-sm text-muted">
             {t('cloud.capture.guest')}{' '}
             <button type="button" onClick={() => openAuthDialog('signIn')} className="text-left font-medium text-accent hover:underline">

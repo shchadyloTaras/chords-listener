@@ -73,11 +73,13 @@ useJobs.subscribe((s, prev) => {
 
 // Signed in, out, or as someone else: a list on its way was asked for the previous session. After a sign-out
 // or another account the list in memory is not theirs either (a guest's own browser tracks stay on screen).
+// Another account (e.g. switched in another tab) may keep the same API: nothing else reloads it, so load theirs.
 useAuth.subscribe((s, prev) => {
   if ((s.user?.uid ?? null) === (prev.user?.uid ?? null)) return
   generation++
   inflight = null
   useTracks.setState(prev.user ? { tracks: null, error: null, loading: false } : { loading: false })
+  if (prev.user && s.user) void refreshTracks()
 })
 
 const DELETE_DELAY = 6200

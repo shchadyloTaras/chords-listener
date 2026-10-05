@@ -55,7 +55,8 @@ export const TOUCH_ONLY_QUERY = '(hover: none) and (pointer: coarse)'
 
 /**
  * Can "listen in the tab" be offered here: tab capture is supported (canCaptureTab) and this is not a
- * touch-only device. False → a guest's YouTube link needs the cloud (an account) instead.
+ * touch-only device. False → a YouTube link still opens the capture page, which offers the on-device ways
+ * (the microphone with the song playing elsewhere, a file, or opening the page on a computer in Chrome / Edge).
  */
 export function canListenInTab(): boolean {
   if (!canCaptureTab()) return false

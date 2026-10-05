@@ -139,6 +139,14 @@ describe('refreshTracks', () => {
     expect(useTracks.getState().tracks).toBeNull()
   })
 
+  it('another account in another tab, on the same cloud (nothing else changes): their list loads', async () => {
+    api.listTracks.mockResolvedValue([song('theirs')])
+    useTracks.setState({ tracks: [song('mine')] })
+    useAuth.setState({ user: { uid: 'other7', email: null } })
+    expect(useTracks.getState().tracks).toBeNull()
+    await vi.waitFor(() => expect(ids()).toEqual(['theirs']))
+  })
+
   it('a guest signing in keeps their browser tracks on screen meanwhile', () => {
     useAuth.setState({ user: null })
     useTracks.setState({ tracks: [song('local-1')] })

@@ -198,6 +198,22 @@ describe('the library list', () => {
     expect(fetchMock).toHaveBeenCalledTimes(7)
   })
 
+  it('an empty answer after a full list (the cloud could not read its storage?): asked again, nothing kept is dropped', async () => {
+    const full = [listedAs(cloudTrack()), summary('b'), summary('c')]
+    fetchMock.mockResolvedValueOnce(json(full))
+    await api.listTracks()
+    fetchMock.mockResolvedValueOnce(json(cloudTrack()))
+    await api.getTrack(ID)
+    fetchMock.mockResolvedValueOnce(json([]))
+    expect(await api.listTracks(undefined, { force: true })).toEqual([])
+    // the next load asks again, and the list is back
+    fetchMock.mockResolvedValueOnce(json(full))
+    expect((await api.listTracks()).map((t) => t.id).sort()).toEqual([ID, 'b', 'c'])
+    // the track still opens from this device
+    await api.getTrack(ID)
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+  })
+
   it('is never kept for a local server', async () => {
     connect({ status: 'server', backend: 'local', apiBase: 'http://localhost:8765/api', serverOrigin: 'http://localhost:8765', remote: true })
     fetchMock.mockImplementation(async () => json([summary('a')]))

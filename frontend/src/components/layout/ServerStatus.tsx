@@ -80,7 +80,7 @@ function CloudHealthLine() {
   const failure = useConnection((s) => s.failure)
   const waking = useConnection(cloudWaking)
   const [checking, setChecking] = useState(false)
-  if (health) return null
+  // a failed re-check after a good one: still say so, with a way to ask again
   if (failure) {
     return (
       <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-text">
@@ -100,7 +100,7 @@ function CloudHealthLine() {
       </div>
     )
   }
-  if (!waking) return null
+  if (health || !waking) return null
   return (
     <p className="mt-1 flex items-center gap-1.5 text-xs text-faint">
       <LoaderCircle className="size-3 animate-spin" aria-hidden="true" />
@@ -174,7 +174,8 @@ function PanelBody({ onConnected }: { onConnected(): void }) {
   const serverOrigin = useConnection((s) => s.serverOrigin)
   const email = useAuth((s) => s.user?.email ?? '')
   const invite = useCloudInvite()
-  // YouTube without a server: listened to on the page where this browser hears its tab, else the cloud (an account)
+  // YouTube without a server: listened to on the page where this browser hears its tab, else opened here with
+  // the on-device ways to listen
   const tabCapable = useCanListenInTab()
   const serverUrl = useApp((s) => s.serverUrl)
   const url = (serverOrigin ?? normalizeServerUrl(serverUrl) ?? serverUrl).replace(/^https?:\/\//, '')
@@ -214,7 +215,7 @@ function PanelBody({ onConnected }: { onConnected(): void }) {
         title={kind === 'checking' ? t('web.mode.checking') : t('web.mode.browser')}
       >
         <p className="mt-0.5 text-sm text-muted">{t('web.browser.what')}</p>
-        <p className="mt-1 text-sm text-muted">{t(tabCapable ? 'cloud.input.hintYoutubeGuest' : 'cloud.input.hintYoutubeHere')}</p>
+        <p className="mt-1 text-sm text-muted">{t(tabCapable ? 'web.browser.youtube' : 'cloud.input.hintYoutubeHere')}</p>
       </PanelHead>
       {invite && (
         <div className="mt-4 rounded-xl border border-accent/30 bg-accent-soft p-3">

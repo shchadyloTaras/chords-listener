@@ -118,8 +118,10 @@ export function JobPage({ id }: { id: string }) {
     const canRetryJob = !!job && canRetry(job) && !retryGone
     // the cloud's limit for today: an upload that is still here can be analyzed in this browser
     const canRetryHere = canRetryJob && errorCode === 'quota_exceeded' && job.source?.type === 'file'
+    // an upload whose file is gone (the page was reloaded, or it went into another try): pick it again
+    const fileGone = !!job && job.source?.type === 'file' && !canRetryJob
     const canReload = !job && !!loadError
-    const hasAction = canRetryJob || canReload || retryGone
+    const hasAction = canRetryJob || canReload || fileGone
     return (
       <div className="mx-auto w-full max-w-xl px-4 pt-10 pb-24 sm:pt-20">
         <div role="alert" className="overflow-hidden rounded-3xl border border-border bg-surface">
@@ -131,7 +133,7 @@ export function JobPage({ id }: { id: string }) {
                 <h1 className="font-display text-xl font-semibold tracking-tight">{errorTitle(errorCode)}</h1>
                 {job?.title && <p className="mt-1 truncate text-sm text-muted">{job.title}</p>}
                 <p className="mt-3 text-[15px] leading-relaxed text-text">{errorText(errorCode)}</p>
-                {retryGone && <p className="mt-2 text-sm text-muted">{t('core.job.retryGone')}</p>}
+                {fileGone && <p className="mt-2 text-sm text-muted">{t('core.job.retryGone')}</p>}
                 {job?.error && (
                   <details className="mt-3 text-sm text-faint">
                     <summary className="cursor-pointer select-none hover:text-muted">{t('core.job.detailsEn')}</summary>
@@ -176,7 +178,7 @@ export function JobPage({ id }: { id: string }) {
                   {t('core.retry')}
                 </Button>
               )}
-              {retryGone && (
+              {fileGone && (
                 <>
                   <Button variant="primary" icon={<FolderOpen className="size-4" />} onClick={() => fileRef.current?.click()}>
                     {t('core.input.pickFile')}

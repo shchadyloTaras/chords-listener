@@ -203,10 +203,15 @@ function sameSummary(a: TrackSummary, b: TrackSummary): boolean {
   return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b))
 }
 
+/** Fewer than this share of the kept list in an answer: not trusted on its own (see saveList). */
+const SHRINK_RATIO = 0.5
+
 /**
  * Keeps the library list the server just sent, and squares what is kept with it: a track it no longer lists
  * (deleted on another device) goes completely; a kept track it lists differently (renamed, edited, re-analysed
- * elsewhere) loses its JSON, so the next open asks again.
+ * elsewhere) loses its JSON, so the next open asks again. An empty or much shorter list than the one kept (the
+ * server answers so when it cannot read its storage) is kept stale, dropping nothing: the next load asks again,
+ * and only the same answer then squares what is kept with it.
  */
 export function saveList(uid: string, tracks: TrackSummary[]): Promise<void> {
   const row: Row<TrackSummary[]> = { key: uid, value: tracks, savedAt: Date.now() }
@@ -215,7 +220,14 @@ export function saveList(uid: string, tracks: TrackSummary[]): Promise<void> {
   return safely(
     () =>
       transact([LISTS, TRACKS, AUDIO, JSON_STORE], 'readwrite', async (tx) => {
-        tx.objectStore(LISTS).put(row)
+        const lists = tx.objectStore(LISTS)
+        const before = await getRow<TrackSummary[]>(lists, uid)
+        const keptCount = before && Array.isArray(before.value) ? before.value.length : 0
+        if (keptCount > 0 && tracks.length < keptCount * SHRINK_RATIO) {
+          lists.put({ ...row, savedAt: 0 })
+          return
+        }
+        lists.put(row)
         const kept = tx.objectStore(TRACKS)
         await eachOfUser(kept, uid, true, (cursor) => {
           const entry = listed.get(String(cursor.primaryKey).slice(prefix))

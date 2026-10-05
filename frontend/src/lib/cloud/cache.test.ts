@@ -177,6 +177,35 @@ describe('what is kept, and for whom', () => {
     expect(await cachedTrack('u2', 'c')).not.toBeNull()
   })
 
+  it('a list much shorter than the one kept (the server could not read its storage?) is not trusted yet', async () => {
+    await saveList('u1', [summary('a'), summary('b'), summary('c')])
+    await saveTrack('u1', track('a'))
+    await saveAudio('u1', 'a', new Blob(['a']))
+    for (const answer of [[], [summary('b')]]) {
+      await saveList('u1', [summary('a'), summary('b'), summary('c')])
+      await saveList('u1', answer)
+      const list = await cachedList('u1')
+      // what the server said shows, but is asked again next time; nothing kept goes for it
+      expect(list?.tracks.map((t) => t.id)).toEqual(answer.map((t) => t.id))
+      expect(isFresh(list?.savedAt ?? Date.now(), LIST_TTL_MS)).toBe(false)
+      expect(await cachedTrack('u1', 'a')).not.toBeNull()
+      expect(await cachedAudio('u1', 'a')).not.toBeNull()
+    }
+    // the same answer again: now it is the truth
+    await saveList('u1', [summary('b')])
+    expect(isFresh((await cachedList('u1'))?.savedAt ?? 0, LIST_TTL_MS)).toBe(true)
+    expect(await cachedTrack('u1', 'a')).toBeNull()
+    expect(await cachedAudio('u1', 'a')).toBeNull()
+  })
+
+  it('half of the list gone is still an ordinary answer', async () => {
+    await saveList('u1', [summary('a'), summary('b')])
+    await saveTrack('u1', track('a'))
+    await saveList('u1', [summary('b')])
+    expect(isFresh((await cachedList('u1'))?.savedAt ?? 0, LIST_TTL_MS)).toBe(true)
+    expect(await cachedTrack('u1', 'a')).toBeNull()
+  })
+
   it('a stale list keeps its tracks but is asked again', async () => {
     await saveList('u1', [summary('a')])
     await markListStale('u1')
