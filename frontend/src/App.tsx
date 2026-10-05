@@ -51,7 +51,8 @@ export default function App() {
     void syncServerJobs()
   }, [])
 
-  // Firebase sign-in (settings sync; the cloud API on the hosted site); loads lazily, the app never waits for it
+  // Firebase sign-in (settings sync; the cloud API on the hosted site): restores a saved session only where this
+  // browser has signed in before (a guest loads no Firebase); lazy, the app never waits for it
   useEffect(() => startAuth(), [])
 
   // New page → start at the top.

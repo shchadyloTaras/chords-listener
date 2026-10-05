@@ -50,6 +50,22 @@ export function canCaptureTab(): boolean {
   return !!n.userAgentData?.brands?.some((b) => /Chromium|Google Chrome|Microsoft Edge/.test(b.brand))
 }
 
+/** Touch-only devices (phones, tablets): no hover, coarse pointer — whatever their user agent claims. */
+export const TOUCH_ONLY_QUERY = '(hover: none) and (pointer: coarse)'
+
+/**
+ * Can "listen in the tab" be offered here: tab capture is supported (canCaptureTab) and this is not a
+ * touch-only device. False → a guest's YouTube link needs the cloud (an account) instead.
+ */
+export function canListenInTab(): boolean {
+  if (!canCaptureTab()) return false
+  try {
+    return !(typeof window !== 'undefined' && window.matchMedia?.(TOUCH_ONLY_QUERY).matches)
+  } catch {
+    return true
+  }
+}
+
 /** Can the microphone be requested here (it may still be denied)? */
 export function canCaptureMicrophone(): boolean {
   return !!nav()?.mediaDevices?.getUserMedia

@@ -1,5 +1,5 @@
-// Hero tempo readout: "113 BPM" big and tabular, the live beat pulse, the local tempo when it
-// drifts from the overall one, and the latest tap-tempo result. Opens the tempo popover.
+// Hero tempo readout: "113 BPM" big and tabular, the live beat pulse and the latest tap-tempo
+// result. Opens the tempo popover (which also shows the local tempo).
 // Also hosts the tempo runtime (metronome + T/K shortcuts) for the chord workspace.
 
 import { useEffect, useState, type ReactNode } from 'react'
@@ -8,7 +8,7 @@ import { useT } from '../../../i18n'
 import type { PulseGrid } from '../../../lib/tempo'
 import { useChordModel } from '../model'
 import { BeatPulse } from './BeatPulse'
-import { differsNotably, factorLabel, useLocalBpm, useRecentTap } from './hooks'
+import { factorLabel, useRecentTap } from './hooks'
 import { useMetronome } from './metronome'
 import { TempoPopover } from './TempoPanel'
 import { useTap } from './tapStore'
@@ -23,23 +23,13 @@ export function TempoReadout() {
   const [open, setOpen] = useState(false)
   const global = rhythm.tempo
   const bpm = global != null ? Math.round(global) : null
-  const local = useLocalBpm(rhythm.beats)
   const tap = useRecentTap()
 
-  let aside: ReactNode = null
-  if (tap) {
-    aside = (
-      <span className="text-xs font-medium text-accent tabular-nums">
-        {tap.bpm != null ? t('tempo.tap.hero', { n: Math.round(tap.bpm) }) : t('tempo.tap.heroWait')}
-      </span>
-    )
-  } else if (differsNotably(local, global)) {
-    aside = (
-      <span className="text-xs text-muted tabular-nums" title={t('tempo.nowTitle')}>
-        {t('tempo.now', { n: local })}
-      </span>
-    )
-  }
+  const aside: ReactNode = tap ? (
+    <span className="text-xs font-medium text-accent tabular-nums">
+      {tap.bpm != null ? t('tempo.tap.hero', { n: Math.round(tap.bpm) }) : t('tempo.tap.heroWait')}
+    </span>
+  ) : null
 
   return (
     <>

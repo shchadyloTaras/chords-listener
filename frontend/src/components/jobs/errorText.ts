@@ -1,4 +1,5 @@
 import type { ClientErrorCode } from '../../lib/api'
+import { canListenInTab } from '../../lib/live/capture'
 import { useConnection } from '../../lib/serverMode'
 import { translate } from '../../i18n'
 import type { Lang } from '../../store'
@@ -25,7 +26,8 @@ const CLOUD: ReadonlySet<string> = new Set<ClientErrorCode>(['unauthorized', 'qu
 const CLOUD_WORDING: ReadonlySet<string> = new Set(['network', 'internal'])
 
 function keyFor(kind: 'error' | 'errorTitle', code: string | null | undefined): string {
-  if (code === 'server_required') return `web.${kind}.serverRequired`
+  // "YouTube works without an account" only where this browser can listen to its tab
+  if (code === 'server_required') return kind === 'error' && !canListenInTab() ? 'web.error.serverRequiredNoTab' : `web.${kind}.serverRequired`
   if (code && CLOUD.has(code)) return `cloud.${kind}.${code}`
   const key = code && KNOWN.has(code) ? code : 'internal'
   if (CLOUD_WORDING.has(key) && useConnection.getState().backend === 'cloud') return `cloud.${kind}.${key}`

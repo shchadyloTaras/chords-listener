@@ -33,9 +33,15 @@ function set(id: string, state: TransferState | null) {
   }, true)
 }
 
-/** Listeners told when a transfer finished (the library refreshes). */
-const doneListeners = new Set<() => void>()
-export function onTransferDone(fn: () => void): () => void {
+/** A finished transfer: the browser track and the cloud track it became. */
+export interface TransferDone {
+  localId: string
+  trackId: string
+}
+
+/** Listeners told when a transfer finished (the library refreshes, an open song page follows it to the cloud). */
+const doneListeners = new Set<(done: TransferDone) => void>()
+export function onTransferDone(fn: (done: TransferDone) => void): () => void {
   doneListeners.add(fn)
   return () => {
     doneListeners.delete(fn)
@@ -86,12 +92,19 @@ async function run(localId: string): Promise<void> {
     })
     set(localId, null)
     useApp.getState().toast(t('cloud.history.moved', { title: rec.title }), 'success')
-    doneListeners.forEach((fn) => fn())
+    doneListeners.forEach((fn) => fn({ localId, trackId: done.trackId as string }))
   } catch (err) {
     const e = toApiError(err)
     set(localId, { phase: 'error', progress: 0, error: e.code })
     useApp.getState().toast(t('cloud.history.moveFailed', { title: rec.title, reason: errorText(e.code) }), 'error')
   }
+}
+
+/** Short progress label of a transfer ("Надсилаю… 40%"). */
+export function transferLabel(tr: (key: string, vars?: Record<string, string | number>) => string, state: TransferState): string {
+  if (state.phase === 'queued') return tr('cloud.history.queued')
+  if (state.phase === 'uploading') return tr('cloud.history.moving', { pct: Math.round(state.progress * 100) })
+  return tr('cloud.history.analyzing')
 }
 
 let queue: Promise<void> = Promise.resolve()

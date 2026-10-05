@@ -2,13 +2,12 @@ import clsx from 'clsx'
 import { AppWindow, ArrowLeft, CircleAlert, Download, LoaderCircle, Mic, Pause, Play, RotateCcw, Square, X } from 'lucide-react'
 import { useCallback, useId, useState, type ReactNode } from 'react'
 import { t as tNow, useT } from '../../i18n'
-import { canCaptureTab } from '../../lib/live'
 import { toApiError } from '../../lib/api'
 import { useConnection } from '../../lib/serverMode'
 import { useApp } from '../../store'
 import { useDocumentTitle } from '../../hooks/useDocumentTitle'
 import { useJobs } from '../../hooks/useJobs'
-import { useMediaQuery } from '../../hooks/useMediaQuery'
+import { useCanListenInTab } from '../../hooks/useMediaQuery'
 import { navigate, paths } from '../../hooks/useRoute'
 import { errorText } from '../jobs/errorText'
 import { Button } from '../ui/IconButton'
@@ -92,8 +91,7 @@ function SavingLine() {
  */
 export function ListenPage({ initialSource }: { initialSource: CaptureSource | null }) {
   const t = useT()
-  const phone = useMediaQuery('(hover: none) and (pointer: coarse)')
-  const tabSupported = canCaptureTab() && !phone
+  const tabSupported = useCanListenInTab()
   const [source, setSource] = useState<CaptureSource>(initialSource === 'tab' && tabSupported ? 'tab' : 'mic')
   const cloud = useConnection((s) => s.backend === 'cloud')
   useDocumentTitle(t('cloud.listen.title'))

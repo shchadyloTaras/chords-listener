@@ -17,5 +17,7 @@ export type {
   CaptureErrorCode, LiveChord, LiveOptions, LiveResult, LiveSession, LiveSessionState, LiveStats, LiveUpdate,
 } from './types.ts'
 export { CaptureError } from './types.ts'
-export { canCaptureMicrophone, canCaptureTab, captureMicrophone, captureTabAudio, isMobileDevice } from './capture.ts'
+export {
+  canCaptureMicrophone, canCaptureTab, canListenInTab, captureMicrophone, captureTabAudio, isMobileDevice, TOUCH_ONLY_QUERY,
+} from './capture.ts'
 export { isLiveSupported, startLiveSession } from './session.ts'

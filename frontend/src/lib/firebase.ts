@@ -1,21 +1,11 @@
-// Firebase app for project "build-chords-listener" (web app "chords-listener-web").
-// Web config values identify the project; they are not secrets. Access to data is
-// enforced by Firebase Auth + /firestore.rules.
+// Firebase app for project "build-chords-listener" (config in lib/firebaseConfig.ts).
 //
-// Never import this module statically: lib/auth.ts loads it on demand, so Firebase lives in
-// lazy chunks and the app keeps working when Firebase is blocked or unreachable.
+// Never import this module statically: lib/auth.ts loads it on demand (only once someone opens the
+// account dialog, or this browser has signed in before), so Firebase lives in lazy chunks, guests never
+// download it, and the app keeps working when Firebase is blocked or unreachable.
 import { initializeApp } from 'firebase/app'
 import { browserLocalPersistence, connectAuthEmulator, indexedDBLocalPersistence, initializeAuth } from 'firebase/auth'
-
-export const firebaseConfig = {
-  apiKey: 'AIzaSyBL5s4iSoBMrQNIlpYA4WQSjP5tP_4xmUU',
-  authDomain: 'build-chords-listener.firebaseapp.com',
-  projectId: 'build-chords-listener',
-  storageBucket: 'build-chords-listener.firebasestorage.app',
-  messagingSenderId: '84488579848',
-  appId: '1:84488579848:web:0072b14b7aa305ef73dabd',
-  measurementId: 'G-DCYT55LJJ2',
-}
+import { firebaseConfig } from './firebaseConfig'
 
 /**
  * `VITE_FIREBASE_EMULATORS=true npx vite` talks to `firebase emulators:start` (auth :9099,

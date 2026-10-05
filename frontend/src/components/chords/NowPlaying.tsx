@@ -16,7 +16,7 @@ import { ChordDiagram } from './diagrams/ChordDiagram'
 import { HandpanHint } from './handpan/HandpanHint'
 import { useChordModel } from './model'
 import { Segmented } from './ui/controls'
-import { useBarIndex, useChordPos } from './usePlayhead'
+import { useChordPos } from './usePlayhead'
 import { TempoReadout } from './tempo/TempoReadout'
 
 const MAX_DOTS = 8
@@ -80,7 +80,6 @@ export const NowPlaying = memo(
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 pt-4 sm:px-7 sm:pt-5">
           <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1">
             <TempoReadout />
-            <BarCounter />
             {instrument !== 'handpan' && model.capo && (
               <span className="text-xs text-muted" title={t('chords.capo.title', { n: model.capo.capo })}>
                 {t('chords.capo.hint', { n: model.capo.capo, shapes: '' }).trim()}{' '}
@@ -215,18 +214,6 @@ export const NowPlaying = memo(
     )
   }),
 )
-
-/** "bar 12 of 64" — re-renders once per bar. */
-function BarCounter() {
-  const t = useT()
-  const { bars } = useChordModel()
-  const i = useBarIndex(bars)
-  return (
-    <span className="font-mono text-xs text-faint tabular-nums">
-      {i >= 0 ? t('chords.now.bar', { n: i + 1, total: bars.length }) : ' '}
-    </span>
-  )
-}
 
 /** Beat dots + a thin bar counting down to the next chord change; driven by the clock, no re-render. */
 function Countdown({ from, to, color }: { from: number; to: number; color: string }) {

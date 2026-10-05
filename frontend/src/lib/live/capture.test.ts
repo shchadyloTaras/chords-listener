@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { canCaptureTab, captureMicrophone, captureTabAudio, isMobileDevice, toCaptureError } from './capture.ts'
+import { canCaptureTab, canListenInTab, captureMicrophone, captureTabAudio, isMobileDevice, toCaptureError } from './capture.ts'
 import { pickRecordingMime } from './recorder.ts'
 import { startLiveSession } from './session.ts'
 import { CaptureError } from './types.ts'
@@ -169,6 +169,30 @@ describe('canCaptureTab', () => {
     expect(canCaptureTab()).toBe(false)
     stubBrowser({ ua: SAFARI_UA })
     expect(canCaptureTab()).toBe(false)
+  })
+})
+
+describe('canListenInTab', () => {
+  const touchOnly = (matches: boolean) =>
+    vi.stubGlobal('window', { isSecureContext: true, matchMedia: (q: string) => ({ matches: matches && q === '(hover: none) and (pointer: coarse)' }) })
+
+  it('is true where the tab can be captured on a device with a mouse', () => {
+    stubBrowser({ supported: { suppressLocalAudioPlayback: true } })
+    expect(canListenInTab()).toBe(true) // no matchMedia: decided by canCaptureTab
+    touchOnly(false)
+    expect(canListenInTab()).toBe(true)
+  })
+
+  it('is false on a touch-only device, even with a desktop user agent', () => {
+    stubBrowser({ supported: { suppressLocalAudioPlayback: true } })
+    touchOnly(true)
+    expect(canListenInTab()).toBe(false)
+  })
+
+  it('is false where tab capture is unsupported', () => {
+    stubBrowser({ ua: SAFARI_UA })
+    touchOnly(false)
+    expect(canListenInTab()).toBe(false)
   })
 })
 

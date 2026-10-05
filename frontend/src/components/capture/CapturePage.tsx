@@ -16,17 +16,19 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { t as tNow, useT } from '../../i18n'
-import { openAuthDialog, useAuth } from '../../lib/auth'
-import { canCaptureTab } from '../../lib/live'
+import { openAuthDialog, useAuth, useAuthDialog } from '../../lib/auth'
 import { useConnection } from '../../lib/serverMode'
 import { useApp } from '../../store'
 import { useDocumentTitle } from '../../hooks/useDocumentTitle'
-import { useJobs } from '../../hooks/useJobs'
-import { useMediaQuery } from '../../hooks/useMediaQuery'
+import { submitUrl, useJobs } from '../../hooks/useJobs'
+import { useCanListenInTab } from '../../hooks/useMediaQuery'
 import { navigate, paths } from '../../hooks/useRoute'
-import { toApiError } from '../../lib/api'
+import { toApiError, type ClientErrorCode } from '../../lib/api'
 import { errorText } from '../jobs/errorText'
+import { useCloudInvite } from '../account/cloudInvite'
+import { YoutubeAccountCard } from '../account/YoutubeAccountCard'
 import { startFiles } from '../input/startFiles'
+import { submitAfterSignIn } from '../input/startLink'
 import { FILE_ACCEPT } from '../input/url'
 import { isEmbedBlockedError, loadYouTubeApi, YT_STATE, type YTPlayer } from '../player/sources/youtubeApi'
 import { Button } from '../ui/IconButton'
@@ -50,11 +52,6 @@ function videoTitle(player: YTPlayer | null): string | null {
   } catch {
     return null
   }
-}
-
-/** Phones and tablets: no tab capture there (and no hover). */
-function usePhone(): boolean {
-  return useMediaQuery('(hover: none) and (pointer: coarse)')
 }
 
 function failureText(error: CaptureFailure | null, reason: string): string {
@@ -149,14 +146,23 @@ function NoTabCapture({ url }: { url: string }) {
  * "Слухати у вкладці" (#/listen/youtube/<videoId>): the video plays embedded here while the site captures
  * this tab's audio, shows live chords, pauses / resumes the recording with the video, and at the end saves
  * the recording as a track linked to the video (the cloud for signed-in users, this browser otherwise).
+ * A guest whose browser cannot listen to a tab is offered an account instead: once signed in, the cloud
+ * downloads the video and its job page opens.
  */
 export function CapturePage({ videoId, blocked }: { videoId: string; blocked: boolean }) {
   const t = useT()
   const url = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`
   const signedIn = useAuth((s) => !!s.user)
   const cloud = useConnection((s) => s.backend === 'cloud')
-  const phone = usePhone()
-  const tabCapture = canCaptureTab() && !phone
+  const tabCapture = useCanListenInTab()
+  const browserMode = useConnection((s) => s.status === 'browser')
+  // a guest (no account, no server) who cannot listen here: the cloud downloads the video for an account
+  const needsAccount = useCloudInvite() && browserMode && !tabCapture && !blocked
+  // the video waiting for that sign-in: 'waiting' once the account dialog was opened while the card showed
+  // (signing in then sends it to the cloud; leaving the page forgets it), 'failed' = the cloud did not take it
+  const [resume, setResume] = useState<'off' | 'waiting' | 'sending' | 'failed'>('off')
+  const [sendError, setSendError] = useState<ClientErrorCode | null>(null)
+  const sending = resume === 'sending' || (resume === 'waiting' && signedIn)
 
   const mountRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<YTPlayer | null>(null)
@@ -192,6 +198,34 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
   const { state, dispatch, current } = capture
 
   useDocumentTitle(title ? `${t('cloud.capture.title')} · ${title}` : t('cloud.capture.title'))
+
+  // the account dialog opened (from the card or the header) while the card is shown: the video waits for the sign-in
+  useEffect(() => {
+    if (!needsAccount) return
+    const arm = () => setResume((r) => (r === 'off' || r === 'failed' ? 'waiting' : r))
+    if (useAuthDialog.getState().open) arm()
+    return useAuthDialog.subscribe((s, prev) => {
+      if (s.open && !prev.open) arm()
+    })
+  }, [needsAccount])
+
+  useEffect(() => {
+    if (resume !== 'waiting') return
+    return submitAfterSignIn(
+      url,
+      (link) => {
+        setResume('sending')
+        setSendError(null)
+        // the job page opens once the cloud has the job; a failure stays here with "try again"
+        submitUrl(link).catch((err: unknown) => {
+          setSendError(toApiError(err).code)
+          setResume('failed')
+        })
+      },
+      // the user's own / a local server connected instead: its usual page shows, nothing is sent
+      () => setResume('off'),
+    )
+  }, [resume, url])
 
   // ---- the embedded player (created once per video)
   useEffect(() => {
@@ -401,8 +435,11 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
         <h1 className="mt-1.5 font-display text-2xl leading-tight font-semibold tracking-tight break-words sm:text-3xl">
           {title ?? t('cloud.capture.untitled')}
         </h1>
-        <p className="mt-2 text-[15px] leading-relaxed text-muted">{blocked ? t('cloud.capture.blocked') : t('cloud.capture.intro')}</p>
-        {!signedIn && (
+        {/* "the video plays here and the site hears this tab": not where the tab cannot be heard */}
+        {!needsAccount && !sending && resume !== 'failed' && (blocked || tabCapture) && (
+          <p className="mt-2 text-[15px] leading-relaxed text-muted">{blocked ? t('cloud.capture.blocked') : t('cloud.capture.intro')}</p>
+        )}
+        {!signedIn && !needsAccount && (
           <p className="mt-1.5 text-sm text-muted">
             {t('cloud.capture.guest')}{' '}
             <button type="button" onClick={() => openAuthDialog('signIn')} className="font-medium text-accent hover:underline">
@@ -499,6 +536,25 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
               <LiveChordsView session={capture.session} title={title ?? undefined} compact />
               {(phase === 'stopping' || phase === 'saving' || phase === 'done') && <SavingCard />}
             </>
+          ) : needsAccount ? (
+            <YoutubeAccountCard />
+          ) : sending ? (
+            <Card>
+              <p className="flex items-center gap-3 text-sm text-text" role="status">
+                <LoaderCircle className="size-5 shrink-0 animate-spin text-accent" aria-hidden="true" />
+                {t('cloud.ytAccount.sending')}
+              </p>
+            </Card>
+          ) : resume === 'failed' ? (
+            <Card>
+              <div role="alert" className="mb-4 flex items-start gap-2.5 rounded-xl border border-danger/40 bg-danger/[0.07] p-3 text-sm text-text">
+                <CircleAlert className="mt-0.5 size-4 shrink-0 text-danger" aria-hidden="true" />
+                <span>{errorText(sendError)}</span>
+              </div>
+              <Button variant="primary" icon={<RotateCcw className="size-4" aria-hidden="true" />} onClick={() => setResume('waiting')}>
+                {t('core.retry')}
+              </Button>
+            </Card>
           ) : !tabCapture ? (
             <NoTabCapture url={url} />
           ) : (

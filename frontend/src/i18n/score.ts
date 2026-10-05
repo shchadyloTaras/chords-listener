@@ -23,10 +23,6 @@ export const score: Dict = {
     'score.credit': 'Транскрипція: Chords Listener',
 
     'score.legend.vocal': 'Вокал — мелодія голосу з реальною висотою й тривалістю',
-    'score.source.instruments': 'Фортепіано розпізнано з інструментальної доріжки, без голосу',
-    'score.source.mix': 'Фортепіано розпізнано з повного звуку пісні: ноти голосу теж можуть потрапити в партію',
-    'score.source.mixShort': 'з повного звуку',
-    'score.source.instrumentsShort': 'з інструментальної доріжки',
 
     'score.piano.loading': 'Завантажую ноти…',
     'score.piano.audio': 'Отримую звук пісні…',
@@ -51,14 +47,17 @@ export const score: Dict = {
       'Відділити голос і записати мелодію браузер не може: для цього потрібен сервер. Увійди, щоб працювати з хмарним сервером, або запусти локальний (./start.sh), і додай пісню туди.',
     'score.vocals.browserTrack.text':
       'Ця пісня збережена лише в цьому браузері. Щоб розпізнати вокал, додай її на сервер: увійди в акаунт (хмара) або запусти локальний сервер (./start.sh).',
+    'score.vocals.guest.title': 'Вокал розпізнає хмара',
+    'score.vocals.guest.text': 'Голос від музики відділяє сервер. Увійди або зареєструйся — це безкоштовно.',
+    'score.vocals.guestLocal.text': 'Ця пісня лише на цьому пристрої. Увійди безкоштовно й перенеси її в хмару — там розпізнаємо вокал.',
+    'score.vocals.move.text': 'Ця пісня лише на цьому пристрої. Перенеси її в хмару — там розпізнаємо вокал.',
     'score.vocals.server.title': 'На цьому сервері немає розпізнавання вокалу',
     'score.vocals.server.text': 'Встанови додаткові компоненти сервера (cd backend && uv sync --extra vocals) або скористайся хмарною версією.',
     'score.vocals.error': 'Не вдалося розпізнати вокал.',
     'score.vocals.loadError': 'Не вдалося завантажити мелодію вокалу.',
     'score.vocals.quota': 'Денний ліміт розпізнавань вокалу вичерпано. Спробуй завтра.',
     'score.vocals.signin': 'Увійди в акаунт, щоб розпізнати вокал.',
-    'score.vocals.ready': 'Вокал: {n} нот · {low}–{high}',
-    'score.signin': 'Увійти',
+    'score.vocals.ready': 'Вокал: {low}–{high}',
 
     'score.render.lib': 'Завантажую нотний рушій…',
     'score.render.drawing': 'Малюю ноти…',
@@ -111,10 +110,6 @@ export const score: Dict = {
     'score.credit': 'Transcription: Chords Listener',
 
     'score.legend.vocal': 'Vocals — the sung melody with its real pitch and length',
-    'score.source.instruments': 'Piano transcribed from the instrumental stem, without the voice',
-    'score.source.mix': 'Piano transcribed from the full mix: notes of the voice may end up in the part',
-    'score.source.mixShort': 'from the full mix',
-    'score.source.instrumentsShort': 'from the instrumental stem',
 
     'score.piano.loading': 'Loading notes…',
     'score.piano.audio': 'Fetching the audio…',
@@ -139,14 +134,17 @@ export const score: Dict = {
       'A browser cannot separate the voice and write down the melody: that needs a server. Sign in to use the cloud server, or start a local one (./start.sh), and add the song there.',
     'score.vocals.browserTrack.text':
       'This song is stored in this browser only. To transcribe the vocals, add it to a server: sign in (cloud) or start a local server (./start.sh).',
+    'score.vocals.guest.title': 'Vocals are transcribed in the cloud',
+    'score.vocals.guest.text': 'A server separates the voice from the music. Sign in or sign up — it is free.',
+    'score.vocals.guestLocal.text': 'This song is only on this device. Sign in for free and move it to the cloud — the vocals are transcribed there.',
+    'score.vocals.move.text': 'This song is only on this device. Move it to the cloud — the vocals are transcribed there.',
     'score.vocals.server.title': 'This server cannot transcribe vocals',
     'score.vocals.server.text': 'Install the extra server components (cd backend && uv sync --extra vocals) or use the cloud version.',
     'score.vocals.error': 'Could not transcribe the vocals.',
     'score.vocals.loadError': 'Could not load the vocal melody.',
     'score.vocals.quota': 'The daily limit of vocal transcriptions is reached. Try again tomorrow.',
     'score.vocals.signin': 'Sign in to transcribe the vocals.',
-    'score.vocals.ready': 'Vocals: {n} notes · {low}–{high}',
-    'score.signin': 'Sign in',
+    'score.vocals.ready': 'Vocals: {low}–{high}',
 
     'score.render.lib': 'Loading the notation engine…',
     'score.render.drawing': 'Drawing the score…',

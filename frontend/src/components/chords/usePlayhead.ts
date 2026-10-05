@@ -1,7 +1,6 @@
 // Narrow playhead-derived hooks: components re-render only when the derived index changes.
 
 import { useCallback } from 'react'
-import { barIndexAt } from '../../lib/music/bars'
 import { chordIndexAt } from '../../lib/music/display'
 import { useClockValue } from './clock'
 
@@ -17,9 +16,4 @@ export function useChordPos(chords: { start: number; end: number }[]): number {
       [chords],
     ),
   )
-}
-
-/** Index of the bar under the playhead, or -1. */
-export function useBarIndex(bars: { start: number; end: number }[]): number {
-  return useClockValue(useCallback((t: number) => barIndexAt(bars, t), [bars]))
 }

@@ -4,6 +4,7 @@ import { Check, ChevronRight, Cloud, ExternalLink, Globe, LoaderCircle, RefreshC
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { t as tNow, useT } from '../../i18n'
 import { useAuth, useAuthDialog } from '../../lib/auth'
+import { useCanListenInTab } from '../../hooks/useMediaQuery'
 import {
   HOSTED,
   normalizeServerUrl,
@@ -67,20 +68,13 @@ function PanelHead({ icon, tone, title, children }: { icon: ReactNode; tone: 'ok
   )
 }
 
-/** Health of the cloud: waking up (Cloud Run starts on demand), not answering, or the engine. */
+/** Health of the cloud: waking up (Cloud Run starts on demand) or not answering; nothing when fine. */
 function CloudHealthLine() {
   const t = useT()
   const health = useConnection((s) => s.health)
   const failure = useConnection((s) => s.failure)
   const [checking, setChecking] = useState(false)
-  if (health) {
-    return (
-      <p className="mt-1 text-xs text-faint">
-        {t('web.server.engine', { engine: `${health.engine.name} ${health.engine.version}`.trim() })}
-        {health.ytdlp ? ` · yt-dlp ${health.ytdlp}` : ''}
-      </p>
-    )
-  }
+  if (health) return null
   if (failure) {
     return (
       <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-text">
@@ -171,9 +165,10 @@ function PanelBody({ onConnected }: { onConnected(): void }) {
   const t = useT()
   const kind = useModeKind()
   const serverOrigin = useConnection((s) => s.serverOrigin)
-  const health = useConnection((s) => s.health)
   const email = useAuth((s) => s.user?.email ?? '')
   const invite = useCloudInvite()
+  // YouTube without a server: listened to on the page where this browser hears its tab, else the cloud (an account)
+  const tabCapable = useCanListenInTab()
   const serverUrl = useApp((s) => s.serverUrl)
   const url = (serverOrigin ?? normalizeServerUrl(serverUrl) ?? serverUrl).replace(/^https?:\/\//, '')
 
@@ -197,15 +192,7 @@ function PanelBody({ onConnected }: { onConnected(): void }) {
         <PanelHead icon={<Server className="size-4" aria-hidden="true" />} tone="ok" title={t('web.mode.server')}>
           <p className="mt-0.5 text-sm text-muted">{t('web.server.connected', { url })}</p>
         </PanelHead>
-        <p className="mt-3 text-sm text-muted">
-          {t('web.server.what')}
-          {health?.engine?.name && (
-            <span className="mt-1 block text-xs text-faint">
-              {t('web.server.engine', { engine: `${health.engine.name} ${health.engine.version}`.trim() })}
-              {health.ytdlp ? ` · yt-dlp ${health.ytdlp}` : ''}
-            </span>
-          )}
-        </p>
+        <p className="mt-3 text-sm text-muted">{t('web.server.what')}</p>
         <p className="mt-3 text-xs text-faint">{t('web.browser.localNote')}</p>
         <AdvancedServer onConnected={onConnected} />
       </>
@@ -220,7 +207,7 @@ function PanelBody({ onConnected }: { onConnected(): void }) {
         title={kind === 'checking' ? t('web.mode.checking') : t('web.mode.browser')}
       >
         <p className="mt-0.5 text-sm text-muted">{t('web.browser.what')}</p>
-        <p className="mt-1 text-sm text-muted">{t('web.browser.needServer')}</p>
+        <p className="mt-1 text-sm text-muted">{t(tabCapable ? 'web.browser.needServer' : 'cloud.input.hintYoutubeAccount')}</p>
       </PanelHead>
       {invite && (
         <div className="mt-4 rounded-xl border border-accent/30 bg-accent-soft p-3">

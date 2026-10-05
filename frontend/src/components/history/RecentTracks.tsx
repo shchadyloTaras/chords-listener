@@ -11,17 +11,11 @@ import { VideoSiteIcon } from '../ui/Logo'
 import { formatRelative, formatTime, pluralCategory } from '../ui/format'
 import { isLocalId } from '../../lib/local'
 import { useConnection } from '../../lib/serverMode'
-import { moveToCloud, onTransferDone, useTransfers, type TransferState } from '../../lib/cloud/transfer'
+import { moveToCloud, onTransferDone, transferLabel, useTransfers } from '../../lib/cloud/transfer'
 import { refreshTracks, scheduleDelete, useTracks } from './tracksStore'
 import { TrackCover } from './TrackCover'
 import { BpmTag } from '../chords/tempo/BpmTag'
 import { resolveSpelling, transposeKeyName } from '../../lib/music/key'
-
-function transferLabel(t: (key: string, vars?: Record<string, string | number>) => string, state: TransferState): string {
-  if (state.phase === 'queued') return t('cloud.history.queued')
-  if (state.phase === 'uploading') return t('cloud.history.moving', { pct: Math.round(state.progress * 100) })
-  return t('cloud.history.analyzing')
-}
 
 function TrackRow({ track }: { track: TrackSummary }) {
   const t = useT()

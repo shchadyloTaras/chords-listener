@@ -19,7 +19,6 @@ export const web: Dict = {
 
     'web.server.connected': 'Підключено до {url}',
     'web.server.what': 'Посилання на YouTube, файли й записи з мікрофона розпізнає програма на твоєму компʼютері.',
-    'web.server.engine': 'Рушій: {engine}',
     'web.browser.what':
       'Файли й записи з мікрофона розпізнаються прямо в браузері та зберігаються лише на цьому пристрої.',
     'web.browser.needServer': 'Відео з YouTube слухаємо прямо на сторінці.',
@@ -59,6 +58,7 @@ export const web: Dict = {
 
     'web.input.needServer': 'Посилання з цього сайту розпізнає хмара — увійди або зареєструйся.',
     'web.input.serverReady': 'Хмару підключено — натисни Enter, щоб розпізнати.',
+    'web.input.sending': 'Надсилаю посилання…',
     'web.input.dismiss': 'Сховати',
 
     'web.toast.connected': 'Локальний сервер підключено',
@@ -69,6 +69,9 @@ export const web: Dict = {
 
     'web.error.serverRequired':
       'Посилання з цього сайту розпізнає сервер у хмарі — увійди або зареєструйся, це безкоштовно. Відео з YouTube можна послухати й без акаунта.',
+    // the same where this browser cannot listen to a tab (phones, Safari, Firefox): YouTube needs the cloud too
+    'web.error.serverRequiredNoTab':
+      'Посилання розпізнає сервер у хмарі — увійди або зареєструйся, це безкоштовно. Файли й мікрофон працюють і без акаунта.',
     'web.errorTitle.serverRequired': 'Потрібен акаунт',
   },
   en: {
@@ -88,7 +91,6 @@ export const web: Dict = {
 
     'web.server.connected': 'Connected to {url}',
     'web.server.what': 'YouTube links, files and microphone recordings are analyzed by the app on your computer.',
-    'web.server.engine': 'Engine: {engine}',
     'web.browser.what': 'Files and microphone recordings are analyzed right in the browser and stay on this device.',
     'web.browser.needServer': 'YouTube videos are listened to right on the page.',
     'web.browser.cta': 'Sign in for chords from YouTube, accurate analysis and your library on every device.',
@@ -127,6 +129,7 @@ export const web: Dict = {
 
     'web.input.needServer': 'Links to this site are analyzed in the cloud — sign in or create an account.',
     'web.input.serverReady': 'Cloud connected — press Enter to detect the chords.',
+    'web.input.sending': 'Sending the link…',
     'web.input.dismiss': 'Hide',
 
     'web.toast.connected': 'Local server connected',
@@ -137,6 +140,8 @@ export const web: Dict = {
 
     'web.error.serverRequired':
       'Links to this site are analyzed by a cloud server — sign in or create a free account. YouTube videos can be listened to without one.',
+    'web.error.serverRequiredNoTab':
+      'Links are analyzed by a cloud server — sign in or create a free account. Files and the microphone work without one.',
     'web.errorTitle.serverRequired': 'Account needed',
   },
 }

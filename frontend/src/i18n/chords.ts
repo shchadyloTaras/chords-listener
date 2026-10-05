@@ -13,7 +13,6 @@ export const chords: Dict = {
     'chords.now.noChord': 'без акорду',
     'chords.now.startsWith': 'перший акорд',
     'chords.now.end': 'кінець пісні',
-    'chords.now.bar': 'такт {n} з {total}',
     'chords.now.beatsLeft': 'зміна через {n}',
     'chords.now.secondsLeft': 'зміна через {n} с',
 
@@ -162,7 +161,6 @@ export const chords: Dict = {
     'chords.now.noChord': 'no chord',
     'chords.now.startsWith': 'first chord',
     'chords.now.end': 'end of song',
-    'chords.now.bar': 'bar {n} of {total}',
     'chords.now.beatsLeft': 'change in {n}',
     'chords.now.secondsLeft': 'change in {n}s',
 

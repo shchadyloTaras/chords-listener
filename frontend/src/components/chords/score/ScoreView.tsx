@@ -5,15 +5,20 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import clsx from 'clsx'
-import { AudioLines, Download, FileMusic, FileText, Hash, LoaderCircle, LogIn, Mic, Music2, Piano, RotateCcw, Wand2 } from 'lucide-react'
+import { AudioLines, CloudUpload, Download, FileMusic, FileText, Hash, LoaderCircle, Mic, Music2, Piano, RotateCcw, Wand2 } from 'lucide-react'
 import { useT } from '../../../i18n'
-import { openAuthDialog, useAuth } from '../../../lib/auth'
+import { navigate, paths } from '../../../hooks/useRoute'
+import { moveToCloud, onTransferDone, transferLabel, useTransfers } from '../../../lib/cloud/transfer'
+import { isLocalId } from '../../../lib/local/tracks'
 import { FALLBACK_FONT, registerScoreFont, SCORE_FONT } from '../../../lib/score/fonts'
 import { baseOptions, configureRules, fracAt, measureLayout, OpenSheetMusicDisplay, xAt, type ScoreColors, type ScoreLayout } from '../../../lib/score/osmd'
 import type { Score } from '../../../lib/score/types'
+import { useConnection } from '../../../lib/serverMode'
 import { requestNotes, type NotesState } from '../../../lib/transcription'
 import { loadVocals, startVocals, vocalsSupport, type VocalsState } from '../../../lib/vocals'
 import { useApp } from '../../../store'
+import { AccountButtons } from '../../account/AccountCta'
+import { useCloudInvite } from '../../account/cloudInvite'
 import { noteName } from '../piano/keyboard'
 import { useClockEffect } from '../clock'
 import { isTypingTarget } from '../hotkeys'
@@ -112,7 +117,7 @@ export default function ScoreView() {
         </div>
       </div>
 
-      <StatusLine piano={data.piano} source={data.pianoSource} vocals={data.vocals} showPiano={settings.piano} showVocals={settings.vocals} />
+      <StatusLine piano={data.piano} vocals={data.vocals} showPiano={settings.piano} showVocals={settings.vocals} />
       {settings.vocals && <VocalsCard state={data.vocals} />}
 
       {data.score && data.xml ? (
@@ -179,13 +184,11 @@ function PianoProgress({ state }: { state: NotesState }) {
 
 function StatusLine({
   piano,
-  source,
   vocals,
   showPiano,
   showVocals,
 }: {
   piano: NotesState
-  source: 'mix' | 'instruments'
   vocals: VocalsState
   showPiano: boolean
   showVocals: boolean
@@ -199,21 +202,13 @@ function StatusLine({
       <span key="v" className="inline-flex items-center gap-1.5" title={t('score.legend.vocal')}>
         <Mic size={13} aria-hidden />
         {t('score.vocals.ready', {
-          n: vocals.notes.notes.length,
           low: range ? noteName(range.low, spelling) : '—',
           high: range ? noteName(range.high, spelling) : '—',
         })}
       </span>,
     )
   }
-  if (showPiano && piano.status === 'ready') {
-    items.push(
-      <span key="p" className="inline-flex items-center gap-1.5" title={t(source === 'instruments' ? 'score.source.instruments' : 'score.source.mix')}>
-        <Piano size={13} aria-hidden />
-        {t('score.part.piano')}: {t(source === 'instruments' ? 'score.source.instrumentsShort' : 'score.source.mixShort')}
-      </span>,
-    )
-  } else if (showPiano && piano.status === 'computing') {
+  if (showPiano && piano.status === 'computing') {
     items.push(
       <span key="p" className="inline-flex items-center gap-1.5">
         <LoaderCircle size={13} className="animate-spin" aria-hidden />
@@ -226,10 +221,28 @@ function StatusLine({
 }
 
 /** Vocal melody: start the server job, its progress, or why it is not possible here. */
+/** The demo song (dev/sampleTrack.ts): it exists only in this browser, an account brings no vocals for it. */
+const DEMO_TRACK_ID = 'demo'
+
 function VocalsCard({ state }: { state: VocalsState }) {
   const t = useT()
   const { track } = useChordModel()
-  const signedIn = useAuth((s) => !!s.user)
+  // a guest (no account, no server): vocals come with a free account
+  const invite = useCloudInvite()
+  const noServer = useConnection((s) => s.status !== 'server')
+  const cloud = useConnection((s) => s.backend === 'cloud')
+  // a song kept on this device: the cloud transcribes its vocals once it is moved there
+  const local = isLocalId(track.id)
+  const transfer = useTransfers((s) => (local ? s[track.id] : undefined))
+  const moving = !!transfer && transfer.phase !== 'error'
+  useEffect(() => {
+    if (!local) return
+    const id = track.id
+    // moved: the copy on this device is gone, the page follows the song to the cloud
+    return onTransferDone((done) => {
+      if (done.localId === id) navigate(paths.track(done.trackId))
+    })
+  }, [local, track.id])
   const box = (children: ReactNode, tone: 'muted' | 'accent' = 'muted') => (
     <div className={clsx('flex flex-wrap items-center gap-3 border-b border-border px-4 py-3 text-sm', tone === 'accent' ? 'bg-accent-soft/50' : 'bg-surface-2/50')}>{children}</div>
   )
@@ -280,6 +293,36 @@ function VocalsCard({ state }: { state: VocalsState }) {
       )
     }
     case 'unavailable':
+      if (state.reason === 'browser' && invite && noServer && track.id !== DEMO_TRACK_ID)
+        return box(
+          <>
+            <div className="min-w-0 flex-1 basis-56">
+              <p className="font-medium">{t('score.vocals.guest.title')}</p>
+              <p className="mt-0.5 text-xs leading-relaxed text-muted">{t(local ? 'score.vocals.guestLocal.text' : 'score.vocals.guest.text')}</p>
+            </div>
+            <AccountButtons size="sm" className="shrink-0" />
+          </>,
+          'accent',
+        )
+      if (state.reason === 'browser' && local && cloud)
+        return box(
+          <>
+            <div className="min-w-0 flex-1 basis-56">
+              <p className="font-medium">{t('score.vocals.guest.title')}</p>
+              <p className="mt-0.5 text-xs leading-relaxed text-muted">{t('score.vocals.move.text')}</p>
+            </div>
+            <button
+              type="button"
+              disabled={moving}
+              onClick={() => moveToCloud(track.id)}
+              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg bg-accent px-3.5 text-sm font-semibold text-accent-fg hover:brightness-105 disabled:opacity-60"
+            >
+              {moving ? <LoaderCircle size={16} className="animate-spin" aria-hidden /> : <CloudUpload size={16} aria-hidden />}
+              <span aria-live="polite">{transfer && moving ? transferLabel(t, transfer) : t('cloud.history.move')}</span>
+            </button>
+          </>,
+          'accent',
+        )
       return box(
         <>
           <div className="min-w-0 flex-1">
@@ -290,16 +333,6 @@ function VocalsCard({ state }: { state: VocalsState }) {
                 : t(track.id.startsWith('local-') ? 'score.vocals.browserTrack.text' : 'score.vocals.browser.text')}
             </p>
           </div>
-          {state.reason === 'browser' && !signedIn && (
-            <button
-              type="button"
-              onClick={() => openAuthDialog('signIn', 'required')}
-              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-border-strong px-3.5 text-sm font-medium hover:bg-surface-3"
-            >
-              <LogIn size={16} />
-              {t('score.signin')}
-            </button>
-          )}
         </>,
       )
     case 'error': {

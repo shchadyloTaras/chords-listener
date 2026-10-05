@@ -11,8 +11,7 @@ import { useT } from '../../../i18n'
 import { useMediaQuery } from '../../../hooks/useMediaQuery'
 import { onLiveNotes } from '../../../lib/liveNotes'
 import { isMinorQuality } from '../../../lib/music/chord'
-import { formatTranspose } from '../../../lib/music/key'
-import { requestNotes, type NotesSource, type NotesState } from '../../../lib/transcription'
+import { requestNotes, type NotesState } from '../../../lib/transcription'
 import { fetchStem, useVocals } from '../../../lib/vocals'
 import { useApp } from '../../../store'
 import { useChordModel } from '../model'
@@ -30,7 +29,6 @@ export default function LivePiano() {
   const t = useT()
   const model = useChordModel()
   const { track, chords, spelling, rhythm, transpose } = model
-  const lang = useApp((s) => s.lang)
   const setSetting = useApp((s) => s.setSetting)
   const { notes, source } = usePianoNotes(track)
   const vocals = useVocals(track, { knownOnly: true })
@@ -137,9 +135,6 @@ export default function LivePiano() {
     useApp.getState().toast(t('keys.hidden'), 'info', { label: t('keys.show'), run: () => useApp.getState().setSetting('liveKeys', true) })
   }, [setSetting, t])
 
-  const fmt = useMemo(() => new Intl.NumberFormat(lang === 'uk' ? 'uk-UA' : 'en-US'), [lang])
-  const plural = useMemo(() => new Intl.PluralRules(lang === 'uk' ? 'uk' : 'en'), [lang])
-
   const progress = notes.status === 'computing' ? notes.progress : null
   const canRecompute = notes.status === 'ready' || notes.status === 'error'
 
@@ -148,7 +143,7 @@ export default function LivePiano() {
       <div className="relative flex items-center gap-2 px-4 py-2 sm:px-5">
         <div className="min-w-0 flex-1">
           <h2 className="font-display text-[15px] leading-tight font-semibold tracking-tight">{t('keys.title')}</h2>
-          <Status state={notes} source={source} transpose={transpose} fmt={fmt} plural={plural} onRetry={() => request()} />
+          <Status state={notes} onRetry={() => request()} />
         </div>
         {vocals.status === 'ready' && (
           <IconButton
@@ -187,26 +182,11 @@ export default function LivePiano() {
   )
 }
 
-function Status({
-  state,
-  source,
-  transpose,
-  fmt,
-  plural,
-  onRetry,
-}: {
-  state: NotesState
-  source: NotesSource
-  transpose: number
-  fmt: Intl.NumberFormat
-  plural: Intl.PluralRules
-  onRetry(): void
-}) {
+/** What the panel is doing (loading, recognizing, an error); nothing once the notes are there. */
+function Status({ state, onRetry }: { state: NotesState; onRetry(): void }) {
   const t = useT()
   let text = ''
-  let title: string | undefined
   let tone: 'muted' | 'error' = 'muted'
-  const extras: string[] = []
   switch (state.status) {
     case 'idle':
     case 'loading':
@@ -215,40 +195,27 @@ function Status({
     case 'computing':
       if (state.stage === 'audio') text = t('keys.status.audio')
       else if (state.stage === 'decode') text = t('keys.status.decode')
-      else {
-        text = t('keys.status.computing', { pct: Math.floor(state.progress * 100) })
-        if (state.found > 0) extras.push(t('keys.status.found', { n: fmt.format(state.found) }))
-      }
+      else text = t('keys.status.computing', { pct: Math.floor(state.progress * 100) })
       break
-    case 'ready': {
-      const n = state.index.count
-      text = n ? t(`keys.status.notes.${plural.select(n)}`, { n: fmt.format(n) }) : t('keys.status.none')
-      if (source === 'instruments') extras.push(t('score.source.instrumentsShort'))
-      if (transpose) extras.push(t('keys.status.transposed', { n: formatTranspose(transpose) }))
-      if (!state.saved) extras.push(t('keys.status.notSaved'))
-      title = state.stats
-        ? t('keys.status.engine', { backend: `${state.stats.backend === 'webgl' ? 'WebGL' : 'CPU'}, ${(state.stats.modelMs / 1000).toFixed(1)} s` })
-        : t('keys.status.savedTitle', { engine: state.engine })
-      if (!state.saved) title += ` · ${t('keys.status.notSavedTitle')}`
+    case 'ready':
+      if (!state.index.count) text = t('keys.status.none')
       break
-    }
     case 'unavailable':
       text = t('keys.status.unavailable')
       break
     case 'error':
       text = t(`keys.error.${state.code}`)
-      title = state.message
       tone = 'error'
       break
   }
+  if (!text) return null
   // screen readers hear the stage, not every percent
-  const shown = [text, ...extras].join(' · ')
-  const spoken = state.status === 'computing' ? t('keys.status.computingShort') : shown
+  const spoken = state.status === 'computing' ? t('keys.status.computingShort') : text
   return (
-    <div className={clsx('flex min-w-0 items-center gap-1.5 text-xs', tone === 'error' ? 'text-danger' : 'text-muted')} title={title}>
+    <div className={clsx('flex min-w-0 items-center gap-1.5 text-xs', tone === 'error' ? 'text-danger' : 'text-muted')}>
       {(state.status === 'loading' || state.status === 'computing') && <LoaderCircle size={12} className="shrink-0 animate-spin" aria-hidden />}
       <span className="truncate" aria-hidden>
-        {shown}
+        {text}
       </span>
       <span className="sr-only" aria-live="polite">
         {spoken}
@@ -266,7 +233,7 @@ function Status({
 function RollMessage({ state, height }: { state: NotesState; height: number }) {
   const t = useT()
   let text: string | null = null
-  if (state.status === 'computing') text = state.backend === 'cpu' ? t('keys.firstRunCpu') : t('keys.firstRun')
+  if (state.status === 'computing') text = t('keys.firstRun')
   else if (state.status === 'unavailable') text = t('keys.unavailable')
   if (!text) return null
   return (

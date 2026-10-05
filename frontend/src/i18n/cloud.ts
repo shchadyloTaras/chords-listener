@@ -40,6 +40,15 @@ export const cloud: Dict = {
     'cloud.input.accountTitle': 'Посилання з інших сайтів розпізнає хмара',
     'cloud.input.accountText':
       'Сервер у хмарі завантажить аудіо й розпізнає акорди. Акаунт безкоштовний, а відео з YouTube можна послухати й без нього.',
+    // the same where this browser cannot listen to a tab (phones, Safari, Firefox): YouTube needs the cloud too
+    'cloud.input.hintGuestNoTab': 'Файли й мікрофон працюють і без акаунта. Посилання на YouTube та інші сайти — після входу.',
+    'cloud.input.hintYoutubeAccount': 'Відео з YouTube на цьому пристрої розпізнає хмара — потрібен безкоштовний акаунт.',
+    'cloud.input.accountTextNoTab': 'Сервер у хмарі завантажить аудіо й розпізнає акорди. Акаунт безкоштовний.',
+    'cloud.ytAccount.title': 'На цьому пристрої YouTube працює з безкоштовним акаунтом',
+    'cloud.ytAccount.text':
+      'Цей браузер не вміє слухати вкладку, тож відео завантажить і розпізнає хмара. Увійди або зареєструйся — і почнемо одразу.',
+    'cloud.ytAccount.device': 'Без акаунта:',
+    'cloud.ytAccount.sending': 'Надсилаю відео в хмару…',
 
     // "listen in the tab" (YouTube)
     'cloud.capture.title': 'Слухати у вкладці',
@@ -172,6 +181,14 @@ export const cloud: Dict = {
     'cloud.input.accountTitle': 'Links to other sites are analyzed in the cloud',
     'cloud.input.accountText':
       'A cloud server downloads the audio and detects the chords. The account is free, and YouTube videos can be listened to without one.',
+    'cloud.input.hintGuestNoTab': 'Files and the microphone work without an account. YouTube and other links need one.',
+    'cloud.input.hintYoutubeAccount': 'On this device, YouTube videos are analyzed in the cloud — a free account is needed.',
+    'cloud.input.accountTextNoTab': 'A cloud server downloads the audio and detects the chords. The account is free.',
+    'cloud.ytAccount.title': 'On this device, YouTube works with a free account',
+    'cloud.ytAccount.text':
+      'This browser cannot listen to a tab, so the cloud downloads the video and detects the chords. Sign in or sign up and we start right away.',
+    'cloud.ytAccount.device': 'Without an account:',
+    'cloud.ytAccount.sending': 'Sending the video to the cloud…',
 
     'cloud.capture.title': 'Listen in the tab',
     'cloud.capture.blocked':

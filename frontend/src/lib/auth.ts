@@ -2,10 +2,12 @@
 // Signing in syncs settings (lib/settingsSync.ts) and, on the hosted site, switches the API to the
 // cloud (lib/serverMode.ts), which gets the user's ID token with every request (lib/api.ts).
 // Firebase is loaded on demand into separate chunks, so a blocked or unreachable Firebase only
-// disables the account features, never the app.
+// disables the account features, never the app. A guest never loads it: only opening the account
+// dialog does, or a startup in a browser that has signed in before (lib/authMarker.ts).
 import type { Auth } from 'firebase/auth'
 import { create } from 'zustand'
 import { useApp } from '../store'
+import { findLegacySession, onSignInElsewhere, rememberSignIn, signedInBefore } from './authMarker'
 
 export interface AuthUser {
   uid: string
@@ -15,7 +17,10 @@ export interface AuthUser {
 interface AuthState {
   /** null while signed out */
   user: AuthUser | null
-  /** false until Firebase has restored (or ruled out) a persisted session */
+  /**
+   * false until a saved session has been restored or ruled out: by Firebase where this browser has signed in
+   * before (or an older build left a session), otherwise by a quick look on this device (no Firebase loaded)
+   */
   ready: boolean
 }
 
@@ -27,8 +32,9 @@ export const useAuth: ReturnType<typeof createAuthStore> = import.meta.hot?.data
 if (import.meta.hot) import.meta.hot.data.useAuth = useAuth
 
 type AuthSdk = typeof import('firebase/auth')
+type LoadedAuth = { auth: Auth; sdk: AuthSdk }
 
-let loading: Promise<{ auth: Auth; sdk: AuthSdk }> | null = null
+let loading: Promise<LoadedAuth> | null = null
 
 /** Loads the Firebase app + Auth chunks once. A failed load is retried on the next call. */
 function loadAuth() {
@@ -44,50 +50,101 @@ function loadAuth() {
   return loading
 }
 
-/** Mirrors Firebase's auth state into `useAuth` and runs settings sync while signed in. Mount once in App. */
-export function startAuth(): () => void {
-  let stopped = false
-  let stopAuth: (() => void) | undefined
+let stopMirror: (() => void) | null = null
+
+/** How long startup waits for the on-device look for an older build's session (IndexedDB may hang). */
+export const LEGACY_LOOKUP_MS = 1500
+
+/**
+ * Mirrors Firebase's auth state into `useAuth` (attached once, whoever loaded the SDK first), runs settings
+ * sync while signed in and keeps the "signed in before" flag up to date.
+ */
+function mirror({ auth, sdk }: LoadedAuth): void {
+  if (stopMirror) return
   let stopSync: (() => void) | undefined
   let session = 0
-
-  loadAuth().then(
-    ({ auth, sdk }) => {
-      if (stopped) return
-      stopAuth = sdk.onAuthStateChanged(auth, (user) => {
-        useAuth.setState({ user: user && { uid: user.uid, email: user.email }, ready: true })
-        stopSync?.()
-        stopSync = undefined
-        const current = ++session
-        if (!user) return
-        import('./settingsSync')
-          .then(({ startSettingsSync }) => {
-            if (current === session && !stopped) stopSync = startSettingsSync(user)
-          })
-          .catch((err: unknown) => console.warn('[settings sync] failed to load', err))
+  const stopAuth = sdk.onAuthStateChanged(auth, (user) => {
+    rememberSignIn(!!user)
+    useAuth.setState({ user: user && { uid: user.uid, email: user.email }, ready: true })
+    stopSync?.()
+    stopSync = undefined
+    const current = ++session
+    if (!user) return
+    import('./settingsSync')
+      .then(({ startSettingsSync }) => {
+        if (current === session) stopSync = startSettingsSync(user)
       })
-    },
-    // Firebase unreachable: behave as signed out; the dialog reports the problem if used
-    () => {
-      if (!stopped) useAuth.setState({ ready: true })
-    },
-  )
-
-  return () => {
-    stopped = true
+      .catch((err: unknown) => console.warn('[settings sync] failed to load', err))
+  })
+  stopMirror = () => {
+    stopMirror = null
     session++
-    stopAuth?.()
+    stopAuth()
     stopSync?.()
   }
 }
 
+/** The SDK for an account action; the session is mirrored from then on (e.g. a guest signing in). */
+async function accountSdk(): Promise<LoadedAuth> {
+  const loaded = await loadAuth()
+  mirror(loaded)
+  return loaded
+}
+
+/**
+ * Restores a saved session at startup, only where this browser has signed in before (a guest loads no
+ * Firebase), and when another tab signs in. Mount once in App.
+ * Without the flag, `ready` waits for the on-device look for a session an older build saved (milliseconds,
+ * bounded by LEGACY_LOOKUP_MS): such a user must not look like a guest meanwhile (the guest flows would
+ * show, and the API would settle on browser mode before their session is back).
+ */
+export function startAuth(): () => void {
+  let stopped = false
+  let lookupTimer: ReturnType<typeof setTimeout> | undefined
+  const restore = () =>
+    loadAuth().then(
+      (loaded) => {
+        if (!stopped) mirror(loaded)
+      },
+      // Firebase unreachable: behave as signed out; the dialog reports the problem if used
+      () => {
+        if (!stopped) useAuth.setState({ ready: true })
+      },
+    )
+  const ruledOut = () => {
+    if (!stopped) useAuth.setState({ ready: true })
+  }
+
+  if (signedInBefore()) void restore()
+  else {
+    lookupTimer = setTimeout(ruledOut, LEGACY_LOOKUP_MS)
+    void findLegacySession().then((found) => {
+      clearTimeout(lookupTimer)
+      if (stopped) return
+      // found after the timeout too: the session still comes back (ready stays true meanwhile)
+      if (found) void restore()
+      else ruledOut()
+    })
+  }
+  const stopElsewhere = onSignInElsewhere(() => {
+    if (!stopped) void restore()
+  })
+
+  return () => {
+    stopped = true
+    clearTimeout(lookupTimer)
+    stopElsewhere()
+    stopMirror?.()
+  }
+}
+
 export async function signIn(email: string, password: string) {
-  const { auth, sdk } = await loadAuth()
+  const { auth, sdk } = await accountSdk()
   return sdk.signInWithEmailAndPassword(auth, email.trim(), password)
 }
 
 export async function signUp(email: string, password: string) {
-  const { auth, sdk } = await loadAuth()
+  const { auth, sdk } = await accountSdk()
   return sdk.createUserWithEmailAndPassword(auth, email.trim(), password)
 }
 
@@ -99,7 +156,7 @@ const CONTINUE_URL_ERRORS = ['auth/unauthorized-continue-uri', 'auth/invalid-con
  * the current host is an authorized domain (localhost, GitHub Pages); otherwise it is sent without.
  */
 export async function sendPasswordReset(email: string) {
-  const { auth, sdk } = await loadAuth()
+  const { auth, sdk } = await accountSdk()
   auth.languageCode = useApp.getState().lang
   const address = email.trim()
   const url = `${window.location.origin}${window.location.pathname}`
@@ -114,8 +171,9 @@ export async function sendPasswordReset(email: string) {
 }
 
 export async function signOut() {
-  const { auth, sdk } = await loadAuth()
+  const { auth, sdk } = await accountSdk()
   await sdk.signOut(auth)
+  rememberSignIn(false)
 }
 
 /**
@@ -159,6 +217,8 @@ export function openAuthDialog(mode: AuthDialogMode = 'signIn', reason: AuthDial
     return
   }
   useAuthDialog.setState({ open: true, mode, reason, session: s.session + 1 })
+  // someone is about to sign in: fetch Firebase now (a guest's first load of it), not on submit
+  void loadAuth().catch(() => undefined)
 }
 
 /**
