@@ -6,6 +6,7 @@ import {
   initialCapture,
   playerEvent,
   sessionCommand,
+  STARTING_HINT_MS,
   type CaptureEvent,
   type CaptureState,
 } from './machine'
@@ -106,5 +107,17 @@ describe('start offset', () => {
   it('starts over when the video is at its end', () => {
     expect(chooseStartOffset(199, 200)).toBe(0)
     expect(chooseStartOffset(200, 200)).toBe(0)
+  })
+})
+
+describe('starting hint', () => {
+  it('waits for a slow video before telling the user to press play on it', () => {
+    expect(STARTING_HINT_MS).toBe(8000)
+  })
+
+  it('can be cancelled while waiting for the video to start', () => {
+    const s = run([{ type: 'start' }, { type: 'granted', waitForMedia: true }])
+    expect(s.phase).toBe('starting')
+    expect(captureReducer(s, { type: 'reset' })).toEqual(initialCapture)
   })
 })

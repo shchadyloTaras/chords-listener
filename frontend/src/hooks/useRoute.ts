@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react'
 
 /**
  * Hash-based routes: #/ · #/job/<id> · #/track/<id> · #/demo ·
- * #/listen[?src=mic|tab] (live chords from the microphone / a tab) ·
+ * #/listen[?src=mic|tab][&title=<name>] (live chords from the microphone / a tab; the title names the recording) ·
  * #/listen/youtube/<videoId>[?blocked=1] (play a YouTube video here and listen to this tab)
  */
 export type Route =
@@ -10,7 +10,7 @@ export type Route =
   | { name: 'job'; id: string }
   | { name: 'track'; id: string }
   | { name: 'demo' }
-  | { name: 'listen'; source: 'mic' | 'tab' | null }
+  | { name: 'listen'; source: 'mic' | 'tab' | null; title: string | null }
   | { name: 'capture'; videoId: string; blocked: boolean }
   | { name: 'notFound' }
 
@@ -19,7 +19,13 @@ export const paths = {
   job: (id: string) => `/job/${encodeURIComponent(id)}`,
   track: (id: string) => `/track/${encodeURIComponent(id)}`,
   demo: () => '/demo',
-  listen: (source?: 'mic' | 'tab') => (source ? `/listen?src=${source}` : '/listen'),
+  listen: (source?: 'mic' | 'tab', opts: { title?: string } = {}) => {
+    const q = new URLSearchParams()
+    if (source) q.set('src', source)
+    if (opts.title) q.set('title', opts.title.slice(0, 200))
+    const s = q.toString()
+    return s ? `/listen?${s}` : '/listen'
+  },
   capture: (videoId: string, opts: { blocked?: boolean } = {}) =>
     `/listen/youtube/${encodeURIComponent(videoId)}${opts.blocked ? '?blocked=1' : ''}`,
 }
@@ -35,7 +41,7 @@ export function parseHash(hash: string): Route {
   if (path === '/demo') return { name: 'demo' }
   if (path === '/listen') {
     const src = query.get('src')
-    return { name: 'listen', source: src === 'mic' || src === 'tab' ? src : null }
+    return { name: 'listen', source: src === 'mic' || src === 'tab' ? src : null, title: query.get('title') || null }
   }
   const yt = /^\/listen\/youtube\/([^/?#]+)$/.exec(path)
   if (yt) {

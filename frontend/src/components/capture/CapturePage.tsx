@@ -1,7 +1,9 @@
 import clsx from 'clsx'
 import {
+  AppWindow,
   ArrowLeft,
   CircleAlert,
+  Copy,
   Download,
   ExternalLink,
   FolderOpen,
@@ -16,14 +18,15 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { t as tNow, useT } from '../../i18n'
-import { openAuthDialog, useAuth } from '../../lib/auth'
-import { useConnection } from '../../lib/serverMode'
+import { openAuthDialog } from '../../lib/auth'
+import { copyText } from '../../lib/clipboard'
 import { useApp } from '../../store'
 import { useDocumentTitle } from '../../hooks/useDocumentTitle'
 import { useJobs } from '../../hooks/useJobs'
 import { useCanListenInTab } from '../../hooks/useMediaQuery'
 import { navigate, paths } from '../../hooks/useRoute'
 import { toApiError } from '../../lib/api'
+import { useCloudInvite } from '../account/cloudInvite'
 import { errorText } from '../jobs/errorText'
 import { startFiles } from '../input/startFiles'
 import { FILE_ACCEPT } from '../input/url'
@@ -32,7 +35,7 @@ import { Button } from '../ui/IconButton'
 import { VideoSiteIcon } from '../ui/Logo'
 import { formatTime } from '../ui/format'
 import { LiveChordsView } from '../live'
-import { chooseStartOffset, isCapturing, playerEvent, type CaptureFailure } from './machine'
+import { chooseStartOffset, isCapturing, playerEvent, STARTING_HINT_MS, type CaptureFailure } from './machine'
 import { recordingFilename, saveRecording } from './saveRecording'
 import { ShareTabIllustration } from './ShareTabIllustration'
 import { useCapture } from './useCapture'
@@ -93,8 +96,11 @@ function SavingCard() {
   )
 }
 
-/** Phones / browsers without tab audio: the microphone (song playing nearby) or a file. */
-function NoTabCapture({ url }: { url: string }) {
+/**
+ * Where the browser cannot hear a tab (phones, Safari, Firefox): the video still plays here, and the chords
+ * come from the microphone (the video playing on another device), a file, or a computer's Chrome / Edge.
+ */
+function NoTabCapture({ url, title }: { url: string; title: string | null }) {
   const t = useT()
   const fileRef = useRef<HTMLInputElement>(null)
   return (
@@ -104,16 +110,31 @@ function NoTabCapture({ url }: { url: string }) {
           <MonitorSmartphone className="size-5" aria-hidden="true" />
         </span>
         <div className="min-w-0">
-          <h2 className="font-display text-lg font-semibold tracking-tight">{t('cloud.capture.phone.title')}</h2>
-          <p className="mt-1 text-[15px] leading-relaxed text-muted">{t('cloud.capture.phone.text')}</p>
+          <h2 className="font-display text-lg font-semibold tracking-tight">{t('cloud.capture.here.title')}</h2>
+          <p className="mt-1 text-[15px] leading-relaxed text-muted">{t('cloud.capture.here.text')}</p>
         </div>
       </div>
-      <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-        <Button variant="primary" icon={<Mic className="size-4" aria-hidden="true" />} onClick={() => navigate(paths.listen('mic'))}>
-          {t('cloud.capture.phone.mic')}
+      <div className="mt-5 flex flex-col gap-2 sm:items-start">
+        {/* the long labels wrap instead of overflowing a phone's width */}
+        <Button
+          variant="primary"
+          icon={<Mic className="size-4 shrink-0" aria-hidden="true" />}
+          onClick={() => navigate(paths.listen('mic', { title: title ?? undefined }))}
+          className="h-auto! min-h-10 py-2 text-left whitespace-normal!"
+        >
+          {t('cloud.capture.here.mic')}
         </Button>
-        <Button icon={<FolderOpen className="size-4" aria-hidden="true" />} onClick={() => fileRef.current?.click()}>
+        <Button icon={<FolderOpen className="size-4 shrink-0" aria-hidden="true" />} onClick={() => fileRef.current?.click()}>
           {t('cloud.capture.phone.file')}
+        </Button>
+        <Button
+          icon={<Copy className="size-4 shrink-0" aria-hidden="true" />}
+          onClick={async () => {
+            if (await copyText(window.location.href)) useApp.getState().toast(t('cloud.capture.here.copied'), 'success')
+          }}
+          className="h-auto! min-h-10 py-2 text-left whitespace-normal!"
+        >
+          {t('cloud.capture.here.copy')}
         </Button>
         <a
           href={url}
@@ -143,18 +164,22 @@ function NoTabCapture({ url }: { url: string }) {
  * "Слухати у вкладці" (#/listen/youtube/<videoId>): the video plays embedded here while the site captures
  * this tab's audio, shows live chords, pauses / resumes the recording with the video, and at the end saves
  * the recording as a track linked to the video (the cloud for signed-in users, this browser otherwise).
- * Where the browser cannot listen to a tab (phones, Safari, Firefox) the microphone and files are offered.
+ * Where the browser cannot listen to a tab (phones, Safari, Firefox) the video still plays here and the
+ * microphone (the video on another device), a file or a computer are offered instead.
  */
 export function CapturePage({ videoId, blocked }: { videoId: string; blocked: boolean }) {
   const t = useT()
   const url = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`
-  const signedIn = useAuth((s) => !!s.user)
-  const cloud = useConnection((s) => s.backend === 'cloud')
+  const cloudInvite = useCloudInvite()
   const tabCapture = useCanListenInTab()
 
   const mountRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<YTPlayer | null>(null)
   const [playerStatus, setPlayerStatus] = useState<PlayerStatus>('loading')
+  /** bumped by "Try again": the player is created anew */
+  const [playerKey, setPlayerKey] = useState(0)
+  /** the video has not started playing for a while after the recording began waiting for it */
+  const [slowStart, setSlowStart] = useState(false)
   const [title, setTitle] = useState<string | null>(null)
   const [position, setPosition] = useState(0)
   /** video time where the recording began (set when the video starts playing) */
@@ -187,7 +212,7 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
 
   useDocumentTitle(title ? `${t('cloud.capture.title')} · ${title}` : t('cloud.capture.title'))
 
-  // ---- the embedded player (created once per video)
+  // ---- the embedded player (created once per video; again on "Try again")
   useEffect(() => {
     const host = mountRef.current
     if (!host) return
@@ -252,7 +277,7 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
       }
       host.replaceChildren()
     }
-  }, [videoId, dispatch, current])
+  }, [videoId, dispatch, current, playerKey])
 
   // ---- before starting: where the video is (to offer "start at 1:23")
   useEffect(() => {
@@ -267,6 +292,16 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
       }
     }, 500)
     return () => window.clearInterval(id)
+  }, [state.phase])
+
+  // ---- waiting for the video to start: after a while, point at the play button of the video itself
+  useEffect(() => {
+    if (state.phase !== 'starting') return
+    const id = window.setTimeout(() => setSlowStart(true), STARTING_HINT_MS)
+    return () => {
+      window.clearTimeout(id)
+      setSlowStart(false)
+    }
   }, [state.phase])
 
   // ---- while recording: the video must not jump (that would tear the recording from the video)
@@ -374,7 +409,7 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
     phase === 'requesting'
       ? t('cloud.capture.requesting')
       : phase === 'starting'
-        ? t('cloud.capture.waiting')
+        ? t(slowStart ? 'cloud.capture.startingSlow' : 'cloud.capture.waiting')
         : phase === 'live'
           ? t('cloud.capture.listening')
           : phase === 'paused'
@@ -395,15 +430,15 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
         <h1 className="mt-1.5 font-display text-2xl leading-tight font-semibold tracking-tight break-words sm:text-3xl">
           {title ?? t('cloud.capture.untitled')}
         </h1>
-        {/* "the video plays here and the site hears this tab": not where the tab cannot be heard */}
-        {(blocked || tabCapture) && (
-          <p className="mt-2 text-[15px] leading-relaxed text-muted">{blocked ? t('cloud.capture.blocked') : t('cloud.capture.intro')}</p>
-        )}
-        {!signedIn && (
+        {/* "the video plays here and the site hears this tab" holds only where the tab can be heard */}
+        <p className="mt-2 text-[15px] leading-relaxed text-muted">
+          {!tabCapture ? t('cloud.capture.here.intro') : blocked ? t('cloud.capture.blocked') : t('cloud.capture.intro')}
+        </p>
+        {cloudInvite && (
           <p className="mt-1.5 text-sm text-muted">
             {t('cloud.capture.guest')}{' '}
-            <button type="button" onClick={() => openAuthDialog('signIn')} className="font-medium text-accent hover:underline">
-              {t('cloud.capture.signInHint')}
+            <button type="button" onClick={() => openAuthDialog('signIn')} className="text-left font-medium text-accent hover:underline">
+              {t('cloud.capture.accountHint')}
             </button>
           </p>
         )}
@@ -426,10 +461,26 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
                 <p className="max-w-md text-sm text-text">
                   {t(playerStatus === 'embed' ? 'cloud.capture.error.embed' : 'cloud.capture.error.player')}
                 </p>
-                <a href={url} target="_blank" rel="noreferrer noopener" className="inline-flex items-center gap-1.5 text-sm font-medium text-accent hover:underline">
-                  <ExternalLink className="size-4" aria-hidden="true" />
-                  {t('cloud.capture.openYoutube')}
-                </a>
+                <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
+                  {playerStatus === 'error' && (
+                    <Button size="sm" icon={<RotateCcw className="size-3.5" aria-hidden="true" />} onClick={() => setPlayerKey((k) => k + 1)}>
+                      {t('core.retry')}
+                    </Button>
+                  )}
+                  {playerStatus === 'embed' && tabCapture && (
+                    <a
+                      href={`#${paths.listen('tab', { title: title ?? undefined })}`}
+                      className="inline-flex h-8 items-center justify-center gap-2 rounded-lg border border-border-strong bg-surface-3 px-3 text-sm font-medium text-text hover:brightness-110"
+                    >
+                      <AppWindow className="size-3.5" aria-hidden="true" />
+                      {t('cloud.capture.embedListen')}
+                    </a>
+                  )}
+                  <a href={url} target="_blank" rel="noreferrer noopener" className="inline-flex items-center gap-1.5 text-sm font-medium text-accent hover:underline">
+                    <ExternalLink className="size-4" aria-hidden="true" />
+                    {t('cloud.capture.openYoutube')}
+                  </a>
+                </div>
               </div>
             )}
             {(phase === 'live' || phase === 'paused') && (
@@ -454,7 +505,7 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
           </div>
 
           {(capturing || phase === 'requesting') && (
-            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-3 rounded-2xl border border-danger/40 bg-surface px-4 py-3">
+            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-3 rounded-2xl border border-accent/40 bg-surface px-4 py-3">
               <p aria-live="polite" className="min-w-0 flex-1 basis-56 text-sm text-text">
                 {statusText}
                 {capturing && <span className="mt-0.5 block text-xs text-faint">{t('cloud.capture.keepTab')}</span>}
@@ -474,15 +525,17 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
                       {phase === 'live' ? t('cloud.capture.pause') : t('cloud.capture.resume')}
                     </Button>
                   )}
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    icon={<Square className="size-3.5" fill="currentColor" />}
-                    onClick={stop}
-                    className="flex-[2] sm:flex-none"
-                  >
-                    {t('cloud.capture.stop')}
-                  </Button>
+                  {phase !== 'starting' && (
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      icon={<Square className="size-3.5" fill="currentColor" />}
+                      onClick={stop}
+                      className="flex-[2] sm:flex-none"
+                    >
+                      {t('cloud.capture.stop')}
+                    </Button>
+                  )}
                 </div>
               )}
             </div>
@@ -497,7 +550,7 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
               {(phase === 'stopping' || phase === 'saving' || phase === 'done') && <SavingCard />}
             </>
           ) : !tabCapture ? (
-            <NoTabCapture url={url} />
+            <NoTabCapture url={url} title={title} />
           ) : (
             <Card>
               {phase === 'error' && (
@@ -552,7 +605,6 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
                       </Button>
                     )}
                   </div>
-                  {!cloud && signedIn && <p className="mt-3 text-xs text-faint">{t('cloud.capture.guest')}</p>}
                 </>
               )}
             </Card>

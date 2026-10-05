@@ -139,6 +139,8 @@ export function chooseStartOffset(currentTime: number, duration: number): number
   return Math.round(currentTime * 10) / 10
 }
 
+/** How long to wait for the video to start playing before suggesting to press play on it, ms. */
+export const STARTING_HINT_MS = 8000
 /** Shortest recording worth analyzing, seconds. */
 export const MIN_RECORDING_S = 3
 /** Longest recording (the server's and the browser engine's limit), seconds. */

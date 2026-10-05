@@ -30,7 +30,7 @@ function Page({ route }: { route: Route }) {
     case 'demo':
       return <TrackPage key="demo" id="demo" demo />
     case 'listen':
-      return <ListenPage key={route.source ?? 'listen'} initialSource={route.source} />
+      return <ListenPage key={route.source ?? 'listen'} initialSource={route.source} title={route.title} />
     case 'capture':
       return <CapturePage key={route.videoId} videoId={route.videoId} blocked={route.blocked} />
     default:

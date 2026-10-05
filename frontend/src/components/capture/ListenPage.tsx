@@ -9,6 +9,7 @@ import { useDocumentTitle } from '../../hooks/useDocumentTitle'
 import { useJobs } from '../../hooks/useJobs'
 import { useCanListenInTab } from '../../hooks/useMediaQuery'
 import { navigate, paths } from '../../hooks/useRoute'
+import { useCloudInvite } from '../account/cloudInvite'
 import { errorText } from '../jobs/errorText'
 import { Button } from '../ui/IconButton'
 import { LiveChordsView } from '../live'
@@ -87,18 +88,20 @@ function SavingLine() {
 
 /**
  * "Слухати" (#/listen): live chords from the microphone or a browser tab; Stop saves the recording as a
- * track (analyzed in the cloud when signed in, in this browser otherwise).
+ * track (analyzed in the cloud when signed in, in this browser otherwise). `title` names the recording
+ * (the capture page passes a video's title when the song plays on another device).
  */
-export function ListenPage({ initialSource }: { initialSource: CaptureSource | null }) {
+export function ListenPage({ initialSource, title }: { initialSource: CaptureSource | null; title: string | null }) {
   const t = useT()
   const tabSupported = useCanListenInTab()
   const [source, setSource] = useState<CaptureSource>(initialSource === 'tab' && tabSupported ? 'tab' : 'mic')
   const cloud = useConnection((s) => s.backend === 'cloud')
+  const cloudInvite = useCloudInvite()
   useDocumentTitle(t('cloud.listen.title'))
 
   const save = useCallback(
-    (rec: { audio: Blob; mime: string }) => saveRecording(rec.audio, rec.mime, { title: recordingTitle() }),
-    [],
+    (rec: { audio: Blob; mime: string }) => saveRecording(rec.audio, rec.mime, { title: title ?? recordingTitle() }),
+    [title],
   )
   const capture = useCapture({
     save,
@@ -115,13 +118,14 @@ export function ListenPage({ initialSource }: { initialSource: CaptureSource | n
     const href = URL.createObjectURL(rec.audio)
     const a = document.createElement('a')
     a.href = href
-    a.download = recordingFilename(recordingTitle(), rec.mime)
+    a.download = recordingFilename(title ?? recordingTitle(), rec.mime)
     document.body.appendChild(a)
     a.click()
     a.remove()
     window.setTimeout(() => URL.revokeObjectURL(href), 10_000)
   }
 
+  const saveNote = cloud ? t('cloud.listen.saveCloud') : cloudInvite ? t('cloud.listen.saveGuest') : null
   const errorMessage = state.error ? failureText(state.error, errorText(toApiError(capture.saveError).code)) : ''
 
   return (
@@ -143,7 +147,7 @@ export function ListenPage({ initialSource }: { initialSource: CaptureSource | n
 
       {capturing || busy ? (
         <div className="mt-6">
-          <LiveChordsView session={capture.session} />
+          <LiveChordsView session={capture.session} title={title ?? undefined} />
           {capturing && (
             <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm text-muted">
@@ -235,7 +239,9 @@ export function ListenPage({ initialSource }: { initialSource: CaptureSource | n
                 )}
               </div>
               <p className="mt-5 text-xs text-faint">
-                {t(cloud ? 'cloud.listen.saveCloud' : 'cloud.listen.saveGuest')} {t('cloud.listen.limit')}
+                {/* the "sign in" note only where signing in would bring the cloud in (not on a local server) */}
+                {saveNote && `${saveNote} `}
+                {t('cloud.listen.limit')}
               </p>
             </>
           )}
