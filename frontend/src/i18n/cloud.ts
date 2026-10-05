@@ -23,6 +23,7 @@ export const cloud: Dict = {
     'cloud.blocked.toast': 'YouTube не віддав відео серверу',
     'cloud.blocked.action': 'Слухати у вкладці',
     'cloud.quota.inBrowser': 'У браузері',
+    'cloud.quota.retryInBrowser': 'Розпізнати в браузері',
     'cloud.connected': 'Хмару підключено — бібліотека на всіх пристроях',
 
     // home: account call to action + the three ways in
@@ -168,6 +169,7 @@ export const cloud: Dict = {
     'cloud.blocked.toast': 'YouTube refused the server download',
     'cloud.blocked.action': 'Listen in the tab',
     'cloud.quota.inBrowser': 'In the browser',
+    'cloud.quota.retryInBrowser': 'Detect in the browser',
     'cloud.connected': 'Cloud connected — your library on every device',
 
     'cloud.cta.benefit': 'More precise chords, vocals and your library on every device',

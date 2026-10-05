@@ -18,7 +18,7 @@ vi.mock('../../lib/live/capture', () => ({ canListenInTab: live.canListenInTab }
 // the real request (lib/api) without the job store's polling and navigation
 vi.mock('../../hooks/useJobs', async () => {
   const api = await import('../../lib/api')
-  return { submitUrl: (url: string) => api.createJob(url) }
+  return { submitUrl: (url: string, options?: object, signal?: AbortSignal) => api.createJob(url, options, signal) }
 })
 
 const route = vi.hoisted(() => ({ navigate: vi.fn<(path: string) => void>() }))
@@ -117,6 +117,33 @@ describe('startLink', () => {
     const started = startLink('https://soundcloud.com/artist/song')
     cloud()
     expect(await started).toMatchObject({ kind: 'job', job: { id: 'job1' } })
+  })
+
+  it('cancelled while the API is still being chosen: nothing is opened afterwards', async () => {
+    connect({ status: 'checking', backend: null, apiBase: null, serverOrigin: null, remote: false })
+    const ctrl = new AbortController()
+    const started = startLink(VIDEO, ctrl.signal)
+    ctrl.abort()
+    guest()
+    await expect(started).rejects.toMatchObject({ code: 'aborted' })
+    expect(route.navigate).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('cancelling a request on its way ends it as an abort (not a failure)', async () => {
+    cloud()
+    fetchMock.mockImplementationOnce(
+      (_url, init) =>
+        new Promise((_resolve, reject) =>
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError'))),
+        ),
+    )
+    const ctrl = new AbortController()
+    const started = startLink('https://soundcloud.com/artist/song', ctrl.signal)
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    ctrl.abort()
+    await expect(started).rejects.toMatchObject({ code: 'aborted' })
+    expect(route.navigate).not.toHaveBeenCalled()
   })
 
   it('passes other server errors on', async () => {

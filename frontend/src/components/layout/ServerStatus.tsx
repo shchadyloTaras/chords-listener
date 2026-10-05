@@ -231,6 +231,8 @@ export function ServerStatus({ compact = false }: { compact?: boolean }) {
   const remote = useConnection((s) => s.remote)
   // the cloud did not answer its health check: still the cloud, but say so
   const troubled = useConnection((s) => s.backend === 'cloud' && !!s.failure)
+  // the cloud has not answered yet (Cloud Run starts on demand): the first request may take a while
+  const waking = useConnection((s) => s.status === 'server' && s.backend === 'cloud' && !s.health && !s.failure)
   const [open, setOpen] = useState(false)
   const id = useId()
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -283,12 +285,16 @@ export function ServerStatus({ compact = false }: { compact?: boolean }) {
         : kind === 'browser'
           ? t('web.mode.browser')
           : t('web.mode.checking')
-  const connected = (kind === 'cloud' || kind === 'server') && !troubled
+  const connected = (kind === 'cloud' || kind === 'server') && !troubled && !waking
   const icon = kind === 'cloud' || kind === 'server' ? (
     <span className="relative flex size-4 items-center justify-center" aria-hidden="true">
       {kind === 'cloud' ? <Cloud className="size-4" /> : <Server className="size-4" />}
       <span
-        className={clsx('absolute -right-0.5 -bottom-0.5 size-2 rounded-full ring-2 ring-surface-2', troubled ? 'bg-accent' : 'bg-success')}
+        className={clsx(
+          'absolute -right-0.5 -bottom-0.5 size-2 rounded-full ring-2 ring-surface-2',
+          troubled || waking ? 'bg-accent' : 'bg-success',
+          waking && 'motion-safe:animate-pulse',
+        )}
       />
     </span>
   ) : kind === 'browser' ? (
@@ -306,7 +312,7 @@ export function ServerStatus({ compact = false }: { compact?: boolean }) {
         aria-controls={id}
         aria-haspopup="dialog"
         aria-label={t('web.mode.aria', { mode: label })}
-        title={label}
+        title={waking ? t('web.cloud.waking') : label}
         onClick={() => setOpen((o) => !o)}
         className={clsx(
           'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border text-xs font-medium transition-colors duration-150',

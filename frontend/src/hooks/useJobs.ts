@@ -208,9 +208,9 @@ function follow(job: Job, fromPath: string) {
 }
 
 /** Creates a job for a URL and navigates to it. Throws ApiError (caller shows it inline). */
-export async function submitUrl(url: string, options?: JobOptions): Promise<Job> {
+export async function submitUrl(url: string, options?: JobOptions, signal?: AbortSignal): Promise<Job> {
   const fromPath = currentPath()
-  const job = await api.createJob(url, options)
+  const job = await api.createJob(url, options, signal)
   upsert(job)
   follow(job, fromPath)
   return job
@@ -291,8 +291,11 @@ export function canRetry(job: Job): boolean {
   return Boolean((job.source?.type !== 'file' && job.source?.url) || retryFiles.has(job.id))
 }
 
-/** Re-submits a failed job. Returns false when the source is no longer available. */
-export async function retryJob(job: Job): Promise<boolean> {
+/**
+ * Re-submits a failed job. Returns false when the source is no longer available. `inBrowser` analyzes an
+ * upload in this browser instead of the server (e.g. after the cloud's limit for today).
+ */
+export async function retryJob(job: Job, opts?: { inBrowser?: boolean }): Promise<boolean> {
   acknowledgeJob(job.id)
   const file = retryFiles.get(job.id)
   if (job.source?.type !== 'file' && job.source?.url) {
@@ -307,7 +310,7 @@ export async function retryJob(job: Job): Promise<boolean> {
   }
   if (file) {
     retryFiles.delete(job.id)
-    return (await submitFile(file)) !== null
+    return (await submitFile(file, undefined, opts?.inBrowser ? { inBrowser: true } : undefined)) !== null
   }
   return false
 }

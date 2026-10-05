@@ -1,19 +1,21 @@
 import clsx from 'clsx'
-import { ArrowLeft, LogIn, RotateCcw, TriangleAlert } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { ArrowLeft, FolderOpen, Globe, LogIn, RotateCcw, TriangleAlert } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { useT } from '../../i18n'
 import { toApiError, type ClientErrorCode } from '../../lib/api'
-import { openAuthDialog } from '../../lib/auth'
+import { openAuthDialog, useAuth } from '../../lib/auth'
 import type { Job } from '../../types'
 import { acknowledgeJob, blockedVideoId, canRetry, ensureJob, isActiveJob, retryJob, useJobs } from '../../hooks/useJobs'
 import { navigate, paths } from '../../hooks/useRoute'
 import { useDocumentTitle } from '../../hooks/useDocumentTitle'
+import { FILE_ACCEPT } from '../input/url'
+import { startFiles } from '../input/startFiles'
 import { Button } from '../ui/IconButton'
 import { VideoSiteIcon } from '../ui/Logo'
 import { formatTime } from '../ui/format'
 import { errorText, errorTitle } from './errorText'
 import { ListeningBars } from './ListeningBars'
-import { failedStep } from './stages'
+import { failedStep, stepsFor } from './stages'
 import { StageStepper } from './StageStepper'
 
 function sourceLabel(job: Job): string | null {
@@ -66,15 +68,21 @@ export function JobPage({ id }: { id: string }) {
   const loadError = failure?.id === id ? failure.code : null
   const [retrying, setRetrying] = useState(false)
   const [retryGone, setRetryGone] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+  // "Try again" after the job could not be loaded; signing in (a new user) loads it again too
+  const [attempt, setAttempt] = useState(0)
+  const uid = useAuth((s) => s.user?.uid)
 
   useEffect(() => {
     const ctrl = new AbortController()
-    ensureJob(id, ctrl.signal).catch((e) => {
-      const err = toApiError(e)
-      if (err.code !== 'aborted') setFailure({ id, code: err.code })
-    })
+    ensureJob(id, ctrl.signal)
+      .then(() => setFailure((f) => (f?.id === id ? null : f)))
+      .catch((e) => {
+        const err = toApiError(e)
+        if (err.code !== 'aborted') setFailure({ id, code: err.code })
+      })
     return () => ctrl.abort()
-  }, [id])
+  }, [id, attempt, uid])
 
   // YouTube refused the server download: play the video here and listen to this tab instead
   const blockedVideo = job ? blockedVideoId(job) : null
@@ -92,17 +100,26 @@ export function JobPage({ id }: { id: string }) {
   const errorCode: string | null = loadError ?? (job?.status === 'error' ? (job.errorCode ?? 'internal') : null)
 
   if (errorCode) {
-    const retry = async () => {
+    const reload = () => {
+      setFailure(null)
+      setAttempt((n) => n + 1)
+    }
+    const retry = async (opts?: { inBrowser?: boolean }) => {
       if (!job) return
       setRetrying(true)
       try {
-        if (!(await retryJob(job))) setRetryGone(true)
+        if (!(await retryJob(job, opts))) setRetryGone(true)
       } catch (e) {
         setFailure({ id, code: toApiError(e).code })
       } finally {
         setRetrying(false)
       }
     }
+    const canRetryJob = !!job && canRetry(job) && !retryGone
+    // the cloud's limit for today: an upload that is still here can be analyzed in this browser
+    const canRetryHere = canRetryJob && errorCode === 'quota_exceeded' && job.source?.type === 'file'
+    const canReload = !job && !!loadError
+    const hasAction = canRetryJob || canReload || retryGone
     return (
       <div className="mx-auto w-full max-w-xl px-4 pt-10 pb-24 sm:pt-20">
         <div role="alert" className="overflow-hidden rounded-3xl border border-border bg-surface">
@@ -117,7 +134,7 @@ export function JobPage({ id }: { id: string }) {
                 {retryGone && <p className="mt-2 text-sm text-muted">{t('core.job.retryGone')}</p>}
                 {job?.error && (
                   <details className="mt-3 text-sm text-faint">
-                    <summary className="cursor-pointer select-none hover:text-muted">{t('core.job.details')}</summary>
+                    <summary className="cursor-pointer select-none hover:text-muted">{t('core.job.detailsEn')}</summary>
                     <p className="mt-1.5 font-mono text-xs break-words">{job.error}</p>
                   </details>
                 )}
@@ -125,7 +142,7 @@ export function JobPage({ id }: { id: string }) {
             </div>
             {job && job.status === 'error' && (
               <div className="mt-6">
-                <StageStepper status="error" failedAt={failedStep(job)} />
+                <StageStepper status="error" failedAt={failedStep(job)} steps={stepsFor(job)} />
               </div>
             )}
             <div className="mt-7 flex flex-wrap gap-2">
@@ -134,9 +151,24 @@ export function JobPage({ id }: { id: string }) {
                   {t('account.signIn')}
                 </Button>
               )}
-              {job && canRetry(job) && !retryGone && (
+              {canReload && (
+                <Button variant="primary" icon={<RotateCcw className="size-4" />} onClick={reload}>
+                  {t('core.retry')}
+                </Button>
+              )}
+              {canRetryHere && (
                 <Button
                   variant="primary"
+                  disabled={retrying}
+                  icon={<Globe className="size-4" />}
+                  onClick={() => void retry({ inBrowser: true })}
+                >
+                  {t('cloud.quota.retryInBrowser')}
+                </Button>
+              )}
+              {canRetryJob && (
+                <Button
+                  variant={canRetryHere ? 'secondary' : 'primary'}
                   disabled={retrying}
                   icon={<RotateCcw className={clsx('size-4', retrying && 'animate-spin')} />}
                   onClick={() => void retry()}
@@ -144,7 +176,25 @@ export function JobPage({ id }: { id: string }) {
                   {t('core.retry')}
                 </Button>
               )}
-              <Button variant={job && canRetry(job) ? 'ghost' : 'primary'} onClick={() => navigate(paths.home())}>
+              {retryGone && (
+                <>
+                  <Button variant="primary" icon={<FolderOpen className="size-4" />} onClick={() => fileRef.current?.click()}>
+                    {t('core.input.pickFile')}
+                  </Button>
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept={FILE_ACCEPT}
+                    multiple
+                    hidden
+                    onChange={(e) => {
+                      if (e.target.files?.length) startFiles(e.target.files)
+                      e.target.value = ''
+                    }}
+                  />
+                </>
+              )}
+              <Button variant={hasAction ? 'ghost' : 'primary'} onClick={() => navigate(paths.home())}>
                 {t('core.job.backHome')}
               </Button>
             </div>
@@ -174,7 +224,7 @@ export function JobPage({ id }: { id: string }) {
           )}
 
           <div className="mt-7">
-            <StageStepper status={job?.status ?? 'queued'} />
+            <StageStepper status={job?.status ?? 'queued'} steps={stepsFor(job ?? {})} />
           </div>
 
           <div className="mt-6">

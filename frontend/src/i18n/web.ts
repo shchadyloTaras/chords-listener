@@ -12,7 +12,7 @@ export const web: Dict = {
 
     'web.cloud.what': 'Пісні розпізнає сервер у хмарі, а бібліотека зберігається у твоєму акаунті — її видно на всіх пристроях.',
     'web.cloud.account': 'Акаунт: {email}',
-    'web.cloud.waking': 'Хмара прокидається — перший запит може тривати до пів хвилини.',
+    'web.cloud.waking': 'Хмара прокидається — перший запит може тривати до хвилини.',
     'web.cloud.down': 'Хмара зараз не відповідає. Спробуй ще раз трохи згодом.',
     'web.cloud.check': 'Перевірити',
     'web.cloud.limits': 'До 2 аналізів одночасно, ліміт на день — щоб сервіс лишався безкоштовним.',
@@ -83,7 +83,7 @@ export const web: Dict = {
 
     'web.cloud.what': 'Songs are analyzed by a cloud server and your library lives in your account — on every device.',
     'web.cloud.account': 'Account: {email}',
-    'web.cloud.waking': 'The cloud is waking up — the first request may take up to half a minute.',
+    'web.cloud.waking': 'The cloud is waking up — the first request can take up to a minute.',
     'web.cloud.down': 'The cloud is not responding right now. Try again a bit later.',
     'web.cloud.check': 'Check',
     'web.cloud.limits': 'Up to 2 analyses at a time and a daily limit — that keeps the service free.',

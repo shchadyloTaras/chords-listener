@@ -260,11 +260,15 @@ export async function getHealth(signal?: AbortSignal): Promise<Health> {
 }
 
 /** Links (YouTube & co.) need a server's downloader (the cloud, or the user's own server). */
-export async function createJob(url: string, options?: JobOptions): Promise<Job> {
+export async function createJob(url: string, options?: JobOptions, signal?: AbortSignal): Promise<Job> {
   const conn = await whenSettled()
   if (conn.status !== 'server')
     throw new ApiError('Links need the cloud (sign in) or a Chords Listener server', 'server_required')
-  const job = await request<Job>('/jobs', { method: 'POST', body: JSON.stringify(options ? { url, options } : { url }) })
+  const job = await request<Job>('/jobs', {
+    method: 'POST',
+    body: JSON.stringify(options ? { url, options } : { url }),
+    signal,
+  })
   return serverJob(job)
 }
 

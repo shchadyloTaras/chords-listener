@@ -2,18 +2,29 @@ import clsx from 'clsx'
 import { Check } from 'lucide-react'
 import { useT } from '../../i18n'
 import type { JobStatus } from '../../types'
-import { stepIndex } from './stages'
+import { STAGES, stepIndex, type StageKey } from './stages'
 
-const STEPS = ['download', 'decode', 'analyze'] as const
-
-
-/** Download → Decode → Analyze. `failedAt` marks the step where an error happened. */
-export function StageStepper({ status, failedAt }: { status: JobStatus; failedAt?: number }) {
+/**
+ * Download → Decode → Analyze (`steps`: the ones this job has, see stepsFor). `failedAt` marks the stage
+ * (index into STAGES) where an error happened.
+ */
+export function StageStepper({
+  status,
+  failedAt,
+  steps = STAGES,
+}: {
+  status: JobStatus
+  failedAt?: number
+  steps?: readonly StageKey[]
+}) {
   const t = useT()
-  const current = status === 'error' ? (failedAt ?? 0) : stepIndex(status)
+  // a stage this job skips (an upload has no download) counts as its first shown one
+  const first = steps.length ? STAGES.indexOf(steps[0]) : 0
+  const current = Math.max(first, status === 'error' ? (failedAt ?? 0) : stepIndex(status))
   return (
-    <ol className="grid grid-cols-3 gap-2" aria-label={t('core.job.steps')}>
-      {STEPS.map((step, i) => {
+    <ol className={clsx('grid gap-2', steps.length === 2 ? 'grid-cols-2' : 'grid-cols-3')} aria-label={t('core.job.steps')}>
+      {steps.map((step) => {
+        const i = STAGES.indexOf(step)
         const done = i < current
         const active = i === current && status !== 'error'
         const failed = status === 'error' && i === current
@@ -35,7 +46,7 @@ export function StageStepper({ status, failedAt }: { status: JobStatus; failedAt
                   !done && !active && !failed && 'bg-surface-3 text-faint',
                 )}
               >
-                {done ? <Check className="size-3" strokeWidth={3} aria-hidden="true" /> : i + 1}
+                {done ? <Check className="size-3" strokeWidth={3} aria-hidden="true" /> : steps.indexOf(step) + 1}
               </span>
               <span className={clsx('truncate', done || active ? 'text-text' : failed ? 'text-danger' : 'text-faint')}>
                 {t(`core.step.${step}`)}

@@ -101,6 +101,7 @@ export const core: Dict = {
     'core.job.docTitle': 'Аналіз',
     'core.job.failedTitle': 'Не вдалося розпізнати',
     'core.job.details': 'Технічні деталі',
+    'core.job.detailsEn': 'Технічні деталі (англійською)',
     'core.job.retryGone': 'Файл уже недоступний — перетягни його ще раз.',
 
     // errors (by ErrorCode)
@@ -307,6 +308,7 @@ export const core: Dict = {
     'core.job.docTitle': 'Analyzing',
     'core.job.failedTitle': 'Could not detect chords',
     'core.job.details': 'Technical details',
+    'core.job.detailsEn': 'Technical details',
     'core.job.retryGone': 'The file is no longer available — drop it again.',
 
     'core.errorTitle.invalid_url': 'This link will not work',

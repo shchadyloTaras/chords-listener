@@ -1,4 +1,4 @@
-import { toApiError } from '../../lib/api'
+import { ApiError, toApiError } from '../../lib/api'
 import { useConnection, whenSettled } from '../../lib/serverMode'
 import { submitUrl } from '../../hooks/useJobs'
 import { navigate, paths } from '../../hooks/useRoute'
@@ -15,10 +15,14 @@ export type LinkStart =
   /** another site and no server: only the cloud can fetch it (sign in) */
   | { kind: 'account' }
 
-/** Starts a link (see linkTarget). Throws ApiError when the server refuses it. */
-export async function startLink(url: string): Promise<LinkStart> {
+/**
+ * Starts a link (see linkTarget). Throws ApiError when the server refuses it; a cancelled start (`signal`)
+ * throws code 'aborted' and opens nothing.
+ */
+export async function startLink(url: string, signal?: AbortSignal): Promise<LinkStart> {
   // still choosing the API (auth restoring, first probe): wait, so a cloud user is not treated as a guest
   const conn = useConnection.getState().status === 'checking' ? await whenSettled() : useConnection.getState()
+  if (signal?.aborted) throw new ApiError('Request aborted', 'aborted')
   const target = linkTarget(url, conn)
   const videoId = parseYouTubeId(url)
   if (target === 'capture' && videoId) {
@@ -27,7 +31,7 @@ export async function startLink(url: string): Promise<LinkStart> {
   }
   if (target === 'account') return { kind: 'account' }
   try {
-    return { kind: 'job', job: await submitUrl(url) }
+    return { kind: 'job', job: await submitUrl(url, undefined, signal) }
   } catch (e) {
     const err = toApiError(e)
     if (err.code === 'server_required') return { kind: 'account' }

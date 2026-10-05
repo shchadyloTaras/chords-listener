@@ -129,6 +129,15 @@ const defaultSettings: Settings = {
 
 let toastSeq = 1
 
+/**
+ * How long a toast stays (ms). A plain note is brief; an error or a toast with a button waits long enough
+ * to be read (and acted on): 50 ms a character, 6 s at least, 12 s at most.
+ */
+export function toastDuration(text: string, hasAction: boolean, kind: Toast['kind']): number {
+  if (kind !== 'error' && !hasAction) return 2400
+  return Math.min(12000, Math.max(6000, 2000 + text.length * 50))
+}
+
 /** Wrap into -11..11 (12 semitones up == original key). */
 function clampTranspose(n: number): number {
   return (Math.round(n) % 12) || 0
@@ -168,7 +177,7 @@ export const useApp = create<AppState>()(
       toast: (message, kind = 'success', action) => {
         const id = toastSeq++
         set({ toasts: [...get().toasts.slice(-3), { id, message, kind, action }] })
-        window.setTimeout(() => get().dismissToast(id), action ? 6000 : 2400)
+        window.setTimeout(() => get().dismissToast(id), toastDuration(message, !!action, kind))
       },
       dismissToast: (id) => set({ toasts: get().toasts.filter((t) => t.id !== id) }),
     }),

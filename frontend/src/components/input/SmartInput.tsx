@@ -19,6 +19,9 @@ import { startFiles } from './startFiles'
 import { startLink, submitWhenConnected } from './startLink'
 import { checkUrl, FILE_ACCEPT, findUrl } from './url'
 
+/** How long a link may be on its way before the user is told why (a cold cloud takes a while) and may cancel. */
+const SLOW_START_MS = 3000
+
 type Hint =
   | { kind: 'idle' }
   | { kind: 'youtube' }
@@ -139,12 +142,16 @@ export function SmartInput({ className }: { className?: string }) {
   const [value, setValue] = useState('')
   const [hint, setHint] = useState<Hint>({ kind: 'idle' })
   const [busy, setBusy] = useState(false)
+  // the link has been on its way for a while
+  const [slow, setSlow] = useState(false)
+  const starting = useRef<AbortController | null>(null)
   const uploading = useJobs((s) => s.uploads.length > 0)
   const autoFocus = useIsDesktopPointer()
   const wide = useMediaQuery('(min-width: 640px)')
   const connected = useConnection((s) => s.status === 'server')
   const localServer = useConnection((s) => s.status === 'server' && s.backend === 'local')
   const guest = useConnection((s) => s.status === 'browser')
+  const onCloud = useConnection((s) => s.backend === 'cloud')
   const invite = useCloudInvite()
   const tabCapable = useCanListenInTab()
 
@@ -162,6 +169,15 @@ export function SmartInput({ className }: { className?: string }) {
     [],
   )
 
+  useEffect(() => {
+    if (!busy) return
+    const id = window.setTimeout(() => setSlow(true), SLOW_START_MS)
+    return () => {
+      window.clearTimeout(id)
+      setSlow(false)
+    }
+  }, [busy])
+
   const live = (text: string): Hint => {
     if (!text.trim()) return { kind: 'idle' }
     const c = checkUrl(text)
@@ -176,9 +192,11 @@ export function SmartInput({ className }: { className?: string }) {
       inputRef.current?.focus()
       return
     }
+    const ctrl = new AbortController()
+    starting.current = ctrl
     setBusy(true)
     try {
-      const started = await startLink(c.url)
+      const started = await startLink(c.url, ctrl.signal)
       if (started.kind === 'account') {
         setHint({ kind: 'account' })
         return
@@ -186,8 +204,11 @@ export function SmartInput({ className }: { className?: string }) {
       setValue('')
       setHint({ kind: 'idle' })
     } catch (e) {
-      setHint({ kind: 'error', code: toApiError(e).code })
+      const { code } = toApiError(e)
+      // cancelled by the user: the link stays in the field, ready to be sent again
+      setHint(code === 'aborted' ? live(text) : { kind: 'error', code })
     } finally {
+      if (starting.current === ctrl) starting.current = null
       setBusy(false)
     }
   }
@@ -260,6 +281,23 @@ export function SmartInput({ className }: { className?: string }) {
   )
 
   const hintNode = (() => {
+    // the cloud answers on demand: say why it takes long, and let the user give up
+    if (busy && slow && onCloud)
+      return (
+        <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-text">
+          <span className="flex items-center gap-1.5">
+            <LoaderCircle className="size-3.5 shrink-0 animate-spin text-accent" aria-hidden="true" />
+            {t('web.cloud.waking')}
+          </span>
+          <button
+            type="button"
+            onClick={() => starting.current?.abort()}
+            className="rounded font-medium text-text underline underline-offset-2 hover:text-accent"
+          >
+            {t('core.cancel')}
+          </button>
+        </span>
+      )
     switch (hint.kind) {
       case 'youtube':
         // a local server downloads the video; everywhere else it opens on the capture page
