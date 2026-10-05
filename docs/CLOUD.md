@@ -15,7 +15,8 @@ cloudbuild, artifactregistry, iamcredentials, storage, firestore, identitytoolki
 | Frontend | GitHub Pages (Vite build, base `/chords-listener/`), Actions workflow `.github/workflows/pages.yml` |
 | API | Cloud Run service `chords-api`, region `europe-west1`: **https://chords-api-84488579848.europe-west1.run.app**. Image `europe-west1-docker.pkg.dev/build-chords-listener/chords/api` built by Cloud Build from `backend/Dockerfile` |
 | Files | One GCS bucket: the project's Firebase Storage default bucket `build-chords-listener.firebasestorage.app` (created in `EUROPE-WEST1` by the deploy script). Mounted on Cloud Run at `/data` (Cloud Storage volume, gen2, mount options `uid=10001;gid=10001` = the image's non-root user), so the backend's file storage works with `CHORDS_DATA_DIR=/data`. Job scratch space is local (`CHORDS_WORK_DIR=/tmp/chords-work`, in memory) |
-| Users | Firebase Auth (email/password, already live). Firestore keeps only the synced settings (`users/{uid}`) |
+| Users | Firebase Auth (email/password, already live). Firestore keeps the synced settings (`users/{uid}`) and the published library index (`users/{uid}/tracks/{trackId}`, written only by the API; see Library in Firestore) |
+| Library reads | The signed-in site reads the library, `track.json`, notes and vocals straight from Firestore and Firebase Storage (owner-only rules) and streams audio through download-token URLs; the API is woken only for real work. Bucket CORS (`storage-cors.json`) lets the site stream it |
 | Jobs | In memory on the single instance (`max-instances=1`); files on the bucket. A restart loses running/finished job records, never tracks |
 
 ## Auth
@@ -28,7 +29,7 @@ cloudbuild, artifactregistry, iamcredentials, storage, firestore, identitytoolki
 
 ## Per-user data
 
-- Cloud layout: `/data/users/<uid>/tracks/<trackId>/…` (audio.mp3, analysis.json, meta.json, edits.json, notes.json, vocals.json, stems/…), `/data/users/<uid>/quota.json`, plus `/data/users/<uid>/uploads/<uploadId>/<filename>` (client uploads, deleted after ingest).
+- Cloud layout: `/data/users/<uid>/tracks/<trackId>/…` (audio.mp3, analysis.json, meta.json, edits.json, notes.json, vocals.json, stems/…, and `track.json`, the published composed track, see Library in Firestore), `/data/users/<uid>/quota.json`, `/data/users/<uid>/publish-pending.json` (track ids whose publish failed), plus `/data/users/<uid>/uploads/<uploadId>/<filename>` (client uploads, deleted after ingest).
 - Storage helpers resolve paths for the *current user*, a context variable set per request (`app/users.py`: `current_uid()`, `user_context(uid)`) and captured by background jobs, so feature code (e.g. vocals) never builds user paths itself. In cloud mode a helper called without a user raises `NoUserContext` instead of falling back to shared paths. Helpers on the `TrackStore` (`app.state.store`, also `jobs.store`), stable names:
   - `store.track_dir(id)`, `store.audio_path(id)`, `store.exists(id)`, `store.read_meta(id)`, `store.duration(id)`, `store.root` (the user's tracks dir), `store.list_tracks()`
   - `store.user_dir()` (`<data>/users/<uid>`; local: `<data>`), `store.uploads_dir()`, `store.upload_prefix()` (`users/<uid>/uploads/`)
@@ -44,9 +45,62 @@ Track JSON returns **signed** relative URLs, e.g. `/api/tracks/<id>/audio?u=<uid
 
 Details: `sig` = base64url(HMAC-SHA256(key, "v1\n<uid>\n<path>\n<exp>")) without padding; `exp` is rounded up to the next full hour + 12 h, so a URL stays identical within an hour (cacheable) and is valid 12–13 h. The middleware accepts a signature on `GET`/`HEAD` of `^/api/tracks/<id>/(audio|stems/<name>)$` and runs the request as `u`; an invalid or expired signature → 401 `unauthorized` (reload the track for a fresh URL). The same paths also work with a Bearer token. Local mode keeps plain `/api/tracks/<id>/audio`.
 
+The signed-in site streams `audio.mp3` and the stems from Storage through download-token URLs instead (Library in Firestore → Media); the signed API URLs stay for other callers and as the fallback.
+
+## Library in Firestore
+
+A signed-in user's library, track data, notes, vocals and audio are read by the site straight from Firestore and Firebase Storage. The API is woken only for real work (a new analysis, re-analysis, vocals, an edit, a delete); writes stay on its endpoints. Changes made on another device arrive through the Firestore snapshot. Guests and the local server (`./start.sh`) are unchanged. Design: `docs/superpowers/specs/2026-10-05-library-firestore-storage-design.md`.
+
+- **Publishing** (cloud mode; `CHORDS_PUBLISH`, on by default, `0|false|off` turns it off; the deploy script sets `1`). After every track change (new analysis, re-analysis, vocals, an edit, reset) the API bumps the integer `version` in `meta.json` and publishes, under a per-track lock (`backend/app/publish.py`, `backend/app/firestore.py`):
+  1. `audio.mp3` and every `stems/<name>.mp3` get a `firebaseStorageDownloadTokens` metadata token and `contentType` `audio/mpeg` (an existing token is kept);
+  2. `users/<uid>/tracks/<id>/track.json` is written: the Track JSON without `audioUrl` / `stemUrls`, plus `version` and `media: {audio: {path, token}, stems: {<name>: {path, token}}}`;
+  3. the index document `users/{uid}/tracks/{trackId}` is upserted over the Firestore REST API with the runtime service account (no gRPC client): the `TrackSummary` fields of `GET /api/tracks` + `version` + `publishedAt`.
+- A track kept on a device is valid exactly while its `version` equals the index document's. `version` is bumped in every mode (a meta field, not part of the API's JSON); local mode publishes nothing and writes no `track.json`.
+- **Delete** unpublishes first (removes the index document), then removes the directory, under the same lock, so a late publish cannot bring a deleted track back. "Already analyzed" duplicates publish the track when the index lacks it (self-heal for tracks that predate publishing).
+- **Failures never fail the user's request.** A publish or unpublish that still fails after 3 attempts (HTTP 408/429/5xx, network) puts the track id into `users/<uid>/publish-pending.json`; the API retries those at start-up and every 10 minutes while an instance is up. The file is never client-readable.
+- **Fallback.** When the index or a Storage read fails (permission, network, a track that is not published yet), the site uses the API path as before; a missing rollout step breaks nothing.
+
+### Rules
+
+| What | Its owner (signed in) | Everyone else; any client write |
+|---|---|---|
+| Firestore `users/{uid}/tracks/{trackId}` (`firestore.rules`) | get and list | denied; only the API's service account writes (it bypasses rules) |
+| Storage `users/{uid}/tracks/{trackId}/{track.json, notes.json, vocals.json, audio.mp3}` and `…/stems/{vocals.mp3, instruments.mp3}` (`storage.rules`) | read | denied |
+| Storage `users/{uid}/tracks/{trackId}/{meta.json, analysis.json, edits.json, …}`, `users/{uid}/quota.json`, `publish-pending.json`, listings | denied | denied |
+
+`firestore.rules.test.mjs` and `storage.rules.test.mjs` run against the local emulators (the commands are in their headers; the emulators need Java): owner get / list, other user and signed-out denied, no client write, the library files readable only by their owner, everything else denied, uploads unchanged.
+
+### Media
+
+`audio.mp3` and `stems/<name>.mp3` are streamed from `https://firebasestorage.googleapis.com/v0/b/<bucket>/o/<encodeURIComponent(path)>?alt=media&token=<token>` (bucket from `firebaseConfig.storageBucket`; path and token from `track.json` → `media`). The token URL is a bearer URL without expiry and does not go through the Storage rules; it stops working when the track is deleted (the object is gone). `track.json` itself is owner-readable only.
+
+### Bucket CORS
+
+`storage-cors.json`: `GET`, `HEAD` from `https://shchadylotaras.github.io`, `http://localhost:5173` and `http://localhost:4173`; response headers `Content-Type, Content-Length, Content-Range, Accept-Ranges`; `maxAgeSeconds` 3600. The deploy script applies it with `gcloud storage buckets update gs://$BUCKET --cors-file=storage-cors.json`; a new origin goes into the file, then the same command (or a full `scripts/deploy_cloud.sh`). Check: `gcloud storage buckets describe gs://build-chords-listener.firebasestorage.app --format='default(cors_config)'`.
+
+### Rollout order and backfill
+
+1. Deploy the API with publishing (it writes the index and `track.json`; current clients ignore them). 2. IAM role `roles/datastore.user` for the runtime service account. 3. Firestore and Storage rules, bucket CORS. 4. Backfill. 5. Deploy the site with the new read path. `scripts/deploy_cloud.sh` does steps 1–3 in one run (Deploy, below); the smoke test runs after 1, 4 and 5.
+
+Backfill publishes the tracks that exist already: `python -m app.publish backfill [--uid UID]` (every user, or one) prints `N track(s) published`. It is idempotent: a track that is published already is simply published again. Run it once as a Cloud Run job with the service image and the service account:
+
+```
+gcloud run jobs deploy chords-backfill --region europe-west1 \
+  --image europe-west1-docker.pkg.dev/build-chords-listener/chords/api:latest \
+  --service-account chords-api@build-chords-listener.iam.gserviceaccount.com \
+  --execution-environment gen2 --cpu 1 --memory 1Gi --max-retries 0 --task-timeout 3600 \
+  --set-env-vars CHORDS_AUTH=firebase,CHORDS_FIREBASE_PROJECT=build-chords-listener,CHORDS_DATA_DIR=/data,CHORDS_UPLOAD_BUCKET=build-chords-listener.firebasestorage.app \
+  --add-volume 'name=data,type=cloud-storage,bucket=build-chords-listener.firebasestorage.app,mount-options=uid=10001;gid=10001' \
+  --add-volume-mount volume=data,mount-path=/data \
+  --command python --args=-m,app.publish,backfill
+gcloud run jobs execute chords-backfill --region europe-west1 --wait
+```
+
+(One user: `--args=-m,app.publish,backfill,--uid,<uid>`.) The job runs in its own process, so it is **not serialized against the live service**: the per-track locks live in the service. Run it when nobody is deleting tracks, e.g. right after the deploy, and re-run it to repair a track that was left unpublished or stale. It only looks at tracks that exist; an index document whose track was deleted at the same moment would stay and has to be removed by hand (Firestore console, `users/<uid>/tracks/<id>`).
+
 ## Uploads
 
-- Cloud Run caps request bodies at 32 MiB. So in cloud mode the client uploads to Firebase Storage `users/{uid}/uploads/{uploadId}/{filename}` (resumable, with progress). Storage rules: only the owner may write, ≤ 500 MB, contentType `audio/*`, `video/*` or `application/octet-stream`. No client reads.
+- Cloud Run caps request bodies at 32 MiB. So in cloud mode the client uploads to Firebase Storage `users/{uid}/uploads/{uploadId}/{filename}` (resumable, with progress). Storage rules: only the owner may write, ≤ 500 MB, contentType `audio/*`, `video/*` or `application/octet-stream`. No client reads of uploads (the owner's reads of their published track files are in Library in Firestore → Rules).
 - The client then calls `POST /api/jobs/storage` with `{ path, title?, source?, startOffset?, options? }` → `Job`. The server checks that `path` starts with `users/<uid>/uploads/`, ingests the file like a normal upload (sha1 dedup per user), and deletes the upload.
   - The server reads the object with the google-cloud-storage client (bucket `CHORDS_UPLOAD_BUCKET`; `STORAGE_EMULATOR_HOST` points it at the Storage emulator), not through the `/data` mount. The object is deleted as soon as it was downloaded, also when the analysis then fails.
   - Errors: another user's prefix → 403 `unauthorized`; bad path (`..`, empty segments) or missing object → 404 `not_found`; larger than `CHORDS_MAX_UPLOAD_MB` (500) → 413 `too_large`; empty → 415 `unsupported_format` (both delete the object); not a cloud server / no bucket → 501 `unavailable`; YouTube source without a usable `videoId`/`url` → 400 `invalid_url`.
@@ -87,9 +141,9 @@ As implemented (cloud mode): CORS allows the GitHub Pages origin, the default Vi
 
 ## Cloud Run settings (cost guards)
 
-gen2 execution environment, 4 vCPU, 16 GiB, CPU always allocated (background jobs), timeout 3600 s, concurrency 16, min instances 0, **max instances 1**, startup CPU boost, unauthenticated invocations allowed (app-level auth above). Env: `CHORDS_AUTH=firebase`, `CHORDS_DATA_DIR=/data`, `CHORDS_SIGNING_KEY`, `CHORDS_SMOKE_KEY`, quotas.
+gen2 execution environment, 4 vCPU, 16 GiB, CPU always allocated (background jobs), timeout 3600 s, concurrency 16, min instances 0, **max instances 1**, startup CPU boost, unauthenticated invocations allowed (app-level auth above). Env: `CHORDS_AUTH=firebase`, `CHORDS_DATA_DIR=/data`, `CHORDS_SIGNING_KEY`, `CHORDS_SMOKE_KEY`, `CHORDS_PUBLISH`, quotas.
 
-As deployed by `scripts/deploy_cloud.sh`: runtime service account `chords-api@build-chords-listener.iam.gserviceaccount.com` with only `roles/storage.objectUser` on the bucket; volume `data` (cloud-storage, `mount-options=uid=10001;gid=10001`) at `/data`; env `CHORDS_AUTH=firebase`, `CHORDS_FIREBASE_PROJECT`, `CHORDS_DATA_DIR=/data`, `CHORDS_WORK_DIR=/tmp/chords-work`, `CHORDS_UPLOAD_BUCKET`, `CHORDS_SIGNING_KEY`, `CHORDS_SMOKE_KEY`, `CHORDS_QUOTA_ANALYSES=40`, `CHORDS_QUOTA_VOCALS=15`, `CHORDS_QUOTA_JOBS=2`, `CHORDS_MAX_WORKERS=2`. Artifact Registry keeps the 3 newest images (cleanup policy). The image (python 3.11 slim, ffmpeg, node 22, the `vocals` extra with CPU-only torch, non-root uid 10001) warms the chord models / numba kernels / Demucs weights at build time. numba's cache is keyed by the CPU, so the image pins `NUMBA_CPU_NAME=haswell` + empty `NUMBA_CPU_FEATURES` (AVX2 baseline, valid on every Cloud Run host); without it each new instance recompiled for ~20 s on its first analysis. At start-up the server preloads the chord models and analyzes 8 s of synthetic audio in the background (≈7 s), so the first real job runs at full speed. On the bucket mount every file check is a network round trip, so the track list reads the tracks in parallel.
+As deployed by `scripts/deploy_cloud.sh`: runtime service account `chords-api@build-chords-listener.iam.gserviceaccount.com` with only `roles/storage.objectUser` on the bucket and `roles/datastore.user` on the project (the library index is written to Firestore); volume `data` (cloud-storage, `mount-options=uid=10001;gid=10001`) at `/data`; env `CHORDS_AUTH=firebase`, `CHORDS_FIREBASE_PROJECT`, `CHORDS_DATA_DIR=/data`, `CHORDS_WORK_DIR=/tmp/chords-work`, `CHORDS_UPLOAD_BUCKET`, `CHORDS_PUBLISH=1`, `CHORDS_SIGNING_KEY`, `CHORDS_SMOKE_KEY`, `CHORDS_QUOTA_ANALYSES=40`, `CHORDS_QUOTA_VOCALS=15`, `CHORDS_QUOTA_JOBS=2`, `CHORDS_MAX_WORKERS=2`. Artifact Registry keeps the 3 newest images (cleanup policy). The image (python 3.11 slim, ffmpeg, node 22, the `vocals` extra with CPU-only torch, non-root uid 10001) warms the chord models / numba kernels / Demucs weights at build time. numba's cache is keyed by the CPU, so the image pins `NUMBA_CPU_NAME=haswell` + empty `NUMBA_CPU_FEATURES` (AVX2 baseline, valid on every Cloud Run host); without it each new instance recompiled for ~20 s on its first analysis. At start-up the server preloads the chord models and analyzes 8 s of synthetic audio in the background (≈7 s), so the first real job runs at full speed. On the bucket mount every file check is a network round trip, so the track list reads the tracks in parallel.
 
 ## Frontend config
 
@@ -103,9 +157,9 @@ As deployed by `scripts/deploy_cloud.sh`: runtime service account `chords-api@bu
 
 `scripts/deploy_cloud.sh`: Cloud Build → Artifact Registry → `gcloud run deploy`. Auth comes from normal `gcloud auth`, or from an access token minted from the logged-in firebase-tools session (`scripts/gcloud_token.cjs`, written to a 0600 temp file and passed with `--access-token-file`).
 
-- Steps (idempotent): enable APIs → Artifact Registry repo `chords` (+ cleanup policy) → Firebase Storage default bucket (`projects.defaultBucket.create`, `europe-west1`, linked to Firebase) → service account + bucket role → `firebase deploy --only storage` (`storage.rules`) → secrets in `.cloud.env` (generated once with `openssl rand`, mode 600, gitignored) → `gcloud builds submit backend --config backend/cloudbuild.yaml` (the uploaded source archive is deleted afterwards) → `gcloud run deploy` → prints the URL.
-- `SKIP_SETUP=1` for code-only redeploys, `SKIP_BUILD=1` to redeploy the newest image with changed settings.
-- `python3 scripts/smoke_cloud.py` runs the end-to-end smoke test against the service as `smoke-test` and cleans up after itself; `--cold` only measures the first request + one analysis.
+- Steps (idempotent): enable APIs (including `firestore.googleapis.com`) → Artifact Registry repo `chords` (+ cleanup policy) → Firebase Storage default bucket (`projects.defaultBucket.create`, `europe-west1`, linked to Firebase) → service account + bucket role `roles/storage.objectUser` + project role `roles/datastore.user` → `firebase deploy --only storage,firestore:rules` (`storage.rules`, `firestore.rules`) → bucket CORS (`gcloud storage buckets update gs://$BUCKET --cors-file=storage-cors.json`) → secrets in `.cloud.env` (generated once with `openssl rand`, mode 600, gitignored) → `gcloud builds submit backend --config backend/cloudbuild.yaml` (the uploaded source archive is deleted afterwards) → `gcloud run deploy` → prints the URL.
+- `SKIP_SETUP=1` for code-only redeploys (skips the APIs, IAM, rules and CORS steps too), `SKIP_BUILD=1` to redeploy the newest image with changed settings.
+- `python3 scripts/smoke_cloud.py` runs the end-to-end smoke test against the service as `smoke-test` and cleans up after itself; `--cold` only measures the first request + one analysis. With `--firestore-token-file PATH` (an access token that reads Firestore and the bucket, e.g. `gcloud auth print-access-token > PATH`) it also checks the published library: after the upload analysis the index document `users/smoke-test/tracks/<id>` exists with `version >= 1` and `gcloud storage cat` shows a matching `track.json`; after the delete the index documents are gone.
 - A full deploy takes ~9 min (Cloud Build ~7.5 min on the default free-tier machine, image ≈0.9 GB compressed); the uploaded source archive is deleted afterwards.
 
 ## Verified (2026-10-05, revisions `chords-api-00002` and `-00003`)
@@ -114,4 +168,5 @@ As deployed by `scripts/deploy_cloud.sh`: runtime service account `chords-api@bu
 - **YouTube from Cloud Run worked** (Rick Astley "Never Gonna Give You Up", 3:33: downloaded and analyzed in 22–34 s, key G#; yt-dlp logged one 403 on an API page and used another client). Data-center IPs can be blocked at any time; the server then answers `download_blocked` and the client falls back to tab capture.
 - Timings: new instance ready 5–6 s after Cloud Run starts it (GCSFuse mount ~2 s + Python start); first response after scale-to-zero 9.2 s at the client; chord models ready ~3 s later (cached numba kernels), first song on that cold instance done 12 s after the first request. Warm: a 41 s song 6.8 s end to end; a 4-minute song 14 s in the engine, 22 s end to end (with a second job running); storage ingest 6.3 s. Idle instances shut down after ~15 min.
 - Vocals on `-00003` (23 s synthetic song): `POST /api/tracks/{id}/vocals` done in 43 s, both stems served through signed `stemUrls` with `Range` (206), one `vocals` quota unit counted.
+- Rules, local, against the Firestore + Storage emulators: `firestore.rules.test.mjs` 33/33 and `storage.rules.test.mjs` 17/17 (library index and files readable only by their owner, nothing writable from a client, uploads unchanged). Not yet deployed or run against the real project.
 - Local, against the Firebase Auth + Storage emulators: emulator ID tokens accepted, `storage.rules` enforced (owner upload OK; other users, `text/plain`, paths outside `uploads/` and client reads → 403), the google-cloud-storage client reads and deletes uploads through `STORAGE_EMULATOR_HOST`.

@@ -2,7 +2,7 @@
 # Deploys the Chords Listener API to Cloud Run (docs/CLOUD.md). Idempotent: re-run it to redeploy.
 #
 #   scripts/deploy_cloud.sh                  everything: setup + Cloud Build + deploy
-#   SKIP_SETUP=1 scripts/deploy_cloud.sh     code-only redeploy (no APIs/repo/bucket/rules steps)
+#   SKIP_SETUP=1 scripts/deploy_cloud.sh     code-only redeploy (no APIs/repo/bucket/IAM/rules/CORS steps)
 #   SKIP_BUILD=1 scripts/deploy_cloud.sh     redeploy the newest image (settings / env changes only)
 #
 # Credentials: a normal `gcloud auth login`, or - without one - an access token minted from the
@@ -91,7 +91,7 @@ if [[ -z "${SKIP_SETUP:-}" ]]; then
   log "Enabling APIs"
   gc services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com \
     storage.googleapis.com firebasestorage.googleapis.com firebaserules.googleapis.com \
-    iam.googleapis.com iamcredentials.googleapis.com logging.googleapis.com
+    firestore.googleapis.com iam.googleapis.com iamcredentials.googleapis.com logging.googleapis.com
 
   # ---------------------------------------------------------------------------- Artifact Registry
   log "Artifact Registry repository $REPO"
@@ -142,10 +142,20 @@ JSON
     [[ $attempt == 6 ]] && { cat "$TMP/iam.err" >&2; exit 1; }
     sleep 10
   done
+  # the API writes the library index (users/{uid}/tracks) to Firestore over REST
+  if ! gc projects add-iam-policy-binding "$PROJECT" --member="serviceAccount:$RUNTIME_SA" \
+      --role=roles/datastore.user --condition=None >/dev/null 2>"$TMP/iam.err"; then
+    cat "$TMP/iam.err" >&2; exit 1
+  fi
+  echo "roles/datastore.user on project $PROJECT"
 
-  # ---------------------------------------------------------------------------- storage rules
-  log "Storage security rules (storage.rules)"
-  (cd "$ROOT" && $FIREBASE_CMD deploy --only storage --project "$PROJECT" --non-interactive)
+  # ---------------------------------------------------------------------------- security rules, bucket CORS
+  log "Storage + Firestore security rules (storage.rules, firestore.rules)"
+  (cd "$ROOT" && $FIREBASE_CMD deploy --only storage,firestore:rules --project "$PROJECT" --non-interactive)
+
+  # the site streams the published audio / stems straight from the bucket (token URLs, HTTP Range)
+  log "Bucket CORS gs://$BUCKET (storage-cors.json)"
+  gc storage buckets update "gs://$BUCKET" --cors-file="$ROOT/storage-cors.json"
 fi
 
 # ------------------------------------------------------------------------------ secrets
@@ -207,6 +217,7 @@ CHORDS_FIREBASE_PROJECT: "$PROJECT"
 CHORDS_DATA_DIR: /data
 CHORDS_WORK_DIR: /tmp/chords-work
 CHORDS_UPLOAD_BUCKET: "$BUCKET"
+CHORDS_PUBLISH: "1"
 CHORDS_SIGNING_KEY: "$SIGNING_KEY"
 CHORDS_SMOKE_KEY: "$SMOKE_KEY"
 CHORDS_QUOTA_ANALYSES: "${CHORDS_QUOTA_ANALYSES:-40}"

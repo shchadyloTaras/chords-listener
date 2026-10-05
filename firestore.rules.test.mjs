@@ -5,7 +5,9 @@
 //
 // No dependencies: users come from the Auth emulator REST API, reads/writes go through the
 // Firestore emulator REST API with each user's ID token (the same requests the web SDK sends,
-// including server timestamps as REQUEST_TIME transforms).
+// including server timestamps as REQUEST_TIME transforms). The published library index
+// (users/{uid}/tracks/{trackId}) is written the way the API's service account writes it: the
+// emulator's admin bearer token ("owner") bypasses the rules.
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { after, before, describe, test } from 'node:test'
@@ -118,6 +120,54 @@ async function remove(user, uid) {
 
 function authHeader(user) {
   return user ? { Authorization: `Bearer ${user.token}` } : {}
+}
+
+// ---- published library index: users/{uid}/tracks/{trackId} ----
+
+const TRACK_FIELDS = { title: 'Wonderwall', createdAt: '2026-10-05T10:00:00+00:00', version: 3 }
+
+/** Written like the API does (service account): admin token, rules bypassed. */
+async function seedTrack(uid, id, fields = TRACK_FIELDS) {
+  const res = await fetch(`${DOCS}/users/${uid}/tracks/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer owner' },
+    body: JSON.stringify({ fields: encodeFields(fields) }),
+  })
+  assert.equal(res.status, 200, 'seed the track index document')
+}
+
+async function readTrack(user, uid, id) {
+  const res = await fetch(`${DOCS}/users/${uid}/tracks/${id}`, { headers: authHeader(user) })
+  return res.status
+}
+
+/** The library's live query: collection(db, 'users', uid, 'tracks') ordered by createdAt, newest first. */
+function listTracks(user, uid) {
+  return fetch(`${DOCS}/users/${uid}:runQuery`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader(user) },
+    body: JSON.stringify({
+      structuredQuery: {
+        from: [{ collectionId: 'tracks' }],
+        orderBy: [{ field: { fieldPath: 'createdAt' }, direction: 'DESCENDING' }],
+      },
+    }),
+  })
+}
+
+function writeTrack(user, uid, id, { fields = TRACK_FIELDS, exists } = {}) {
+  const w = { update: { name: `projects/${PROJECT}/databases/(default)/documents/users/${uid}/tracks/${id}`, fields: encodeFields(fields) } }
+  if (exists !== undefined) w.currentDocument = { exists }
+  return fetch(`${DOCS}:commit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader(user) },
+    body: JSON.stringify({ writes: [w] }),
+  }).then((res) => res.status)
+}
+
+async function removeTrack(user, uid, id) {
+  const res = await fetch(`${DOCS}/users/${uid}/tracks/${id}`, { method: 'DELETE', headers: authHeader(user) })
+  return res.status
 }
 
 async function clearEmulators() {
@@ -266,5 +316,70 @@ describe('users/{uid}', () => {
 
   test('owner can delete their profile', async () => {
     assert.equal(await remove(alice, alice.uid), OK)
+  })
+})
+
+describe('users/{uid}/tracks/{trackId} (the published library index)', () => {
+  const TRACK = '0123456789ab'
+  let alice
+  let bob
+
+  before(async () => {
+    await clearEmulators()
+    alice = await createUser()
+    bob = await createUser()
+    await seedTrack(alice.uid, TRACK)
+  })
+
+  after(clearEmulators)
+
+  test('owner gets a track document', async () => {
+    assert.equal(await readTrack(alice, alice.uid, TRACK), OK)
+  })
+
+  test('owner lists their library (the live query, ordered by createdAt)', async () => {
+    const res = await listTracks(alice, alice.uid)
+    assert.equal(res.status, OK)
+    const rows = (await res.json()).filter((row) => row.document)
+    assert.equal(rows.length, 1)
+    assert.match(rows[0].document.name, new RegExp(`/users/${alice.uid}/tracks/${TRACK}$`))
+  })
+
+  test('another user can neither get nor list it', async () => {
+    assert.equal(await readTrack(bob, alice.uid, TRACK), DENIED)
+    assert.equal((await listTracks(bob, alice.uid)).status, DENIED)
+  })
+
+  test('a signed-out visitor can neither get nor list it', async () => {
+    assert.equal(await readTrack(null, alice.uid, TRACK), DENIED)
+    assert.equal((await listTracks(null, alice.uid)).status, DENIED)
+  })
+
+  test('a collection-group query over every user’s tracks is denied', async () => {
+    const res = await fetch(`${DOCS}:runQuery`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeader(alice) },
+      body: JSON.stringify({ structuredQuery: { from: [{ collectionId: 'tracks', allDescendants: true }] } }),
+    })
+    assert.equal(res.status, DENIED)
+  })
+
+  test('the owner cannot create, update or delete a track document', async () => {
+    assert.equal(await writeTrack(alice, alice.uid, 'ba9876543210', { exists: false }), DENIED)
+    assert.equal(await writeTrack(alice, alice.uid, TRACK, { fields: { title: 'Mine now', version: 99 } }), DENIED)
+    assert.equal(await removeTrack(alice, alice.uid, TRACK), DENIED)
+    assert.equal(await readTrack(alice, alice.uid, 'ba9876543210'), 404, 'nothing was created')
+    assert.equal(await readTrack(alice, alice.uid, TRACK), OK, 'the document is still there')
+  })
+
+  test('another user cannot write one into the owner’s library', async () => {
+    assert.equal(await writeTrack(bob, alice.uid, 'ba9876543210', { exists: false }), DENIED)
+    assert.equal(await writeTrack(bob, alice.uid, TRACK), DENIED)
+    assert.equal(await removeTrack(bob, alice.uid, TRACK), DENIED)
+  })
+
+  test('other subcollections under the user stay denied', async () => {
+    const res = await fetch(`${DOCS}/users/${alice.uid}/publish-pending/x`, { headers: authHeader(alice) })
+    assert.equal(res.status, DENIED)
   })
 })
