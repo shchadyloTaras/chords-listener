@@ -12,7 +12,6 @@ import { useCanListenInTab, useIsDesktopPointer, useMediaQuery } from '../../hoo
 import { errorText } from '../jobs/errorText'
 import { AccountButtons } from '../account/AccountCta'
 import { useCloudInvite } from '../account/cloudInvite'
-import { YoutubeAccountCard } from '../account/YoutubeAccountCard'
 import { Button, IconButton } from '../ui/IconButton'
 import { VideoSiteIcon } from '../ui/Logo'
 import { formatBytes } from '../ui/format'
@@ -26,7 +25,7 @@ type Hint =
   | { kind: 'other' }
   | { kind: 'invalid' }
   | { kind: 'error'; code: ClientErrorCode }
-  /** no server connected and no way to listen here (another site, or YouTube without tab capture): only the cloud can fetch it */
+  /** a link to another site and no server connected: only the cloud can fetch it (sign in) */
   | { kind: 'account' }
 
 function UploadProgress() {
@@ -66,7 +65,7 @@ function UploadProgress() {
 }
 
 /** A link to another site was given without a server: the cloud fetches it once the user signs in. */
-function AccountNotice({ tabCapable, onDismiss }: { tabCapable: boolean; onDismiss(): void }) {
+function AccountNotice({ onDismiss }: { onDismiss(): void }) {
   const t = useT()
   const titleId = useId()
   return (
@@ -82,7 +81,7 @@ function AccountNotice({ tabCapable, onDismiss }: { tabCapable: boolean; onDismi
           <h2 id={titleId} className="font-display text-base font-semibold tracking-tight">
             {t('cloud.input.accountTitle')}
           </h2>
-          <p className="mt-1 text-sm text-muted">{t(tabCapable ? 'cloud.input.accountText' : 'cloud.input.accountTextNoTab')}</p>
+          <p className="mt-1 text-sm text-muted">{t('cloud.input.accountText')}</p>
           <AccountButtons size="sm" className="mt-3" />
         </div>
       </div>
@@ -144,7 +143,7 @@ export function SmartInput({ className }: { className?: string }) {
   const autoFocus = useIsDesktopPointer()
   const wide = useMediaQuery('(min-width: 640px)')
   const connected = useConnection((s) => s.status === 'server')
-  const cloudConnected = useConnection((s) => s.status === 'server' && s.backend === 'cloud')
+  const localServer = useConnection((s) => s.status === 'server' && s.backend === 'local')
   const guest = useConnection((s) => s.status === 'browser')
   const invite = useCloudInvite()
   const tabCapable = useCanListenInTab()
@@ -194,12 +193,13 @@ export function SmartInput({ className }: { className?: string }) {
   }
 
   // signed in from the notice: once the cloud is connected, start the waiting link (editing, clearing or
-  // dismissing it, another submit or leaving the page forgets it)
+  // dismissing it, another submit or leaving the page forgets it). Never a YouTube video: that opens the
+  // capture page without an account.
   const submitRef = useRef(submit)
   useEffect(() => {
     submitRef.current = submit
   })
-  const waiting = hint.kind === 'account' ? value : ''
+  const waiting = hint.kind === 'account' && !checkUrl(value).videoId ? value : ''
   useEffect(() => {
     if (!waiting) return
     return submitWhenConnected(waiting, (url) => void submitRef.current(url))
@@ -258,14 +258,13 @@ export function SmartInput({ className }: { className?: string }) {
       {text}
     </span>
   )
-  // a YouTube video where this browser cannot listen to a tab: the cloud fetches it for an account
-  const youtubeForAccount = !tabCapable && !!checkUrl(value).videoId
 
   const hintNode = (() => {
     switch (hint.kind) {
       case 'youtube':
-        if (guest && !tabCapable) return needsAccount(t('cloud.input.hintYoutubeAccount'))
-        return ok(guest ? t('cloud.input.hintYoutubeGuest') : t('core.input.hintYoutube'))
+        // a local server downloads the video; everywhere else it opens on the capture page
+        if (localServer) return ok(t('core.input.hintYoutube'))
+        return ok(t(tabCapable ? 'cloud.input.hintYoutubeGuest' : 'cloud.input.hintYoutubeHere'))
       case 'other':
         return guest ? (
           needsAccount(t('web.input.needServer'))
@@ -285,10 +284,10 @@ export function SmartInput({ className }: { className?: string }) {
           return (
             <span className="flex items-center gap-1.5 text-text">
               <LoaderCircle className="size-3.5 shrink-0 animate-spin text-accent" aria-hidden="true" />
-              {t(youtubeForAccount && cloudConnected ? 'cloud.ytAccount.sending' : 'web.input.sending')}
+              {t('web.input.sending')}
             </span>
           )
-        return needsAccount(t(youtubeForAccount ? 'cloud.input.hintYoutubeAccount' : 'web.input.needServer'))
+        return needsAccount(t('web.input.needServer'))
       default:
         return (
           <span className="text-muted">
@@ -379,14 +378,7 @@ export function SmartInput({ className }: { className?: string }) {
           {hintNode}
         </p>
       </form>
-      {hint.kind === 'account' &&
-        !connected &&
-        invite &&
-        (youtubeForAccount ? (
-          <YoutubeAccountCard className="mt-3" onDismiss={() => setHint({ kind: 'idle' })} />
-        ) : (
-          <AccountNotice tabCapable={tabCapable} onDismiss={() => setHint({ kind: 'idle' })} />
-        ))}
+      {hint.kind === 'account' && !connected && invite && <AccountNotice onDismiss={() => setHint({ kind: 'idle' })} />}
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         <WayCard

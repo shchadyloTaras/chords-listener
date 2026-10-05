@@ -1,4 +1,5 @@
 // Client-side URL checks for the smart input. The backend (yt-dlp) is the final judge.
+import type { ConnectionState } from '../../lib/serverMode'
 
 export type UrlKind = 'youtube' | 'other'
 
@@ -41,6 +42,17 @@ export function parseYouTubeId(raw: string): string | null {
   if (v && ID_RE.test(v)) return v
   const m = /^\/(?:shorts|embed|live|v)\/([A-Za-z0-9_-]{11})/.exec(u.pathname)
   return m ? m[1] : null
+}
+
+/**
+ * Where a link goes. YouTube refuses the cloud's servers, so on the cloud (and without a server) a
+ * YouTube video is listened to in the browser; a local server (home connection) downloads it.
+ * Lives here, not in startLink.ts, so hooks/useJobs.ts can use it without an import cycle.
+ */
+export function linkTarget(url: string, conn: Pick<ConnectionState, 'status' | 'backend'>): 'capture' | 'server' | 'account' {
+  const server = conn.status === 'server'
+  if (parseYouTubeId(url)) return server && conn.backend === 'local' ? 'server' : 'capture'
+  return server ? 'server' : 'account'
 }
 
 /** Accepts "youtube.com/…", "www.…", "youtu.be/…" without a scheme. */

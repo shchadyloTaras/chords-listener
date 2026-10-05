@@ -1,37 +1,37 @@
 import { toApiError } from '../../lib/api'
-import { useAuth } from '../../lib/auth'
-import { canListenInTab } from '../../lib/live/capture'
-import { useConnection } from '../../lib/serverMode'
+import { useConnection, whenSettled } from '../../lib/serverMode'
 import { submitUrl } from '../../hooks/useJobs'
 import { navigate, paths } from '../../hooks/useRoute'
 import type { Job } from '../../types'
-import { parseYouTubeId } from './url'
+import { linkTarget, parseYouTubeId } from './url'
+
+export { linkTarget } from './url'
 
 export type LinkStart =
-  /** a server (cloud / own server) took the link: its job page is open */
+  /** a server took the link: its job page is open */
   | { kind: 'job'; job: Job }
-  /** no server, but this browser hears its tab: the YouTube video is played and listened to on the capture page */
+  /** a YouTube video: played and listened to on the capture page (tab, or the on-device ways) */
   | { kind: 'capture'; videoId: string }
-  /** no server and no way to listen here (another site, or YouTube on a phone / Safari / Firefox): only the cloud can fetch it (sign in) */
+  /** another site and no server: only the cloud can fetch it (sign in) */
   | { kind: 'account' }
 
-/**
- * Starts a link: the cloud / own server downloads it; without a server a YouTube video goes to "listen in
- * the tab" (the page plays it and hears this tab) where the browser can do that, everything else needs an
- * account. Throws ApiError otherwise.
- */
+/** Starts a link (see linkTarget). Throws ApiError when the server refuses it. */
 export async function startLink(url: string): Promise<LinkStart> {
+  // still choosing the API (auth restoring, first probe): wait, so a cloud user is not treated as a guest
+  const conn = useConnection.getState().status === 'checking' ? await whenSettled() : useConnection.getState()
+  const target = linkTarget(url, conn)
+  const videoId = parseYouTubeId(url)
+  if (target === 'capture' && videoId) {
+    navigate(paths.capture(videoId))
+    return { kind: 'capture', videoId }
+  }
+  if (target === 'account') return { kind: 'account' }
   try {
     return { kind: 'job', job: await submitUrl(url) }
   } catch (e) {
     const err = toApiError(e)
-    if (err.code !== 'server_required') throw err
-    const videoId = parseYouTubeId(url)
-    if (videoId && canListenInTab()) {
-      navigate(paths.capture(videoId))
-      return { kind: 'capture', videoId }
-    }
-    return { kind: 'account' }
+    if (err.code === 'server_required') return { kind: 'account' }
+    throw err
   }
 }
 
@@ -54,16 +54,4 @@ export function submitWhenConnected(url: string, submit: (url: string) => void):
   }
   check()
   return cancel
-}
-
-/**
- * The capture page's video waiting for its guest to sign in: sent once the signed-in user's cloud is
- * connected. Another server connecting meanwhile (the user's own, or a local server coming back) is not a
- * sign-in: `giveUp` runs and nothing is sent (that server's usual page shows). Returns the cancel function.
- */
-export function submitAfterSignIn(url: string, submit: (url: string) => void, giveUp: () => void): () => void {
-  return submitWhenConnected(url, (link) => {
-    if (useConnection.getState().backend === 'cloud' && useAuth.getState().user) submit(link)
-    else giveUp()
-  })
 }

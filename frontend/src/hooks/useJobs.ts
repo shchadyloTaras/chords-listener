@@ -7,7 +7,7 @@ import { t } from '../i18n'
 import { useApp } from '../store'
 import type { Job, JobStatus } from '../types'
 import { errorText } from '../components/jobs/errorText'
-import { parseYouTubeId } from '../components/input/url'
+import { linkTarget, parseYouTubeId } from '../components/input/url'
 import { currentPath, navigate, paths } from './useRoute'
 
 const ACTIVE: ReadonlySet<JobStatus> = new Set<JobStatus>(['queued', 'downloading', 'decoding', 'analyzing'])
@@ -296,6 +296,12 @@ export async function retryJob(job: Job): Promise<boolean> {
   acknowledgeJob(job.id)
   const file = retryFiles.get(job.id)
   if (job.source?.type !== 'file' && job.source?.url) {
+    // the cloud cannot download YouTube: the video is listened to in the browser instead
+    const videoId = parseYouTubeId(job.source.url)
+    if (videoId && linkTarget(job.source.url, useConnection.getState()) === 'capture') {
+      navigate(paths.capture(videoId))
+      return true
+    }
     await submitUrl(job.source.url)
     return true
   }

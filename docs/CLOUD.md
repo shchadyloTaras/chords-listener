@@ -58,12 +58,13 @@ Details: `sig` = base64url(HMAC-SHA256(key, "v1\n<uid>\n<path>\n<exp>")) without
 
 - `POST /api/jobs {url}`: the server tries yt-dlp (with the node JS runtime). When YouTube answers with a bot check / sign-in wall, the job fails with `download_blocked`. Other failures stay `download_failed`.
   - Classified as `download_blocked` (`sources.is_blocked_message`): "Sign in to confirm…" (bot check, age gate), "not a bot", the `--cookies-from-browser` hint, HTTP 403 / 429 / "Too Many Requests", "content is not available on this app", and for YouTube links also "Requested format is not available" / "Only images are available" (all streams withheld).
-- Client fallback ("Слухати у вкладці"):
+- Client: the hosted site never sends YouTube links to the cloud (YouTube refuses Google Cloud addresses). Every YouTube link, from a guest or a signed-in user, opens "Слухати у вкладці" (`#/listen/youtube/<videoId>`); only a local server (`backend: 'local'`, a home connection) still downloads them. The API behavior above remains for direct callers and old jobs: a job that ends in `download_blocked` offers the same page.
+- "Слухати у вкладці":
   1. The video plays embedded on the page.
   2. The site captures this tab's audio (`getDisplayMedia`, desktop Chrome/Edge), showing live chords while it plays. Recording pauses and resumes with the video.
   3. It uploads the recording to Storage, then calls `POST /api/jobs/storage` with `{ path, source: { type: 'youtube', videoId, url }, startOffset }`. `startOffset` is the video time in seconds where the recording began.
   4. The resulting track is linked to the video: its chord times are shifted by `startOffset`, so they line up with the video. Playback can use the YouTube embed.
-- Phones (no tab capture): listen through the microphone, or upload the file.
+- Phones and browsers without tab capture (Safari, Firefox): the same page offers the microphone (the song playing nearby) or uploading the file.
 
 ## Vocals
 

@@ -1,6 +1,7 @@
-// Starting a link per mode (owner decisions on guests): a guest never reaches a server — YouTube goes to
-// "listen in the tab" where the browser can hear its tab, otherwise it needs an account; signed-in users
-// and a local server get a job. Plus the link that waits for an account and is sent after signing in.
+// Starting a link per mode: the cloud never downloads YouTube (YouTube refuses its servers), so on the
+// hosted site every YouTube link opens the capture page (guest or signed in); only a local server downloads
+// it. Other sites go to a server (cloud or local) or ask a guest for an account. Plus the link that waits
+// for an account and is sent after signing in.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Job } from '../../types'
 
@@ -27,7 +28,7 @@ vi.mock('../../hooks/useRoute', async (importOriginal) => ({
 }))
 
 import { useConnection, type ConnectionState } from '../../lib/serverMode'
-import { startLink, submitAfterSignIn, submitWhenConnected } from './startLink'
+import { linkTarget, startLink, submitWhenConnected } from './startLink'
 
 const VIDEO = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
 const CLOUD = 'https://chords-api-abc123-ew.a.run.app'
@@ -54,6 +55,19 @@ afterEach(() => {
   connect({ status: 'checking', backend: null, apiBase: null, serverOrigin: null, remote: false })
 })
 
+describe('linkTarget', () => {
+  const YT = 'https://youtu.be/dQw4w9WgXcQ'
+  it.each([
+    ['guest', { status: 'browser', backend: null }, YT, 'capture'],
+    ['cloud', { status: 'server', backend: 'cloud' }, YT, 'capture'],
+    ['local server', { status: 'server', backend: 'local' }, YT, 'server'],
+    ['cloud, other site', { status: 'server', backend: 'cloud' }, 'https://soundcloud.com/a/b', 'server'],
+    ['guest, other site', { status: 'browser', backend: null }, 'https://soundcloud.com/a/b', 'account'],
+  ] as const)('%s', (_name, conn, url, target) => {
+    expect(linkTarget(url, conn)).toBe(target)
+  })
+})
+
 describe('startLink', () => {
   it('guest who can listen to the tab: plays the video on the capture page, no request', async () => {
     guest()
@@ -62,11 +76,10 @@ describe('startLink', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('guest on a phone / Safari / Firefox: YouTube needs an account, no request', async () => {
+  it('phone / Safari / Firefox: YouTube still opens the capture page (on-device ways), nothing is sent', async () => {
     guest()
     live.canListenInTab.mockReturnValue(false)
-    expect(await startLink(VIDEO)).toEqual({ kind: 'account' })
-    expect(route.navigate).not.toHaveBeenCalled()
+    expect(await startLink(VIDEO)).toEqual({ kind: 'capture', videoId: 'dQw4w9WgXcQ' })
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
@@ -77,10 +90,16 @@ describe('startLink', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('signed in: the cloud downloads the video (on any device)', async () => {
+  it('signed in on the cloud: YouTube is listened to here, nothing is sent', async () => {
     cloud()
-    live.canListenInTab.mockReturnValue(false)
-    expect(await startLink(VIDEO)).toMatchObject({ kind: 'job', job: { id: 'job1' } })
+    expect(await startLink(VIDEO)).toEqual({ kind: 'capture', videoId: 'dQw4w9WgXcQ' })
+    expect(route.navigate).toHaveBeenCalledWith('/listen/youtube/dQw4w9WgXcQ')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('signed in on the cloud: a link to another site is sent to the cloud', async () => {
+    cloud()
+    expect(await startLink('https://soundcloud.com/artist/song')).toMatchObject({ kind: 'job', job: { id: 'job1' } })
     expect(fetchMock.mock.calls[0][0]).toBe(`${CLOUD}/api/jobs`)
     expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get('Authorization')).toBe('Bearer token-1')
     expect(route.navigate).not.toHaveBeenCalled()
@@ -93,10 +112,17 @@ describe('startLink', () => {
     expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get('Authorization')).toBeNull()
   })
 
+  it('still choosing the API: waits for it, so a cloud user is not treated as a guest', async () => {
+    connect({ status: 'checking', backend: null, apiBase: null, serverOrigin: null, remote: false })
+    const started = startLink('https://soundcloud.com/artist/song')
+    cloud()
+    expect(await started).toMatchObject({ kind: 'job', job: { id: 'job1' } })
+  })
+
   it('passes other server errors on', async () => {
     cloud()
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ detail: 'Busy', code: 'quota_exceeded' }), { status: 429 }))
-    await expect(startLink(VIDEO)).rejects.toMatchObject({ code: 'quota_exceeded' })
+    await expect(startLink('https://soundcloud.com/artist/song')).rejects.toMatchObject({ code: 'quota_exceeded' })
     expect(route.navigate).not.toHaveBeenCalled()
   })
 })
@@ -130,45 +156,5 @@ describe('submitWhenConnected (a link waiting for an account)', () => {
     const submit = vi.fn()
     submitWhenConnected(VIDEO, submit)
     expect(submit).toHaveBeenCalledExactlyOnceWith(VIDEO)
-  })
-})
-
-describe('submitAfterSignIn (the capture page\'s video waiting for a sign-in)', () => {
-  const ownServer = () =>
-    connect({ status: 'server', backend: 'local', apiBase: 'http://localhost:8765/api', serverOrigin: 'http://localhost:8765', remote: true })
-
-  it('is sent once the sign-in connects the cloud', () => {
-    guest()
-    const submit = vi.fn()
-    const giveUp = vi.fn()
-    submitAfterSignIn(VIDEO, submit, giveUp)
-    auth.user = { uid: 'uid42', email: 'listener@example.com' }
-    cloud()
-    expect(submit).toHaveBeenCalledExactlyOnceWith(VIDEO)
-    expect(giveUp).not.toHaveBeenCalled()
-  })
-
-  it('is not sent when the user\'s own / a local server connects instead (no sign-in)', () => {
-    guest()
-    const submit = vi.fn()
-    const giveUp = vi.fn()
-    submitAfterSignIn(VIDEO, submit, giveUp)
-    ownServer()
-    expect(submit).not.toHaveBeenCalled()
-    expect(giveUp).toHaveBeenCalledOnce()
-    // the wait is over: a later sign-in does not send it either
-    auth.user = { uid: 'uid42', email: 'listener@example.com' }
-    cloud()
-    expect(submit).not.toHaveBeenCalled()
-  })
-
-  it('is forgotten when cancelled first (the page was left)', () => {
-    guest()
-    const submit = vi.fn()
-    const cancel = submitAfterSignIn(VIDEO, submit, vi.fn())
-    cancel()
-    auth.user = { uid: 'uid42', email: 'listener@example.com' }
-    cloud()
-    expect(submit).not.toHaveBeenCalled()
   })
 })
