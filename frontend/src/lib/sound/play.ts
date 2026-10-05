@@ -5,14 +5,17 @@
 import { selectionRange, useChordUi } from '../../components/chords/uiStore'
 import { t } from '../../i18n'
 import { useApp, type Instrument } from '../../store'
-import { getLoadedDb, loadChordDb, lookupVoicings, type ChordDb, type FretInstrument } from '../diagrams/chordsDb'
+import { getLoadedDb, loadChordDb, type ChordDb, type FretInstrument } from '../diagrams/chordsDb'
+import { fretVoicings } from '../diagrams/fretted'
 import { resolveScale } from '../handpan'
+import { keyInstrument } from '../instruments'
 import { parseChord, type ParsedChord } from '../music/chord'
 import {
   fallbackFretNotes,
   fretChordNotes,
   handpanChordNotes,
   handpanFieldNote,
+  harmoniumChordNotes,
   pianoChordNotes,
   pianoKeyNote,
   pickChordIndex,
@@ -40,22 +43,23 @@ function handpanScale() {
   return resolveScale(s.handpanScale, s.handpanNotes)
 }
 
-/** The voicing the diagram shows: same chords-db lookup, same chosen index (ChordDiagram). */
+/** The voicing the diagram shows: same lookup, same chosen index (ChordDiagram). */
 function fretNotes(db: ChordDb | null, instrument: FretInstrument, label: string, parsed: ParsedChord): NoteEvent[] {
-  if (!db) return fallbackFretNotes(parsed, instrument)
-  const found = lookupVoicings(db, instrument, parsed)
-  const count = found.voicings.length
-  if (!count) return fallbackFretNotes(parsed, instrument)
+  const found = fretVoicings(instrument, parsed, db)
+  const count = found?.voicings.length ?? 0
+  if (!found || !count) return instrument === 'bass' ? [] : fallbackFretNotes(parsed, instrument)
   const chosen = useChordUi.getState().voicings[`${instrument}:${label}`] ?? 0
   return fretChordNotes(found.voicings[((chosen % count) + count) % count], instrument)
 }
 
-/** Notes for a chord label on an instrument; a promise only while the fretted shapes still load. */
+/** Notes for a chord label on an instrument; a promise only while the guitar / ukulele shapes still load. */
 export function chordSoundNotes(label: string, instrument: Instrument): NoteEvent[] | Promise<NoteEvent[]> {
   const parsed = parseChord(label)
   if (!parsed) return []
   if (instrument === 'piano') return pianoChordNotes(label)
+  if (instrument === 'harmonium') return harmoniumChordNotes(label)
   if (instrument === 'handpan') return handpanChordNotes(label, handpanScale())
+  if (instrument === 'bass') return fretNotes(null, 'bass', label, parsed)
   const db = getLoadedDb(instrument)
   if (db) return fretNotes(db, instrument, label, parsed)
   const timeout = new Promise<null>((resolve) => window.setTimeout(() => resolve(null), DB_WAIT_MS))
@@ -122,11 +126,11 @@ export function clickChordSound(label: string, opts: SoundOptions & { unlessPlay
   return true
 }
 
-/** One key of a chord's piano diagram (key 0 = C4). */
+/** One key of a chord's keyboard diagram (key 0 = C4), on the harmonium when `opts.instrument` is it, else the piano. */
 export function playPianoKey(label: string, key: number, opts: SoundOptions = {}): void {
   if (!soundEngine.unlock()) return unavailable()
   feedback(opts)
-  void soundEngine.play({ instrument: 'piano', kind: 'note', label, notes: [pianoKeyNote(key)] })
+  void soundEngine.play({ instrument: keyInstrument(opts.instrument), kind: 'note', label, notes: [pianoKeyNote(key)] })
 }
 
 /** One field (0 = ding) of the selected handpan, in a chord's handpan diagram. */

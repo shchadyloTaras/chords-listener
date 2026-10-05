@@ -14,6 +14,7 @@ import { emitLiveNotes, type LiveNote } from '../liveNotes'
 import type { NoteEvent } from './chordNotes'
 import { clamp, mulberry32 } from './dsp'
 import { startHandpanNote } from './handpanTone'
+import { startHarmoniumNote } from './harmonium'
 import { startPianoNote } from './piano'
 import { pluckParams, pluckRelease, renderPluck, type PluckInstrument } from './pluck'
 import { roomImpulse } from './reverb'
@@ -44,8 +45,8 @@ const FADE = 0.07
  * someone going through the chords one by one does not pay the ~50–100 ms restart each time.
  */
 const IDLE_MS = 15000
-/** How long the piano keys stay down before the dampers fall (s). */
-const PIANO_HOLD: Record<PlayKind, number> = { chord: 2.6, note: 1.6 }
+/** How long the keys (piano, harmonium) stay down before the dampers fall / the reeds stop (s). */
+const KEY_HOLD: Record<PlayKind, number> = { chord: 2.6, note: 1.6 }
 /**
  * Per-instrument bus level and reverb send. Levels are matched by ear-proxy: every instrument's
  * chord measures about −16 dBFS RMS over its first 300 ms at full volume (peaks ≤ −4 dBFS through
@@ -53,7 +54,9 @@ const PIANO_HOLD: Record<PlayKind, number> = { chord: 2.6, note: 1.6 }
  */
 const BUS: Record<Instrument, { level: number; reverb: number }> = {
   piano: { level: 1.6, reverb: 0.16 },
+  harmonium: { level: 1.6, reverb: 0.2 },
   guitar: { level: 1.3, reverb: 0.12 },
+  bass: { level: 1.3, reverb: 0.06 },
   ukulele: { level: 1.45, reverb: 0.12 },
   handpan: { level: 0.7, reverb: 0.24 },
 }
@@ -171,7 +174,9 @@ function startPluckNote(ctx: BaseAudioContext, when: number, instrument: PluckIn
 function startVoice(g: Graph, instrument: Instrument, kind: PlayKind, n: NoteEvent, when: number): VoiceParts {
   switch (instrument) {
     case 'piano':
-      return startPianoNote(g.ctx, when, n.midi, n.velocity, PIANO_HOLD[kind], g.noise)
+      return startPianoNote(g.ctx, when, n.midi, n.velocity, KEY_HOLD[kind], g.noise)
+    case 'harmonium':
+      return startHarmoniumNote(g.ctx, when, n.midi, n.velocity, KEY_HOLD[kind])
     case 'handpan':
       return startHandpanNote(g.ctx, when, n.midi, n.velocity, g.noise)
     default:
@@ -179,10 +184,11 @@ function startVoice(g: Graph, instrument: Instrument, kind: PlayKind, n: NoteEve
   }
 }
 
-/** Piano spreads by pitch (low left, high right, gently); the others pass their own `pan`. */
+/** Keyboards spread by pitch (low left, high right, gently; the harmonium narrower); the others pass their own `pan`. */
 function panOf(instrument: Instrument, n: NoteEvent): number {
   if (n.pan != null) return n.pan
-  return instrument === 'piano' ? clamp((n.midi - 60) / 26, -1, 1) * 0.35 : 0
+  const spread = instrument === 'piano' ? 0.35 : instrument === 'harmonium' ? 0.2 : 0
+  return clamp((n.midi - 60) / 26, -1, 1) * spread
 }
 
 /** Connects a voice to the bus through a stereo panner (when the browser has one). */

@@ -4,7 +4,10 @@ import type { ChordQuality } from '../../types'
 import { formatChord, parseChord, simplifyQuality, type ParsedChord } from '../music/chord'
 import { FLAT_NAMES, SHARP_NAMES } from '../music/notes'
 
-export type FretInstrument = 'guitar' | 'ukulele'
+/** Instruments chords-db has shapes for. */
+export type DbInstrument = 'guitar' | 'ukulele'
+/** Every instrument with a fretboard chart (the bass shapes are generated, see ./bass.ts). */
+export type FretInstrument = DbInstrument | 'bass'
 
 export interface Voicing {
   /** per string, low → high; -1 muted, 0 open, n = fret relative to baseFret */
@@ -30,7 +33,7 @@ export interface ChordDb {
 }
 
 /** chords-db object keys per pitch class (guitar and ukulele name sharps differently). */
-const DB_KEYS: Record<FretInstrument, string[]> = {
+const DB_KEYS: Record<DbInstrument, string[]> = {
   guitar: ['C', 'Csharp', 'D', 'Eb', 'E', 'F', 'Fsharp', 'G', 'Ab', 'A', 'Bb', 'B'],
   ukulele: ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'],
 }
@@ -53,15 +56,15 @@ const DB_SUFFIX: Record<ChordQuality, string> = {
   add9: 'add9',
 }
 
-const cache = new Map<FretInstrument, ChordDb>()
-const pending = new Map<FretInstrument, Promise<ChordDb>>()
+const cache = new Map<DbInstrument, ChordDb>()
+const pending = new Map<DbInstrument, Promise<ChordDb>>()
 
-export function getLoadedDb(instrument: FretInstrument): ChordDb | null {
+export function getLoadedDb(instrument: DbInstrument): ChordDb | null {
   return cache.get(instrument) ?? null
 }
 
 /** Loads (once) the voicing database for an instrument. */
-export function loadChordDb(instrument: FretInstrument): Promise<ChordDb> {
+export function loadChordDb(instrument: DbInstrument): Promise<ChordDb> {
   const hit = cache.get(instrument)
   if (hit) return Promise.resolve(hit)
   let p = pending.get(instrument)
@@ -99,7 +102,7 @@ function findSuffix(list: DbChord[] | undefined, suffix: string): DbChord | unde
  * Voicings for a chord. Falls back (exact = false) from a missing slash chord to its base
  * chord, and from a missing quality to the root triad of the same family, then to the major triad.
  */
-export function lookupVoicings(db: ChordDb, instrument: FretInstrument, chord: ParsedChord): VoicingLookup {
+export function lookupVoicings(db: ChordDb, instrument: DbInstrument, chord: ParsedChord): VoicingLookup {
   const strings = db.main.strings
   const list = db.chords[DB_KEYS[instrument][chord.rootPc]]
   const result = (found: DbChord | undefined, exact: boolean, shown: string): VoicingLookup | null =>
@@ -133,7 +136,7 @@ export function lookupVoicings(db: ChordDb, instrument: FretInstrument, chord: P
 }
 
 /** Convenience: lookup by label; null for "N" / unknown labels. */
-export function lookupLabel(db: ChordDb, instrument: FretInstrument, label: string): VoicingLookup | null {
+export function lookupLabel(db: ChordDb, instrument: DbInstrument, label: string): VoicingLookup | null {
   const p = parseChord(label)
   return p ? lookupVoicings(db, instrument, p) : null
 }

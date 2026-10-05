@@ -1,8 +1,10 @@
 // Which notes the chord sound plays — always exactly what the diagram for the selected instrument
-// shows: the piano's staff voicing, the displayed guitar / ukulele voicing (strummed low → high),
-// or the chord tones the selected handpan really has (a low → high arpeggio). Pure functions.
+// shows: the piano's staff voicing (also the harmonium's), the displayed guitar / ukulele / bass
+// voicing (strummed low → high; the bass arpeggiated), or the chord tones the selected handpan
+// really has (a low → high arpeggio). Pure functions.
 
-import type { FretInstrument, Voicing } from '../diagrams/chordsDb'
+import { BASS_TUNING } from '../diagrams/bass'
+import type { DbInstrument, FretInstrument, Voicing } from '../diagrams/chordsDb'
 import { pianoVoicing } from '../diagrams/piano'
 import { staffChord } from '../diagrams/staff'
 import { noteMidi, playability, type HandpanScale } from '../handpan'
@@ -16,7 +18,7 @@ export interface NoteEvent {
   offset: number
   /** 0..1 */
   velocity: number
-  /** what lights up while it sounds: piano key index (0 = C4 of the diagram), guitar / ukulele string index, handpan note index (0 = ding) */
+  /** what lights up while it sounds: piano key index (0 = C4 of the diagram), guitar / ukulele / bass string index, handpan note index (0 = ding) */
   target: number
   /** stereo position −1..1 (when the instrument does not pan by pitch) */
   pan?: number
@@ -49,24 +51,38 @@ export function pianoKeyNote(key: number): NoteEvent {
   return { midi: PIANO_DIAGRAM_C + key, offset: 0, velocity: 0.68, target: key }
 }
 
-// ---------- guitar / ukulele ----------
+// ---------- harmonium ----------
 
-/** Standard tunings per string in chords-db order (guitar low E → high E; ukulele re-entrant G C E A). */
+/** The harmonium's right hand speaks this long after the bass (s): pressed together, no roll. */
+export const HARMONIUM_SPREAD = 0.01
+
+/** The piano diagram's notes on the harmonium: bass first, the rest together just after. */
+export function harmoniumChordNotes(label: string): NoteEvent[] {
+  return pianoChordNotes(label).map((n, i) => ({ ...n, offset: i === 0 ? 0 : HARMONIUM_SPREAD }))
+}
+
+// ---------- guitar / ukulele / bass ----------
+
+/** Standard tunings per string in chords-db order (guitar low E → high E; ukulele re-entrant G C E A; bass E1 A1 D2 G2). */
 export const TUNINGS: Record<FretInstrument, readonly number[]> = {
   guitar: [40, 45, 50, 55, 59, 64],
   ukulele: [67, 60, 64, 69],
+  bass: BASS_TUNING,
 }
 
 /** Gap between strings across a downstroke (s): it starts a bit slower and speeds up. */
-const STRUM_GAPS: Record<FretInstrument, { first: number; last: number }> = {
+const STRUM_GAPS: Record<DbInstrument, { first: number; last: number }> = {
   guitar: { first: 0.0205, last: 0.0165 },
   ukulele: { first: 0.0152, last: 0.0128 },
 }
 
-const STRING_PAN: Record<FretInstrument, number> = { guitar: 0.36, ukulele: 0.28 }
+const STRING_PAN: Record<FretInstrument, number> = { guitar: 0.36, ukulele: 0.28, bass: 0.16 }
+
+/** Bass arpeggio: one string every 110 ms, low → high, each left ringing. */
+export const BASS_STEP = 0.11
 
 /** Start offsets (s) of `count` strings in a downstroke. */
-export function strumOffsets(count: number, instrument: FretInstrument): number[] {
+export function strumOffsets(count: number, instrument: DbInstrument): number[] {
   const { first, last } = STRUM_GAPS[instrument]
   const out: number[] = []
   for (let i = 0; i < count; i++) {
@@ -95,7 +111,7 @@ export function voicingStrings(v: Voicing, instrument: FretInstrument): { string
   }))
 }
 
-function strum(strings: { string: number; midi: number }[], instrument: FretInstrument): NoteEvent[] {
+function strum(strings: { string: number; midi: number }[], instrument: DbInstrument): NoteEvent[] {
   const offsets = strumOffsets(strings.length, instrument)
   const total = TUNINGS[instrument].length
   return strings.map(({ string, midi }, i) => ({
@@ -107,16 +123,28 @@ function strum(strings: { string: number; midi: number }[], instrument: FretInst
   }))
 }
 
-/** The displayed voicing, strummed down from the low (guitar) / top (ukulele G) string. */
+function arpeggio(strings: { string: number; midi: number }[]): NoteEvent[] {
+  const total = TUNINGS.bass.length
+  return strings.map(({ string, midi }, i) => ({
+    midi,
+    offset: i * BASS_STEP,
+    velocity: i === 0 ? 0.9 : 0.8,
+    target: string,
+    pan: (string / (total - 1) - 0.5) * STRING_PAN.bass,
+  }))
+}
+
+/** The displayed voicing: strummed down from the low (guitar) / top (ukulele G) string, arpeggiated on the bass. */
 export function fretChordNotes(v: Voicing, instrument: FretInstrument): NoteEvent[] {
-  return strum(voicingStrings(v, instrument), instrument)
+  const strings = voicingStrings(v, instrument)
+  return instrument === 'bass' ? arpeggio(strings) : strum(strings, instrument)
 }
 
 /**
  * A plain voicing when chords-db has none: chord tones stacked upwards at least a minor third
  * apart from the bass — guitar from E2–D#3 (up to 6 strings), ukulele from C4–B4 (4 strings).
  */
-export function fallbackFretNotes(chord: ParsedChord, instrument: FretInstrument): NoteEvent[] {
+export function fallbackFretNotes(chord: ParsedChord, instrument: DbInstrument): NoteEvent[] {
   const pcs = QUALITY_INTERVALS[chord.quality].map((i) => mod12(chord.rootPc + i))
   const bassPc = chord.bassPc ?? chord.rootPc
   const guitar = instrument === 'guitar'

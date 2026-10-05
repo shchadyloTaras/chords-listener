@@ -1,15 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { loadChordDb, lookupLabel, type FretInstrument } from '../diagrams/chordsDb'
+import { bassVoicings } from '../diagrams/bass'
+import { loadChordDb, lookupLabel, type DbInstrument } from '../diagrams/chordsDb'
 import { customScale, DEFAULT_HANDPAN_NOTES, formatHandpanNote, parseHandpanNote, presetScale } from '../handpan'
 import { parseChord } from '../music/chord'
 import { pcToName } from '../music/notes'
 import {
+  BASS_STEP,
   fallbackFretNotes,
   fretChordNotes,
   HANDPAN_STEP,
   handpanChordNotes,
   handpanFieldNote,
   handpanMidis,
+  HARMONIUM_SPREAD,
+  harmoniumChordNotes,
   pianoChordNotes,
   pianoKeyNote,
   pickChordIndex,
@@ -55,7 +59,7 @@ describe('piano: the staff voicing', () => {
 })
 
 describe('guitar / ukulele: the displayed chords-db voicing', () => {
-  async function first(instrument: FretInstrument, label: string) {
+  async function first(instrument: DbInstrument, label: string) {
     const db = await loadChordDb(instrument)
     const found = lookupLabel(db, instrument, label)
     return found && found.voicings.length ? fretChordNotes(found.voicings[0], instrument) : []
@@ -129,6 +133,39 @@ describe('guitar / ukulele: the displayed chords-db voicing', () => {
     const notes = await first('guitar', 'Gm')
     for (let i = 1; i < notes.length; i++) expect(notes[i].velocity).toBeLessThan(notes[i - 1].velocity)
     expect(notes[notes.length - 1].velocity).toBeGreaterThan(notes[0].velocity * 0.7)
+  })
+})
+
+describe('bass: the generated voicing', () => {
+  it('arpeggiates the shown shape low → high, 110 ms apart, the bass a bit stronger', () => {
+    const [shape] = bassVoicings(parseChord('Am')!).voicings
+    const notes = fretChordNotes(shape, 'bass')
+    expect(midis(notes)).toEqual([33, 36, 40, 45]) // A1 C2 E2 A2
+    expect(notes.map((n) => n.offset)).toEqual([0, 1, 2, 3].map((i) => i * BASS_STEP))
+    expect(notes.map((n) => n.target)).toEqual([0, 1, 2, 3])
+    expect(notes[0].velocity).toBeGreaterThan(notes[1].velocity)
+    for (const n of notes) expect(Math.abs(n.pan ?? 0)).toBeLessThanOrEqual(0.08)
+  })
+
+  it('skips muted strings and lights the sounding ones', () => {
+    const [shape] = bassVoicings(parseChord('C')!).voicings // x 3 2 0: C2 E2 G2
+    const notes = fretChordNotes(shape, 'bass')
+    expect(midis(notes)).toEqual([36, 40, 43])
+    expect(notes.map((n) => n.target)).toEqual([1, 2, 3])
+  })
+})
+
+describe('harmonium: the piano diagram, held together', () => {
+  it('plays the piano diagram notes, the right hand 10 ms after the bass', () => {
+    for (const label of ['C', 'F#m7', 'C/E']) {
+      const h = harmoniumChordNotes(label)
+      const p = pianoChordNotes(label)
+      expect(midis(h)).toEqual(midis(p))
+      expect(h.map((n) => n.target)).toEqual(p.map((n) => n.target))
+      expect(h[0].offset).toBe(0)
+      for (const n of h.slice(1)) expect(n.offset).toBeCloseTo(HARMONIUM_SPREAD, 6)
+    }
+    expect(harmoniumChordNotes('N')).toEqual([])
   })
 })
 

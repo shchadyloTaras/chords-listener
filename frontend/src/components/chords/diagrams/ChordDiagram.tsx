@@ -2,8 +2,10 @@ import { memo } from 'react'
 import clsx from 'clsx'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useT } from '../../../i18n'
-import { lookupVoicings, type FretInstrument } from '../../../lib/diagrams/chordsDb'
+import type { FretInstrument } from '../../../lib/diagrams/chordsDb'
+import { fretVoicings } from '../../../lib/diagrams/fretted'
 import { pianoVoicing } from '../../../lib/diagrams/piano'
+import { isFretted, isKeyboard } from '../../../lib/instruments'
 import { staffChord } from '../../../lib/diagrams/staff'
 import { parseChord } from '../../../lib/music/chord'
 import { chordTone } from '../../../lib/music/color'
@@ -19,8 +21,10 @@ import { useChordDb } from './useChordDb'
 
 const WIDTHS = {
   guitar: { sm: 64, md: 92, lg: 116 },
+  bass: { sm: 56, md: 80, lg: 100 },
   ukulele: { sm: 52, md: 76, lg: 96 },
   piano: { sm: 120, md: 168, lg: 210 },
+  harmonium: { sm: 120, md: 168, lg: 210 },
   handpan: { sm: 80, md: 124, lg: 148 },
 } as const
 
@@ -30,10 +34,11 @@ const STAFF_HEIGHTS = { sm: 72, md: 96, lg: 124 } as const
 export type DiagramSize = 'sm' | 'md' | 'lg'
 
 /**
- * Chord diagram for the selected instrument. Guitar / ukulele: chart from chords-db with a
- * voicing switcher (shared choice per chord); piano: 2-octave keyboard; handpan: the selected
- * scale with the chord's tone fields lit. A click plays the chord (a piano key / handpan field:
- * just that note); the notes light up while they sound.
+ * Chord diagram for the selected instrument. Guitar / ukulele: chart from chords-db, bass: generated
+ * shapes (lib/diagrams/bass.ts), each with a voicing switcher (shared choice per chord); piano /
+ * harmonium: 2-octave keyboard; handpan: the selected scale with the chord's tone fields lit. A
+ * click plays the chord (a piano key / handpan field: just that note); the notes light up while
+ * they sound.
  */
 export const ChordDiagram = memo(function ChordDiagram({
   label,
@@ -53,8 +58,8 @@ export const ChordDiagram = memo(function ChordDiagram({
   className?: string
 }) {
   const t = useT()
-  const fretted: FretInstrument | null = instrument === 'guitar' || instrument === 'ukulele' ? instrument : null
-  const db = useChordDb(fretted)
+  const fretted: FretInstrument | null = isFretted(instrument) ? instrument : null
+  const db = useChordDb(fretted === 'guitar' || fretted === 'ukulele' ? fretted : null)
   const vKey = `${instrument}:${label}`
   const chosen = useChordUi((s) => s.voicings[vKey] ?? 0)
   const setVoicing = useChordUi((s) => s.setVoicing)
@@ -87,7 +92,7 @@ export const ChordDiagram = memo(function ChordDiagram({
     return (
       <div
         className={clsx('flex items-center justify-center rounded-lg border border-dashed border-border text-faint', className)}
-        style={{ width, height: instrument === 'piano' ? width * 0.32 : width * 1.18 }}
+        style={{ width, height: isKeyboard(instrument) ? width * 0.32 : width * 1.18 }}
         aria-hidden
       >
         —
@@ -115,7 +120,7 @@ export const ChordDiagram = memo(function ChordDiagram({
           title={t('chords.staff.label', { chord: label, notes: right, bass: staff.bass.name })}
           clefTitles={{ treble: t('chords.staff.treble'), bass: t('chords.staff.bass') }}
         />
-        <PianoChart voicing={v} color={color} width={width} title={title} sounding={sounding} onKey={(k) => playPianoKey(label, k)} />
+        <PianoChart voicing={v} color={color} width={width} title={title} sounding={sounding} onKey={(k) => playPianoKey(label, k, { instrument })} />
         <figcaption className="font-mono text-[11px] tracking-wide text-muted">
           {parsed.bassPc != null && `${staff.bass.name} / `}
           {staff.treble.map((n) => n.name).join('  ')}
@@ -124,11 +129,10 @@ export const ChordDiagram = memo(function ChordDiagram({
     )
   }
 
-  if (!db) {
+  const found = fretVoicings(fretted, parsed, db)
+  if (!found) {
     return <div className={clsx('animate-pulse rounded-lg bg-surface-3/60', className)} style={{ width, height: width * 1.18 }} aria-hidden />
   }
-
-  const found = lookupVoicings(db, fretted, parsed)
   const count = found.voicings.length
   if (!count) {
     return (

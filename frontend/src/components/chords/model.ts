@@ -62,12 +62,12 @@ export function useBuildChordModel(track: Track): ChordModel {
   const unique = useMemo(() => uniqueChords(chords), [chords])
   const capo = useMemo(
     () =>
-      instrument === 'piano' || instrument === 'handpan'
-        ? null
-        : suggestCapo(
+      instrument === 'guitar' || instrument === 'ukulele'
+        ? suggestCapo(
             unique.map((u) => ({ label: u.label, weight: u.count })),
             instrument,
-          ),
+          )
+        : null,
     [unique, instrument],
   )
 
