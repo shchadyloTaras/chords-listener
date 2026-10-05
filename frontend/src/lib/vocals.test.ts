@@ -1,3 +1,5 @@
+import 'fake-indexeddb/auto'
+import { IDBFactory } from 'fake-indexeddb'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Job, VocalNotes } from '../types'
 
@@ -7,6 +9,7 @@ const api = vi.hoisted(() => ({
   getJob: vi.fn<(id: string) => Promise<Job>>(),
   listJobs: vi.fn<() => Promise<Job[]>>(),
   fetchTrackAudio: vi.fn<(track: { id: string; audioUrl: string }) => Promise<Blob>>(),
+  fetchMedia: vi.fn<(url: string, signal?: AbortSignal) => Promise<Blob>>(),
 }))
 
 vi.mock('./api', async () => {
@@ -16,6 +19,7 @@ vi.mock('./api', async () => {
 
 import { useJobs } from '../hooks/useJobs'
 import { ApiError } from './api'
+import { useAuth } from './auth'
 import { recentServerJobs } from './cloud/activity'
 import { refreshCloudHealth, useConnection } from './serverMode'
 import {
@@ -178,11 +182,29 @@ describe('vocals client', () => {
     const blob = await fetchStem(track, 'instruments')
     expect(await blob.text()).toBe('mp3')
     expect(api.apiFetch.mock.calls[0][0]).toBe(`/tracks/${track.id}/stems/instruments`)
-    api.fetchTrackAudio.mockResolvedValue(new Blob(['signed']))
+    api.fetchMedia.mockResolvedValue(new Blob(['signed']))
     await fetchStem({ ...track, stemUrls: { instruments: '/api/tracks/x/stems/instruments?sig=1' } }, 'instruments')
-    expect(api.fetchTrackAudio).toHaveBeenCalledWith({ id: track.id, audioUrl: '/api/tracks/x/stems/instruments?sig=1' }, undefined)
+    expect(api.fetchMedia).toHaveBeenCalledWith('/api/tracks/x/stems/instruments?sig=1', undefined)
+    // a stem is not the track's audio (the copy of that kept on this device must not stand in for it)
+    expect(api.fetchTrackAudio).not.toHaveBeenCalled()
     api.apiFetch.mockResolvedValue(new Response(JSON.stringify({ detail: 'gone', code: 'not_found' }), { status: 404 }))
     await expect(fetchStem(track, 'vocals')).rejects.toMatchObject({ code: 'not_found', status: 404 })
+  })
+
+  it('cloud: vocal notes found once come from this device next time', async () => {
+    globalThis.indexedDB = new IDBFactory()
+    useConnection.setState({ backend: 'cloud' })
+    useAuth.setState({ user: { uid: 'uid42', email: null } })
+    try {
+      api.apiRequest.mockResolvedValue(NOTES)
+      await loadVocals(track)
+      resetVocals()
+      await loadVocals(track)
+      expect(state().status).toBe('ready')
+      expect(api.apiRequest).toHaveBeenCalledTimes(1)
+    } finally {
+      useAuth.setState({ user: null })
+    }
   })
 
   it('polls a running job calmly', () => {

@@ -1,0 +1,144 @@
+// The home page's library: cache-first (the list this device keeps of the cloud library shows at once and is
+// asked again only when stale), from the server when something changed.
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Job, TrackSummary } from '../../types'
+
+// the store listens for the page going away; settings are persisted
+vi.hoisted(() => {
+  const data = new Map<string, string>()
+  vi.stubGlobal('window', Object.assign(new EventTarget(), { setTimeout, clearTimeout }))
+  vi.stubGlobal('localStorage', {
+    getItem: (k: string) => data.get(k) ?? null,
+    setItem: (k: string, v: string) => void data.set(k, v),
+    removeItem: (k: string) => void data.delete(k),
+  })
+})
+
+const api = vi.hoisted(() => ({
+  listTracks: vi.fn<(signal?: AbortSignal, opts?: { force?: boolean }) => Promise<TrackSummary[]>>(),
+  listCachedTracks: vi.fn<() => Promise<TrackSummary[] | null>>(),
+}))
+
+vi.mock('../../lib/api', async (importOriginal) => ({ ...(await importOriginal<typeof import('../../lib/api')>()), ...api }))
+
+// the session store only (no Firebase)
+vi.mock('../../lib/auth', async () => {
+  const { create } = await import('zustand')
+  return {
+    useAuth: create<{ user: { uid: string; email: string | null } | null; ready: boolean }>()(() => ({ user: null, ready: true })),
+    getIdToken: async () => null,
+    requestSignIn: async () => false,
+  }
+})
+
+import { useJobs } from '../../hooks/useJobs'
+import { ApiError } from '../../lib/api'
+import { useAuth } from '../../lib/auth'
+import { refreshTracks, useTracks } from './tracksStore'
+
+const song = (id: string): TrackSummary => ({ id, title: id, duration: 1, source: { type: 'file' }, createdAt: '2026-10-05T00:00:00Z' })
+const ids = () => useTracks.getState().tracks?.map((t) => t.id) ?? null
+
+function deferred<T>() {
+  let resolve!: (v: T) => void
+  let reject!: (e: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+beforeEach(() => {
+  api.listTracks.mockReset()
+  api.listCachedTracks.mockReset().mockResolvedValue(null)
+  useTracks.setState({ tracks: null, loading: false, error: null, pendingDelete: {} })
+  useAuth.setState({ user: { uid: 'uid42', email: null }, ready: true })
+})
+
+afterEach(() => {
+  useJobs.setState({ jobs: {} })
+})
+
+describe('refreshTracks', () => {
+  it('shows the list kept on this device at once, then what the server says', async () => {
+    api.listCachedTracks.mockResolvedValue([song('a')])
+    const server = deferred<TrackSummary[]>()
+    api.listTracks.mockReturnValue(server.promise)
+    const done = refreshTracks()
+    await vi.waitFor(() => expect(ids()).toEqual(['a']))
+    expect(api.listTracks).toHaveBeenCalledWith(undefined, { force: false })
+    server.resolve([song('b'), song('a')])
+    await done
+    expect(ids()).toEqual(['b', 'a'])
+  })
+
+  it('forced: asks the server', async () => {
+    api.listTracks.mockResolvedValue([song('a')])
+    await refreshTracks(true)
+    expect(api.listCachedTracks).not.toHaveBeenCalled()
+    expect(api.listTracks).toHaveBeenCalledWith(undefined, { force: true })
+    expect(ids()).toEqual(['a'])
+  })
+
+  it('forced while a cache-first refresh runs: asks the server right after it', async () => {
+    const first = deferred<TrackSummary[]>()
+    api.listTracks.mockReturnValueOnce(first.promise).mockResolvedValueOnce([song('new'), song('a')])
+    const cacheFirst = refreshTracks()
+    const forced = refreshTracks(true)
+    // a second forced one joins it
+    expect(refreshTracks(true)).toBe(forced)
+    first.resolve([song('a')])
+    await cacheFirst
+    await forced
+    expect(api.listTracks).toHaveBeenCalledTimes(2)
+    expect(api.listTracks.mock.calls[1][1]).toEqual({ force: true })
+    expect(ids()).toEqual(['new', 'a'])
+  })
+
+  it('the server unreachable: the list kept here stays on screen', async () => {
+    api.listCachedTracks.mockResolvedValue([song('a')])
+    api.listTracks.mockRejectedValue(new ApiError('down', 'network'))
+    await refreshTracks()
+    expect(ids()).toEqual(['a'])
+    expect(useTracks.getState().error).toBe('network')
+  })
+
+  it('a finished job asks the server for the new track', async () => {
+    api.listTracks.mockResolvedValue([song('a')])
+    const job: Job = { id: 'j1', status: 'analyzing', progress: 0.5, message: '', createdAt: '2026-10-05T00:00:00Z' }
+    useJobs.setState({ jobs: { j1: job } })
+    useJobs.setState({ jobs: { j1: { ...job, status: 'done', trackId: 'a' } } })
+    await vi.waitFor(() => expect(api.listTracks).toHaveBeenCalledWith(undefined, { force: true }))
+  })
+
+  it('a list on its way for the previous account never shows for the next one', async () => {
+    const old = deferred<TrackSummary[]>()
+    api.listTracks.mockReturnValueOnce(old.promise).mockResolvedValueOnce([song('theirs')])
+    const first = refreshTracks()
+    await vi.waitFor(() => expect(api.listTracks).toHaveBeenCalledTimes(1))
+    useAuth.setState({ user: { uid: 'other7', email: null } })
+    const second = refreshTracks()
+    old.resolve([song('mine')])
+    await first
+    await second
+    expect(ids()).toEqual(['theirs'])
+    expect(useTracks.getState().loading).toBe(false)
+  })
+
+  it('another account signs in, or the user signs out: the list in memory is not theirs', () => {
+    useTracks.setState({ tracks: [song('mine')] })
+    useAuth.setState({ user: { uid: 'other7', email: null } })
+    expect(useTracks.getState().tracks).toBeNull()
+    useTracks.setState({ tracks: [song('theirs')] })
+    useAuth.setState({ user: null })
+    expect(useTracks.getState().tracks).toBeNull()
+  })
+
+  it('a guest signing in keeps their browser tracks on screen meanwhile', () => {
+    useAuth.setState({ user: null })
+    useTracks.setState({ tracks: [song('local-1')] })
+    useAuth.setState({ user: { uid: 'uid42', email: null } })
+    expect(ids()).toEqual(['local-1'])
+  })
+})

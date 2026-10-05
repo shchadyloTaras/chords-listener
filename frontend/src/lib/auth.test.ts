@@ -43,6 +43,10 @@ vi.mock('firebase/auth', () => ({
 
 vi.mock('./settingsSync', () => ({ startSettingsSync: () => () => undefined }))
 
+// the cloud library kept on this device (lib/cloud/cache) belongs to the signed-in account alone
+const cache = vi.hoisted(() => ({ clearCloudCache: vi.fn(async () => undefined) }))
+vi.mock('./cloud/cache', () => cache)
+
 const MARKER = 'chords-listener-auth'
 let storage: Map<string, string>
 
@@ -75,6 +79,7 @@ beforeEach(() => {
   fb.fail = false
   fb.saved = null
   fb.listeners.clear()
+  cache.clearCloudCache.mockClear()
   stubStorage()
 })
 
@@ -197,6 +202,28 @@ describe('a browser that signed in before', () => {
     await signOut()
     expect(useAuth.getState().user).toBeNull()
     expect(storage.has(MARKER)).toBe(false)
+  })
+
+  it('signing out forgets the cloud library kept on this device', async () => {
+    fb.saved = { uid: 'uid42', email: 'listener@example.com' }
+    const { signOut, startAuth, useAuth } = await boot()
+    stop = startAuth()
+    await vi.waitFor(() => expect(useAuth.getState().user).not.toBeNull())
+    // the same account coming back keeps it
+    expect(cache.clearCloudCache).not.toHaveBeenCalled()
+    await signOut()
+    expect(cache.clearCloudCache).toHaveBeenCalled()
+  })
+
+  it('another account signing in forgets the first one’s', async () => {
+    fb.saved = { uid: 'uid42', email: 'listener@example.com' }
+    const { startAuth, useAuth } = await boot()
+    stop = startAuth()
+    await vi.waitFor(() => expect(useAuth.getState().user?.uid).toBe('uid42'))
+    // e.g. another tab signed in as someone else
+    fb.emit({ uid: 'other7', email: 'other@example.com' })
+    await vi.waitFor(() => expect(useAuth.getState().user?.uid).toBe('other7'))
+    expect(cache.clearCloudCache).toHaveBeenCalledTimes(1)
   })
 
   it('goes on signed out when Firebase cannot be loaded', async () => {

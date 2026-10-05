@@ -3,14 +3,16 @@
 //   POST /api/tracks/{id}/vocals → Job (kind 'vocals': Demucs separation, then melody tracking),
 //        polled until done; 501 / code 'unavailable' when the server has no vocal transcription.
 //   GET  /api/tracks/{id}/stems/{vocals|instruments} → the separated audio (mp3)
-// Browser tracks (ids "local-…") and browser mode have no server to do this.
+// Browser tracks (ids "local-…") and browser mode have no server to do this. Vocal notes found in the cloud are
+// kept on the device (lib/cloud/cache) and read from there next time.
 import { useEffect } from 'react'
 import { create } from 'zustand'
 import { useJobs } from '../hooks/useJobs'
 import { useApp } from '../store'
 import type { Job, Track, TrackNotes, VocalNotes } from '../types'
-import { ApiError, apiFetch, apiRequest, fetchTrackAudio, getJob, listJobs, toApiError } from './api'
+import { ApiError, apiFetch, apiRequest, cloudCacheUid, fetchMedia, getJob, listJobs, toApiError } from './api'
 import { rememberServerJob } from './cloud/activity'
+import { cachedJson, saveJson } from './cloud/cache'
 import { isLocalId } from './local'
 import { cachedFeatures, needCloudHealth, useConnection } from './serverMode'
 import { decodeNotes, NotesFormatError } from './transcription/compact'
@@ -94,7 +96,7 @@ export function useStems(track: (Pick<Track, 'id'> & Partial<Pick<Track, 'stems'
 /** Downloads a stem's audio: a signed URL from the track when the server gives one, else the API path. */
 export async function fetchStem(track: Pick<Track, 'id'> & { stemUrls?: Partial<Record<StemName, string>> | null }, name: StemName, signal?: AbortSignal): Promise<Blob> {
   const signed = track.stemUrls?.[name]
-  if (signed) return fetchTrackAudio({ id: track.id, audioUrl: signed }, signal)
+  if (signed) return fetchMedia(signed, signal)
   const res = await apiFetch(`/tracks/${encodeURIComponent(track.id)}/stems/${name}`, { signal })
   if (!res.ok) {
     let detail = res.statusText || `HTTP ${res.status}`
@@ -133,10 +135,20 @@ function markTrack(id: string): void {
 const loading = new Map<string, Promise<void>>()
 const polling = new Set<string>()
 
+/** The track's vocal notes: kept on this device (cloud), else the server's — kept from then on. */
+async function vocalNotes(id: string): Promise<VocalNotes> {
+  const uid = cloudCacheUid()
+  const kept = uid ? await cachedJson<VocalNotes>(uid, 'vocals', id) : null
+  if (kept) return kept
+  const data = await apiRequest<VocalNotes>(`/tracks/${encodeURIComponent(id)}/vocals`, { cache: 'no-store' })
+  if (uid && cloudCacheUid() === uid) await saveJson(uid, 'vocals', id, data)
+  return data
+}
+
 async function fetchVocals(track: VocalsTrack): Promise<void> {
   const { id } = track
   try {
-    const data = await apiRequest<VocalNotes>(`/tracks/${encodeURIComponent(id)}/vocals`, { cache: 'no-store' })
+    const data = await vocalNotes(id)
     setState(id, { status: 'ready', notes: data, index: validVocals(data, track.duration) })
     if (!track.vocals || !track.stems?.length) markTrack(id)
   } catch (err) {

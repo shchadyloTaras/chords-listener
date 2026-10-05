@@ -1,6 +1,17 @@
 import { fetchAudioBlobUrl } from '../../../lib/api'
 import type { PlaybackSource, SourceEvents } from './types'
 
+/** What the owner of the audio wants to know / can do about it (e.g. the cloud copy kept on this device). */
+export interface AudioMedia {
+  /** the browser can play the file through (once): e.g. time to download a copy of it */
+  onReady?(): void
+  /**
+   * The URL does not play: another one for the same audio (a fresh signed URL, a Blob URL — owned by the source
+   * from then on), or null. Without it, a cross-origin http(s) URL is retried as a Blob (see tryFallback).
+   */
+  recover?(): Promise<string | null>
+}
+
 /**
  * HTMLAudioElement-backed source (track.audioUrl, Range-capable endpoint).
  * `offset`: the audio file starts at this track time (a recording linked to a YouTube video and
@@ -13,9 +24,11 @@ export class AudioSource implements PlaybackSource {
   private disposers: Array<() => void> = []
   private wantPlay = false
   private readonly offset: number
+  private readonly media: AudioMedia
 
-  constructor(url: string, events: SourceEvents, offset = 0) {
+  constructor(url: string, events: SourceEvents, offset = 0, media: AudioMedia = {}) {
     this.events = events
+    this.media = media
     this.offset = Number.isFinite(offset) && offset > 0 ? offset : 0
     const el = new Audio()
     el.preload = 'metadata'
@@ -40,8 +53,14 @@ export class AudioSource implements PlaybackSource {
     }
     on('loadedmetadata', pushDuration)
     on('durationchange', pushDuration)
+    let ready = false
+    on('canplaythrough', () => {
+      if (ready) return
+      ready = true
+      media.onReady?.()
+    })
     on('error', () => {
-      if (this.tryBlobFallback(url)) return
+      if (this.tryFallback(url)) return
       const code = el.error?.code
       events.onError(code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED ? 'unsupported' : 'media')
     })
@@ -52,29 +71,39 @@ export class AudioSource implements PlaybackSource {
   private dead = false
 
   /**
-   * Audio from the user's local server inside a page on another origin (GitHub Pages): some browsers
-   * (Safari) refuse to stream http://localhost media there while fetch() works — play it from a Blob.
+   * Once per source: the owner's other URL for the audio (AudioMedia.recover), else — audio from the user's
+   * local server inside a page on another origin (GitHub Pages): some browsers (Safari) refuse to stream
+   * http://localhost media there while fetch() works — play it from a Blob.
    */
-  private tryBlobFallback(url: string): boolean {
-    if (this.fallbackTried || this.dead || !/^https?:\/\//i.test(url)) return false
-    try {
-      if (new URL(url).origin === location.origin) return false
-    } catch {
-      return false
+  private tryFallback(url: string): boolean {
+    if (this.fallbackTried || this.dead) return false
+    let next: Promise<string | null>
+    if (this.media.recover) next = this.media.recover()
+    else {
+      if (!/^https?:\/\//i.test(url)) return false
+      try {
+        if (new URL(url).origin === location.origin) return false
+      } catch {
+        return false
+      }
+      next = fetchAudioBlobUrl(url)
     }
     this.fallbackTried = true
-    void fetchAudioBlobUrl(url).then((blobUrl) => {
-      if (this.dead || !blobUrl) {
-        if (blobUrl) URL.revokeObjectURL(blobUrl)
-        else if (!this.dead) this.events.onError('media')
-        return
-      }
-      this.blobUrl = blobUrl
-      const time = this.el.currentTime
-      this.el.src = blobUrl
-      if (time > 0) this.el.currentTime = time
-      if (this.wantPlay) this.play()
-    })
+    void next
+      .catch(() => null)
+      .then((nextUrl) => {
+        const owned = nextUrl?.startsWith('blob:') ? nextUrl : null
+        if (this.dead || !nextUrl) {
+          if (owned) URL.revokeObjectURL(owned)
+          else if (!this.dead) this.events.onError('media')
+          return
+        }
+        this.blobUrl = owned
+        const time = this.el.currentTime
+        this.el.src = nextUrl
+        if (time > 0) this.el.currentTime = time
+        if (this.wantPlay) this.play()
+      })
     return true
   }
 

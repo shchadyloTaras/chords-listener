@@ -5,9 +5,13 @@
 //    media URLs in the cloud) are resolved against it;
 //  · browser mode — no server: files and recordings are analyzed in the page (lib/local), tracks live in
 //    IndexedDB. Ids starting with "local-" always belong to the browser library, in any mode.
+// The signed-in user's cloud library is kept on the device (lib/cloud/cache): the list, opened tracks, their
+// audio and notes are served from there without waking the cloud, and kept in step with edits, deletes and
+// finished jobs. Nothing is kept for a local server or a guest.
 import type { ChordSegment, ErrorCode, Health, Job, Track, TrackNotes, TrackSource, TrackSummary } from '../types'
 import { getIdToken, requestSignIn, useAuth } from './auth'
-import { forgetServerJob, rememberServerJob } from './cloud/activity'
+import { forgetServerJob, recentServerJobs, rememberServerJob } from './cloud/activity'
+import * as cache from './cloud/cache'
 import { StorageUploadError, uploadToStorage } from './cloud/storage'
 import {
   cancelLocalTrackJobs,
@@ -32,6 +36,7 @@ import {
   resolveServerUrl,
   SAME_ORIGIN_API,
   serverFetch,
+  useConnection,
   whenSettled,
   type ConnectionState,
 } from './serverMode'
@@ -198,6 +203,38 @@ async function withSessionRetry(
   return res
 }
 
+// ------------------------------------------------------------------ cloud library on this device
+
+/**
+ * The account whose cloud library this device keeps (lib/cloud/cache): the signed-in user while the API is the
+ * cloud; null for a local server, browser mode and guests (nothing is kept for them).
+ */
+export function cloudCacheUid(conn: ConnectionState = useConnection.getState()): string | null {
+  if (conn.status !== 'server' || conn.backend !== 'cloud') return null
+  return useAuth.getState().user?.uid ?? null
+}
+
+/** `uid` (taken when a request went out) still owns what is kept here: an answer for another account is not. */
+function stillKeeping(uid: string | null): uid is string {
+  return !!uid && cloudCacheUid() === uid
+}
+
+/** Keeps a track the cloud just sent (for `uid`, see stillKeeping); returns it with URLs that work from the page. */
+async function keepTrack(uid: string | null, track: Track): Promise<Track> {
+  if (stillKeeping(uid)) await cache.saveTrack(uid, track)
+  return withServerUrls(track)
+}
+
+/** A job that is over changed its track on the server (re-analysis, vocals): its JSON is asked again next time. */
+async function noteFinishedJob(job: Job): Promise<void> {
+  const uid = job.status === 'done' && job.trackId ? cloudCacheUid() : null
+  if (uid) await cache.forgetTrack(uid, job.trackId as string, ['track', 'vocals'])
+}
+
+function byNewest(tracks: TrackSummary[]): TrackSummary[] {
+  return tracks.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+}
+
 // ------------------------------------------------------------------ requests
 
 async function fetchOnce(conn: ServerConn, path: string, init: RequestInit, forceRefresh: boolean): Promise<Response> {
@@ -310,7 +347,11 @@ export async function listJobs(signal?: AbortSignal): Promise<Job[]> {
   const conn = await whenSettled()
   const browserJobs = listLocalJobs()
   if (conn.status !== 'server') return browserJobs
-  const jobs = (await request<Job[]>('/jobs', { signal, cache: 'no-store' })).map(serverJob)
+  const raw = await request<Job[]>('/jobs', { signal, cache: 'no-store' })
+  // jobs started here that ended while the page was closed (a re-analysis, vocals): their tracks changed
+  const remembered = new Set(recentServerJobs())
+  await Promise.all(raw.filter((j) => remembered.has(j.id)).map(noteFinishedJob))
+  const jobs = raw.map(serverJob)
   return [...browserJobs, ...jobs].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 }
 
@@ -322,39 +363,69 @@ export async function getJob(id: string, signal?: AbortSignal): Promise<Job> {
   }
   const job = await request<Job>(`/jobs/${enc(id)}`, { signal, cache: 'no-store' })
   if (job.status === 'done' || job.status === 'error') forgetServerJob(job.id)
+  // before anyone reacts to it (reloads the list, the vocals): what is kept of its track is already stale
+  await noteFinishedJob(job)
   return serverJob(job)
 }
 
-/** Server / cloud library (when connected) plus the tracks analyzed in this browser, newest first. */
-export async function listTracks(signal?: AbortSignal): Promise<TrackSummary[]> {
+/**
+ * Server / cloud library (when connected) plus the tracks analyzed in this browser, newest first. The cloud's
+ * list comes from this device while younger than LIST_TTL_MS (lib/cloud/cache); `force` asks the cloud now.
+ */
+export async function listTracks(signal?: AbortSignal, opts: { force?: boolean } = {}): Promise<TrackSummary[]> {
   const conn = await whenSettled()
   const browserTracks = await local(listLocalTracks)
   if (conn.status !== 'server') return browserTracks
+  const uid = cloudCacheUid(conn)
+  const kept = uid ? await cache.cachedList(uid) : null
+  if (kept && !opts.force && cache.isFresh(kept.savedAt, cache.LIST_TTL_MS))
+    return byNewest([...browserTracks, ...kept.tracks.map(withServerUrls)])
   let serverTracks: TrackSummary[]
   try {
-    serverTracks = (await request<TrackSummary[]>('/tracks', { signal, cache: 'no-store' })).map(withServerUrls)
+    const raw = await request<TrackSummary[]>('/tracks', { signal, cache: 'no-store' })
+    if (stillKeeping(uid)) await cache.saveList(uid, raw)
+    serverTracks = raw.map(withServerUrls)
   } catch (err) {
     const e = toApiError(err)
-    // the server just went away: show what this browser has (the next probe switches modes)
+    // the server just went away: show what this device has (the next probe switches modes)
+    if (e.code === 'network' && kept) return byNewest([...browserTracks, ...kept.tracks.map(withServerUrls)])
     if (e.code === 'network' && browserTracks.length) return browserTracks
     throw e
   }
-  return [...browserTracks, ...serverTracks].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  return byNewest([...browserTracks, ...serverTracks])
 }
 
+/**
+ * The library as this device last saw it, without asking anyone: the browser's tracks plus the cloud list
+ * kept here, whatever its age. Null when no cloud list is kept (not the cloud, or never listed).
+ */
+export async function listCachedTracks(): Promise<TrackSummary[] | null> {
+  const uid = cloudCacheUid(await whenSettled())
+  const kept = uid ? await cache.cachedList(uid) : null
+  if (!kept) return null
+  const browserTracks = await local(listLocalTracks).catch(() => [])
+  return byNewest([...browserTracks, ...kept.tracks.map(withServerUrls)])
+}
+
+/** A cloud track opened in the last TRACK_TTL_MS comes from this device (lib/cloud/cache). */
 export async function getTrack(id: string, signal?: AbortSignal): Promise<Track> {
   if (isLocalId(id)) return local(() => getLocalTrack(id))
-  return withServerUrls(await request<Track>(`/tracks/${enc(id)}`, { signal }))
+  const uid = cloudCacheUid(await whenSettled())
+  const kept = uid ? await cache.cachedTrack(uid, id) : null
+  if (kept) return withServerUrls(kept)
+  return keepTrack(uid, await request<Track>(`/tracks/${enc(id)}`, { signal }))
 }
 
 export async function updateTrack(id: string, patch: TrackPatch): Promise<Track> {
   if (isLocalId(id)) return local(() => patchLocalTrack(id, patch))
-  return withServerUrls(await request<Track>(`/tracks/${enc(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }))
+  const uid = cloudCacheUid()
+  return keepTrack(uid, await request<Track>(`/tracks/${enc(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }))
 }
 
 export async function resetTrack(id: string): Promise<Track> {
   if (isLocalId(id)) return local(() => resetLocalTrack(id))
-  return withServerUrls(await request<Track>(`/tracks/${enc(id)}/reset`, { method: 'POST' }))
+  const uid = cloudCacheUid()
+  return keepTrack(uid, await request<Track>(`/tracks/${enc(id)}/reset`, { method: 'POST' }))
 }
 
 export async function reanalyzeTrack(id: string, options?: JobOptions): Promise<Job> {
@@ -372,7 +443,16 @@ export async function deleteTrack(id: string, opts: { keepalive?: boolean } = {}
     cancelLocalTrackJobs(id)
     return local(() => deleteLocalTrack(id))
   }
-  return request(`/tracks/${enc(id)}`, { method: 'DELETE', keepalive: opts.keepalive })
+  const uid = cloudCacheUid()
+  // the page is going away (the answer may never be read): forget it here right now
+  const forgotten = uid && opts.keepalive ? cache.forgetTrack(uid, id) : null
+  try {
+    await request(`/tracks/${enc(id)}`, { method: 'DELETE', keepalive: opts.keepalive })
+  } catch (err) {
+    if (uid && toApiError(err).code === 'not_found') await cache.forgetTrack(uid, id)
+    throw err
+  }
+  if (uid) await (forgotten ?? cache.forgetTrack(uid, id))
 }
 
 // ---------------------------------------------------------------- live piano notes
@@ -380,8 +460,13 @@ export async function deleteTrack(id: string, opts: { keepalive?: boolean } = {}
 /** The track's transcribed notes (live piano); null when they have not been computed yet. */
 export async function getTrackNotes(id: string, signal?: AbortSignal): Promise<TrackNotes | null> {
   if (isLocalId(id)) return local(() => getLocalNotes(id))
+  const uid = cloudCacheUid(await whenSettled())
+  const kept = uid ? await cache.cachedJson<TrackNotes>(uid, 'notes', id) : null
+  if (kept) return kept
   try {
-    return await request<TrackNotes>(`/tracks/${enc(id)}/notes`, { signal, cache: 'no-store' })
+    const notes = await request<TrackNotes>(`/tracks/${enc(id)}/notes`, { signal, cache: 'no-store' })
+    if (stillKeeping(uid)) await cache.saveJson(uid, 'notes', id, notes)
+    return notes
   } catch (err) {
     const e = toApiError(err)
     if (e.code === 'not_found') return null
@@ -392,28 +477,56 @@ export async function getTrackNotes(id: string, signal?: AbortSignal): Promise<T
 /** Stores (replaces) the track's transcribed notes, so they are computed only once. */
 export async function saveTrackNotes(id: string, notes: TrackNotes): Promise<void> {
   if (isLocalId(id)) return local(() => putLocalNotes(id, notes))
+  const uid = cloudCacheUid()
   await request<unknown>(`/tracks/${enc(id)}/notes`, { method: 'PUT', body: JSON.stringify(notes) })
+  if (stillKeeping(uid)) await cache.saveJson(uid, 'notes', id, notes)
 }
 
-/** The whole audio file of a track, for analysis in the page (the stored Blob for browser tracks). */
-export async function fetchTrackAudio(track: Pick<Track, 'id' | 'audioUrl'>, signal?: AbortSignal): Promise<Blob> {
-  if (isLocalId(track.id)) return local(() => localAudio(track.id))
-  if (!track.audioUrl) throw new ApiError('This track has no audio', 'not_found', 404)
-  let res: Response
+async function mediaResponse(url: string, signal?: AbortSignal): Promise<Response> {
   try {
     // cloud media URLs are signed: no Authorization header needed (or wanted: it would force a preflight)
-    res = await serverFetch(new URL(track.audioUrl, location.href).href, { signal })
+    return await serverFetch(new URL(url, location.href).href, { signal })
   } catch (err) {
     const e = toApiError(err)
     if (e.code === 'network') noteServerTrouble()
     throw e
   }
+}
+
+async function mediaBlob(res: Response): Promise<Blob> {
   if (!res.ok) throw await errorFromResponse(res)
   try {
     return await res.blob()
   } catch (err) {
     throw toApiError(err)
   }
+}
+
+/** A media file of a server (e.g. a cloud stem by its signed URL), downloaded whole and not kept. */
+export async function fetchMedia(url: string, signal?: AbortSignal): Promise<Blob> {
+  return mediaBlob(await mediaResponse(url, signal))
+}
+
+/**
+ * The whole audio file of a track, for analysis in the page (the stored Blob for browser tracks). A cloud track's
+ * comes from this device when kept there, and what is downloaded is kept (lib/cloud/cache). A signed URL the cloud
+ * refuses (401: it ran out) gets the track asked again once, for a fresh one.
+ */
+export async function fetchTrackAudio(track: Pick<Track, 'id' | 'audioUrl'>, signal?: AbortSignal): Promise<Blob> {
+  if (isLocalId(track.id)) return local(() => localAudio(track.id))
+  const uid = cloudCacheUid()
+  const kept = uid ? await cache.cachedAudio(uid, track.id) : null
+  if (kept) return kept
+  if (!track.audioUrl) throw new ApiError('This track has no audio', 'not_found', 404)
+  let res = await mediaResponse(track.audioUrl, signal)
+  if (res.status === 401 && uid) {
+    await cache.forgetTrack(uid, track.id, ['track'])
+    const fresh = await getTrack(track.id, signal)
+    res = await mediaResponse(fresh.audioUrl, signal)
+  }
+  const blob = await mediaBlob(res)
+  if (stillKeeping(uid) && blob.size > 0) await cache.saveAudio(uid, track.id, blob)
+  return blob
 }
 
 /** Playback URL of a server track (browser tracks get an object URL from getTrack; cloud tracks a signed one). */

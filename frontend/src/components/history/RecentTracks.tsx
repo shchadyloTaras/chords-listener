@@ -163,7 +163,7 @@ export function RecentTracks() {
   }, [status, apiBase])
 
   // a track moved to the cloud: the library changed
-  useEffect(() => onTransferDone(() => void refreshTracks()), [])
+  useEffect(() => onTransferDone(() => void refreshTracks(true)), [])
 
   const visible = useMemo(() => tracks?.filter((tr) => !pending[tr.id]) ?? null, [tracks, pending])
   const movable = useMemo(
@@ -181,7 +181,7 @@ export function RecentTracks() {
             variant="ghost"
             className="mt-2 -ml-3"
             icon={<RefreshCw className={clsx('size-4', loading && 'animate-spin')} />}
-            onClick={() => void refreshTracks()}
+            onClick={() => void refreshTracks(true)}
           >
             {t('core.retry')}
           </Button>
@@ -207,11 +207,19 @@ export function RecentTracks() {
 
   return (
     <section className="mt-14" aria-labelledby="recent-heading">
-      <div className="mb-2 flex items-baseline justify-between px-2">
+      <div className="mb-2 flex items-center justify-between gap-2 px-2">
         <h2 id="recent-heading" className="font-display text-lg font-semibold tracking-tight">
           {t('core.history.title')}
         </h2>
-        <span className="text-sm text-faint">{t(`core.history.count.${pluralCategory(lang, visible.length)}`, { n: visible.length })}</span>
+        <div className="flex items-center gap-1">
+          <span className="text-sm text-faint">{t(`core.history.count.${pluralCategory(lang, visible.length)}`, { n: visible.length })}</span>
+          {/* the cloud's list may come from this device: ask the server now */}
+          {status === 'server' && (
+            <IconButton label={t('core.history.refresh')} size="sm" onClick={() => void refreshTracks(true)} className="-mr-2">
+              <RefreshCw className={clsx('size-4', loading && 'animate-spin')} />
+            </IconButton>
+          )}
+        </div>
       </div>
       {movable.length > 0 && (
         <div className="mb-3 flex flex-col gap-2 rounded-xl border border-border bg-surface px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">

@@ -1,7 +1,7 @@
 import { t } from '../../i18n'
 import { useApp, type PlayerController } from '../../store'
 import type { Track } from '../../types'
-import { AudioSource } from './sources/audioSource'
+import { AudioSource, type AudioMedia } from './sources/audioSource'
 import { ClockSource } from './sources/clockSource'
 import type { PlaybackSource, SourceEvents } from './sources/types'
 
@@ -33,10 +33,11 @@ export class PlaybackEngine {
     getTime: () => this.active?.getTime() ?? 0,
   }
 
-  constructor(track: Track) {
+  /** `media`: hooks for the track's audio (see AudioMedia), e.g. the cloud copy kept on this device. */
+  constructor(track: Track, media?: AudioMedia) {
     this.base = this.create((events) =>
       track.audioUrl
-        ? new AudioSource(track.audioUrl, events, track.startOffset ?? 0)
+        ? new AudioSource(track.audioUrl, events, track.startOffset ?? 0, media)
         : new ClockSource(track.duration, events),
     )
     this.activate(this.base)

@@ -4,10 +4,13 @@
 // Firebase is loaded on demand into separate chunks, so a blocked or unreachable Firebase only
 // disables the account features, never the app. A guest never loads it: only opening the account
 // dialog does, or a startup in a browser that has signed in before (lib/authMarker.ts).
+// The cloud library kept on the device (lib/cloud/cache) belongs to the signed-in account alone: it goes on
+// sign-out and when another account signs in.
 import type { Auth } from 'firebase/auth'
 import { create } from 'zustand'
 import { useApp } from '../store'
 import { findLegacySession, onSignInElsewhere, rememberSignIn, signedInBefore } from './authMarker'
+import { clearCloudCache } from './cloud/cache'
 
 export interface AuthUser {
   uid: string
@@ -64,6 +67,9 @@ function mirror({ auth, sdk }: LoadedAuth): void {
   let stopSync: (() => void) | undefined
   let session = 0
   const stopAuth = sdk.onAuthStateChanged(auth, (user) => {
+    const before = useAuth.getState().user?.uid ?? null
+    // signed out (here, in another tab, the session gone) or someone else signed in: what was kept is not theirs
+    if (!user || (before !== null && before !== user.uid)) void clearCloudCache()
     rememberSignIn(!!user)
     useAuth.setState({ user: user && { uid: user.uid, email: user.email }, ready: true })
     stopSync?.()
@@ -174,6 +180,7 @@ export async function signOut() {
   const { auth, sdk } = await accountSdk()
   await sdk.signOut(auth)
   rememberSignIn(false)
+  await clearCloudCache()
 }
 
 /**

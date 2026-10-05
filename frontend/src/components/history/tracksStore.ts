@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import * as api from '../../lib/api'
 import { toApiError, type ClientErrorCode } from '../../lib/api'
+import { useAuth } from '../../lib/auth'
 import { t } from '../../i18n'
 import { useApp } from '../../store'
 import type { TrackSummary } from '../../types'
@@ -16,30 +17,67 @@ interface TracksState {
 
 export const useTracks = create<TracksState>()(() => ({ tracks: null, loading: false, error: null, pendingDelete: {} }))
 
-let inflight: Promise<void> | null = null
+let inflight: { promise: Promise<void>; force: boolean } | null = null
+let forcedNext: Promise<void> | null = null
+/** bumps when the session changes (sign-in, sign-out, another account): a list loaded for the previous one is dropped */
+let generation = 0
 
-export function refreshTracks(): Promise<void> {
-  if (inflight) return inflight
-  useTracks.setState({ loading: true })
-  inflight = api
-    .listTracks()
-    .then((tracks) => useTracks.setState({ tracks, error: null }))
-    .catch((e) => useTracks.setState({ error: toApiError(e).code }))
-    .finally(() => {
-      useTracks.setState({ loading: false })
-      inflight = null
-    })
-  return inflight
+async function load(force: boolean, gen: number): Promise<void> {
+  // the cloud list kept on this device shows at once, whatever its age (lib/cloud/cache)
+  if (!force && useTracks.getState().tracks === null) {
+    const kept = await api.listCachedTracks()
+    if (kept && gen === generation) useTracks.setState({ tracks: kept, error: null })
+  }
+  const tracks = await api.listTracks(undefined, { force })
+  if (gen === generation) useTracks.setState({ tracks, error: null })
 }
 
-// A finished job means a new (or updated) track: refresh the list.
+/**
+ * Loads the library: cache-first (the cloud is asked only when the list kept here is stale), or from the
+ * server with `force` — a job finished, a track was moved to the cloud, «Оновити».
+ */
+export function refreshTracks(force = false): Promise<void> {
+  if (inflight && (inflight.force || !force)) return inflight.promise
+  if (inflight) {
+    // a cache-first refresh is on its way: the server is asked right after it
+    forcedNext ??= inflight.promise.then(() => {
+      forcedNext = null
+      return refreshTracks(true)
+    })
+    return forcedNext
+  }
+  useTracks.setState({ loading: true })
+  const gen = generation
+  const promise: Promise<void> = load(force, gen)
+    .catch((e) => {
+      if (gen === generation) useTracks.setState({ error: toApiError(e).code })
+    })
+    .finally(() => {
+      if (inflight?.promise !== promise) return
+      inflight = null
+      useTracks.setState({ loading: false })
+    })
+  inflight = { promise, force }
+  return promise
+}
+
+// A finished job means a new (or updated) track: ask the server for the list.
 useJobs.subscribe((s, prev) => {
   for (const [id, job] of Object.entries(s.jobs)) {
     if (job.status === 'done' && prev.jobs[id]?.status !== 'done') {
-      void refreshTracks()
+      void refreshTracks(true)
       return
     }
   }
+})
+
+// Signed in, out, or as someone else: a list on its way was asked for the previous session. After a sign-out
+// or another account the list in memory is not theirs either (a guest's own browser tracks stay on screen).
+useAuth.subscribe((s, prev) => {
+  if ((s.user?.uid ?? null) === (prev.user?.uid ?? null)) return
+  generation++
+  inflight = null
+  useTracks.setState(prev.user ? { tracks: null, error: null, loading: false } : { loading: false })
 })
 
 const DELETE_DELAY = 6200
