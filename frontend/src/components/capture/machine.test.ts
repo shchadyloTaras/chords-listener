@@ -4,6 +4,7 @@ import {
   captureReducer,
   chooseStartOffset,
   initialCapture,
+  isRetryable,
   playerEvent,
   sessionCommand,
   STARTING_HINT_MS,
@@ -30,7 +31,7 @@ describe('capture state machine', () => {
     s = captureReducer(s, { type: 'playing' })
     expect(s.phase).toBe('live')
     s = run([{ type: 'stop' }, { type: 'recorded', usable: true }], s)
-    expect(s).toEqual({ phase: 'saving', error: null, hasRecording: true })
+    expect(s).toEqual({ phase: 'saving', error: null, detail: null, hasRecording: true })
     expect(captureReducer(s, { type: 'saved' }).phase).toBe('done')
   })
 
@@ -41,7 +42,7 @@ describe('capture state machine', () => {
 
   it('reports a refused capture and lets the user start again', () => {
     const s = run([{ type: 'start' }, { type: 'failed', error: 'no-audio' }])
-    expect(s).toEqual({ phase: 'error', error: 'no-audio', hasRecording: false })
+    expect(s).toEqual({ phase: 'error', error: 'no-audio', detail: null, hasRecording: false })
     expect(captureReducer(s, { type: 'start' }).phase).toBe('requesting')
   })
 
@@ -53,7 +54,7 @@ describe('capture state machine', () => {
       { type: 'recorded', usable: true },
       { type: 'saveFailed' },
     ])
-    expect(s).toEqual({ phase: 'error', error: 'save', hasRecording: true })
+    expect(s).toEqual({ phase: 'error', error: 'save', detail: null, hasRecording: true })
     expect(captureReducer(s, { type: 'start' })).toBe(s)
     s = captureReducer(s, { type: 'retrySave' })
     expect(s.phase).toBe('saving')
@@ -62,7 +63,7 @@ describe('capture state machine', () => {
 
   it('rejects a recording that is too short', () => {
     const s = run([{ type: 'start' }, { type: 'granted', waitForMedia: false }, { type: 'stop' }, { type: 'recorded', usable: false }])
-    expect(s).toEqual({ phase: 'error', error: 'too-short', hasRecording: false })
+    expect(s).toEqual({ phase: 'error', error: 'too-short', detail: null, hasRecording: false })
   })
 
   it('ignores events that do not fit the phase', () => {
@@ -119,5 +120,26 @@ describe('starting hint', () => {
     const s = run([{ type: 'start' }, { type: 'granted', waitForMedia: true }])
     expect(s.phase).toBe('starting')
     expect(captureReducer(s, { type: 'reset' })).toEqual(initialCapture)
+  })
+})
+
+describe('failure detail', () => {
+  it('keeps the failure detail and clears it on start', () => {
+    let s = captureReducer(initialCapture, { type: 'start' })
+    s = captureReducer(s, { type: 'failed', error: 'blocked', detail: 'NotAllowedError: Permission denied by system' })
+    expect(s).toMatchObject({ phase: 'error', error: 'blocked', detail: 'NotAllowedError: Permission denied by system' })
+    expect(captureReducer(s, { type: 'start' }).detail).toBeNull()
+  })
+
+  it('has no detail when the failure gave none', () => {
+    const s = run([{ type: 'start' }, { type: 'failed', error: 'denied' }])
+    expect(s.detail).toBeNull()
+  })
+
+  it('retryable codes', () => {
+    expect(isRetryable('denied')).toBe(true)
+    expect(isRetryable('blocked')).toBe(true)
+    expect(isRetryable('unsupported')).toBe(false)
+    expect(isRetryable('insecure')).toBe(false)
   })
 })

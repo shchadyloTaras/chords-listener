@@ -37,6 +37,8 @@ export type CaptureFailure =
 export interface CaptureState {
   phase: CapturePhase
   error: CaptureFailure | null
+  /** the technical cause of the failure (the browser's own error), for "Technical details" */
+  detail: string | null
   /** a finished recording is kept (failed save → retry / download) */
   hasRecording: boolean
 }
@@ -45,7 +47,7 @@ export type CaptureEvent =
   | { type: 'start' }
   /** stream + live session are ready; `waitForMedia` = the recording starts when the video plays */
   | { type: 'granted'; waitForMedia: boolean }
-  | { type: 'failed'; error: CaptureFailure }
+  | { type: 'failed'; error: CaptureFailure; detail?: string }
   /** the media plays (video PLAYING, or the user resumed) */
   | { type: 'playing' }
   /** the media paused (video paused / buffering, or the user paused) */
@@ -60,7 +62,7 @@ export type CaptureEvent =
   /** cancel / start over: back to the start button */
   | { type: 'reset' }
 
-export const initialCapture: CaptureState = { phase: 'idle', error: null, hasRecording: false }
+export const initialCapture: CaptureState = { phase: 'idle', error: null, detail: null, hasRecording: false }
 
 const CAPTURING: ReadonlySet<CapturePhase> = new Set<CapturePhase>(['starting', 'live', 'paused'])
 
@@ -74,13 +76,18 @@ export function captureReducer(state: CaptureState, event: CaptureEvent): Captur
   switch (event.type) {
     case 'start':
       return phase === 'idle' || (phase === 'error' && !state.hasRecording)
-        ? { phase: 'requesting', error: null, hasRecording: false }
+        ? { phase: 'requesting', error: null, detail: null, hasRecording: false }
         : state
     case 'granted':
       return phase === 'requesting' ? { ...state, phase: event.waitForMedia ? 'starting' : 'live' } : state
     case 'failed':
       if (phase === 'done') return state
-      return { phase: 'error', error: event.error, hasRecording: event.error === 'save' ? state.hasRecording : false }
+      return {
+        phase: 'error',
+        error: event.error,
+        detail: event.detail ?? null,
+        hasRecording: event.error === 'save' ? state.hasRecording : false,
+      }
     case 'playing':
       return phase === 'starting' || phase === 'paused' ? { ...state, phase: 'live' } : state
     case 'paused':
@@ -90,17 +97,25 @@ export function captureReducer(state: CaptureState, event: CaptureEvent): Captur
     case 'recorded':
       if (phase !== 'stopping') return state
       return event.usable
-        ? { phase: 'saving', error: null, hasRecording: true }
-        : { phase: 'error', error: 'too-short', hasRecording: false }
+        ? { phase: 'saving', error: null, detail: null, hasRecording: true }
+        : { phase: 'error', error: 'too-short', detail: null, hasRecording: false }
     case 'saved':
-      return phase === 'saving' ? { phase: 'done', error: null, hasRecording: false } : state
+      return phase === 'saving' ? { phase: 'done', error: null, detail: null, hasRecording: false } : state
     case 'saveFailed':
-      return phase === 'saving' ? { phase: 'error', error: 'save', hasRecording: true } : state
+      return phase === 'saving' ? { phase: 'error', error: 'save', detail: null, hasRecording: true } : state
     case 'retrySave':
-      return phase === 'error' && state.hasRecording ? { phase: 'saving', error: null, hasRecording: true } : state
+      return phase === 'error' && state.hasRecording ? { phase: 'saving', error: null, detail: null, hasRecording: true } : state
     case 'reset':
       return initialCapture
   }
+}
+
+/**
+ * Pressing "Start" again can fix the failure (a cancelled prompt, a busy device, a short recording).
+ * Not when this browser / page can never do it.
+ */
+export function isRetryable(code: CaptureFailure): boolean {
+  return code !== 'unsupported' && code !== 'insecure'
 }
 
 export type SessionCommand = 'pause' | 'resume' | 'stop'

@@ -5,13 +5,20 @@ import { LogoMark } from '../ui/Logo'
 
 /**
  * A tiny picture of Chrome's "Share this tab?" dialog with "Also share tab audio" ticked — the one
- * thing people miss when sharing a tab's sound.
+ * thing people miss when sharing a tab's sound. It is captioned as an example and drawn dashed, faded
+ * and with an outlined "Share", so it does not pass for a dialog to click (the only filled button on
+ * the page is the real "Start").
  */
 export function ShareTabIllustration({ className }: { className?: string }) {
   const t = useT()
   return (
-    <figure role="img" aria-label={t('cloud.capture.ill.alt')} className={clsx('select-none', className)}>
-      <div aria-hidden="true" className="w-full max-w-[19rem] rounded-xl border border-border-strong bg-surface-2 p-3 text-[11px] leading-tight shadow-lg shadow-black/20">
+    <figure className={clsx('select-none', className)}>
+      <figcaption className="mb-2 max-w-[19rem] text-xs leading-snug text-faint">{t('cloud.capture.example')}</figcaption>
+      <div
+        role="img"
+        aria-label={t('cloud.capture.ill.alt')}
+        className="w-full max-w-[19rem] rounded-xl border border-dashed border-border-strong bg-surface-2 p-3 text-[11px] leading-tight opacity-80 shadow-lg shadow-black/20"
+      >
         <p className="text-[12px] font-semibold text-text">{t('cloud.capture.ill.title')}</p>
         <div className="mt-2 flex items-center gap-2 rounded-lg border border-border bg-bg/60 p-1.5">
           <span className="flex h-8 w-12 shrink-0 items-center justify-center rounded bg-surface-3">
@@ -28,7 +35,7 @@ export function ShareTabIllustration({ className }: { className?: string }) {
         </div>
         <div className="mt-2.5 flex justify-end gap-1.5">
           <span className="rounded-full border border-border-strong px-2.5 py-1 text-muted">{t('cloud.capture.ill.cancel')}</span>
-          <span className="rounded-full bg-accent px-2.5 py-1 font-semibold text-accent-fg">{t('cloud.capture.ill.share')}</span>
+          <span className="rounded-full border border-border-strong px-2.5 py-1 font-semibold text-muted">{t('cloud.capture.ill.share')}</span>
         </div>
       </div>
     </figure>

@@ -35,7 +35,8 @@ import { Button } from '../ui/IconButton'
 import { VideoSiteIcon } from '../ui/Logo'
 import { formatTime } from '../ui/format'
 import { LiveChordsView } from '../live'
-import { chooseStartOffset, isCapturing, playerEvent, STARTING_HINT_MS, type CaptureFailure } from './machine'
+import { CaptureErrorAlert } from './CaptureErrorAlert'
+import { chooseStartOffset, isCapturing, isRetryable, playerEvent, STARTING_HINT_MS, type CaptureFailure } from './machine'
 import { recordingFilename, saveRecording } from './saveRecording'
 import { ShareTabIllustration } from './ShareTabIllustration'
 import { useCapture } from './useCapture'
@@ -404,6 +405,8 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
   const showLive = capturing || phase === 'stopping' || phase === 'saving' || phase === 'done'
   const playerBroken = playerStatus === 'embed' || playerStatus === 'error'
   const errorMessage = state.error ? failureText(state.error, errorText(toApiError(capture.saveError).code)) : ''
+  // pressing "Start" again would fail the same way: offer the other ways to get the chords instead
+  const gaveUp = phase === 'error' && state.error !== null && !isRetryable(state.error)
 
   const statusText =
     phase === 'requesting'
@@ -551,14 +554,14 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
             </>
           ) : !tabCapture ? (
             <NoTabCapture url={url} title={title} />
+          ) : gaveUp ? (
+            <>
+              <CaptureErrorAlert message={errorMessage} detail={state.detail} className="mb-4" />
+              <NoTabCapture url={url} title={title} />
+            </>
           ) : (
             <Card>
-              {phase === 'error' && (
-                <div role="alert" className="mb-5 flex items-start gap-2.5 rounded-xl border border-danger/40 bg-danger/[0.07] p-3 text-sm text-text">
-                  <CircleAlert className="mt-0.5 size-4 shrink-0 text-danger" aria-hidden="true" />
-                  <span>{errorMessage}</span>
-                </div>
-              )}
+              {phase === 'error' && <CaptureErrorAlert message={errorMessage} detail={state.detail} className="mb-5" />}
               {phase === 'error' && state.hasRecording ? (
                 <div className="flex flex-wrap gap-2">
                   <Button variant="primary" icon={<RotateCcw className="size-4" />} onClick={capture.retrySave}>

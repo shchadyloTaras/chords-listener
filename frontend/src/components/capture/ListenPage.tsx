@@ -1,6 +1,6 @@
 import clsx from 'clsx'
-import { AppWindow, ArrowLeft, CircleAlert, Download, LoaderCircle, Mic, Pause, Play, RotateCcw, Square, X } from 'lucide-react'
-import { useCallback, useId, useState, type ReactNode } from 'react'
+import { AppWindow, ArrowLeft, Download, FolderOpen, LoaderCircle, Mic, Pause, Play, RotateCcw, Square, X } from 'lucide-react'
+import { useCallback, useId, useRef, useState, type ReactNode } from 'react'
 import { t as tNow, useT } from '../../i18n'
 import { toApiError } from '../../lib/api'
 import { useConnection } from '../../lib/serverMode'
@@ -11,18 +11,22 @@ import { useCanListenInTab } from '../../hooks/useMediaQuery'
 import { navigate, paths } from '../../hooks/useRoute'
 import { useCloudInvite } from '../account/cloudInvite'
 import { errorText } from '../jobs/errorText'
+import { startFiles } from '../input/startFiles'
+import { FILE_ACCEPT } from '../input/url'
 import { Button } from '../ui/IconButton'
 import { LiveChordsView } from '../live'
-import { isCapturing, type CaptureFailure } from './machine'
+import { CaptureErrorAlert } from './CaptureErrorAlert'
+import { isCapturing, isRetryable, type CaptureFailure } from './machine'
 import { recordingFilename, recordingTitle, saveRecording } from './saveRecording'
 import { useCapture, type CaptureSource } from './useCapture'
 
-function failureText(error: CaptureFailure | null, reason: string): string {
+/** `source`: what the failed attempt was listening to (a microphone refusal needs other words than a tab's). */
+function failureText(error: CaptureFailure | null, reason: string, source: CaptureSource): string {
   if (!error) return ''
   if (error === 'too-short') return tNow('cloud.capture.tooShort')
   if (error === 'save') return tNow('cloud.capture.saveFailed', { reason })
   if (error === 'embed' || error === 'player') return tNow('cloud.capture.error.failed')
-  return tNow(`cloud.capture.error.${error}`)
+  return tNow(`${source === 'mic' ? 'live' : 'cloud.capture'}.error.${error}`)
 }
 
 function SourceCard({
@@ -95,6 +99,9 @@ export function ListenPage({ initialSource, title }: { initialSource: CaptureSou
   const t = useT()
   const tabSupported = useCanListenInTab()
   const [source, setSource] = useState<CaptureSource>(initialSource === 'tab' && tabSupported ? 'tab' : 'mic')
+  /** what the last attempt listened to: the picker may move on before the error is read */
+  const [attempted, setAttempted] = useState<CaptureSource>(source)
+  const fileRef = useRef<HTMLInputElement>(null)
   const cloud = useConnection((s) => s.backend === 'cloud')
   const cloudInvite = useCloudInvite()
   useDocumentTitle(t('cloud.listen.title'))
@@ -126,7 +133,9 @@ export function ListenPage({ initialSource, title }: { initialSource: CaptureSou
   }
 
   const saveNote = cloud ? t('cloud.listen.saveCloud') : cloudInvite ? t('cloud.listen.saveGuest') : null
-  const errorMessage = state.error ? failureText(state.error, errorText(toApiError(capture.saveError).code)) : ''
+  const errorMessage = state.error ? failureText(state.error, errorText(toApiError(capture.saveError).code), attempted) : ''
+  // pressing "Start" again would fail the same way: a file is the way left
+  const gaveUp = phase === 'error' && state.error !== null && !isRetryable(state.error)
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 pt-6 pb-24 sm:px-6 sm:pt-10">
@@ -181,14 +190,25 @@ export function ListenPage({ initialSource, title }: { initialSource: CaptureSou
         </div>
       ) : (
         <div className="mt-7">
-          {phase === 'error' && (
-            <div role="alert" className="mb-5 flex items-start gap-2.5 rounded-xl border border-danger/40 bg-danger/[0.07] p-3 text-sm text-text">
-              <CircleAlert className="mt-0.5 size-4 shrink-0 text-danger" aria-hidden="true" />
-              <span>{errorMessage}</span>
-            </div>
-          )}
+          {phase === 'error' && <CaptureErrorAlert message={errorMessage} detail={state.detail} className="mb-5" />}
 
-          {phase === 'error' && state.hasRecording ? (
+          {gaveUp ? (
+            <>
+              <Button variant="primary" icon={<FolderOpen className="size-4" aria-hidden="true" />} onClick={() => fileRef.current?.click()}>
+                {t('cloud.capture.phone.file')}
+              </Button>
+              <input
+                ref={fileRef}
+                type="file"
+                accept={FILE_ACCEPT}
+                hidden
+                onChange={(e) => {
+                  if (e.target.files?.length) startFiles(e.target.files)
+                  e.target.value = ''
+                }}
+              />
+            </>
+          ) : phase === 'error' && state.hasRecording ? (
             <div className="flex flex-wrap gap-2">
               <Button variant="primary" icon={<RotateCcw className="size-4" />} onClick={capture.retrySave}>
                 {t('cloud.capture.retrySave')}
@@ -227,7 +247,10 @@ export function ListenPage({ initialSource, title }: { initialSource: CaptureSou
                   variant="primary"
                   disabled={phase === 'requesting'}
                   icon={phase === 'requesting' ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" fill="currentColor" />}
-                  onClick={() => void capture.start(source)}
+                  onClick={() => {
+                    setAttempted(source)
+                    void capture.start(source)
+                  }}
                   className="h-12 px-6 text-base"
                 >
                   {t('cloud.listen.start')}

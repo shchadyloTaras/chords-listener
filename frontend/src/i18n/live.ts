@@ -38,6 +38,7 @@ export const live: Dict = {
 
     // capture errors (CaptureError.code)
     'live.error.denied': 'Доступ заборонено. Дозволь мікрофон або показ вкладки в налаштуваннях сайту й спробуй ще раз.',
+    'live.error.blocked': 'Браузер не дає доступу до мікрофона. Дозволь його в налаштуваннях сайту (значок біля адреси).',
     'live.error.no-audio': 'Звук вкладки не передано. Обери цю вкладку й увімкни «Також поділитися звуком вкладки».',
     'live.error.unsupported': 'Цей браузер так не вміє. Вкладку можна слухати в Chrome чи Edge на компʼютері, мікрофон — у будь-якому сучасному браузері.',
     'live.error.insecure': 'Слухати можна лише на захищеній сторінці (https або localhost).',
@@ -79,6 +80,7 @@ export const live: Dict = {
     'live.aria.noChord': 'No chord',
 
     'live.error.denied': 'Access was denied. Allow the microphone or tab sharing in the site settings and try again.',
+    'live.error.blocked': 'The browser blocks the microphone. Allow it in the site settings (the icon next to the address).',
     'live.error.no-audio': 'No tab audio was shared. Pick this tab and turn on “Also share tab audio”.',
     'live.error.unsupported': 'This browser can’t do that. Tab audio works in desktop Chrome or Edge; the microphone works in any modern browser.',
     'live.error.insecure': 'Listening only works on a secure page (https or localhost).',

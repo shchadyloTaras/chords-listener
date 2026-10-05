@@ -28,8 +28,11 @@ interface UseCaptureOptions {
   onAutoStop?(reason: 'limit' | 'ended'): void
 }
 
-function failureOf(err: unknown): CaptureFailure {
-  return err instanceof CaptureError ? err.code : 'failed'
+/** The failure code and the technical cause (the browser's own message) of a rejected start. */
+export function failureOf(err: unknown): { code: CaptureFailure; detail: string | null } {
+  if (err instanceof CaptureError) return { code: err.code, detail: err.message === err.code ? null : err.message }
+  const message = (err as { message?: unknown } | null | undefined)?.message
+  return { code: 'failed', detail: String(message ?? err) }
 }
 
 /**
@@ -137,6 +140,10 @@ export function useCapture({ save, onAutoStop }: UseCaptureOptions) {
       const phaseNow = () => stateRef.current.phase
       const ready = stateRef.current
       if (ready.phase !== 'idle' && !(ready.phase === 'error' && !ready.hasRecording)) return false
+      const failed = (err: unknown) => {
+        const { code, detail } = failureOf(err)
+        dispatch({ type: 'failed', error: code, detail: detail ?? undefined })
+      }
       dispatch({ type: 'start' })
       setSession(null)
       setRecording(null)
@@ -145,7 +152,7 @@ export function useCapture({ save, onAutoStop }: UseCaptureOptions) {
       try {
         stream = source === 'tab' ? await captureTabAudio() : await captureMicrophone()
       } catch (err) {
-        if (alive.current) dispatch({ type: 'failed', error: failureOf(err) })
+        if (alive.current) failed(err)
         return false
       }
       if (!alive.current || phaseNow() !== 'requesting') {
@@ -158,7 +165,7 @@ export function useCapture({ save, onAutoStop }: UseCaptureOptions) {
         s = await startLiveSession(stream, { record: true })
       } catch (err) {
         releaseStream()
-        if (alive.current) dispatch({ type: 'failed', error: failureOf(err) })
+        if (alive.current) failed(err)
         return false
       }
       if (!alive.current || phaseNow() !== 'requesting') {

@@ -86,7 +86,7 @@ describe('captureMicrophone', () => {
 
   it.each([
     ['NotAllowedError', 'denied'],
-    ['SecurityError', 'denied'],
+    ['SecurityError', 'blocked'],
     ['NotFoundError', 'no-device'],
     ['OverconstrainedError', 'no-device'],
     ['NotReadableError', 'failed'],
@@ -203,6 +203,18 @@ describe('helpers', () => {
     expect(toCaptureError(domError('NotFoundError'), 'mic').code).toBe('no-device')
     expect(toCaptureError(domError('NotFoundError'), 'tab').code).toBe('failed')
     expect(toCaptureError('weird', 'mic').code).toBe('failed')
+  })
+
+  it.each([
+    [{ name: 'NotAllowedError', message: 'Permission denied' }, 'tab', 'denied'],
+    [{ name: 'NotAllowedError', message: 'Permission denied by system' }, 'tab', 'blocked'],
+    [{ name: 'SecurityError', message: 'Access to the feature "display-capture" is disallowed by permission policy.' }, 'tab', 'blocked'],
+    [{ name: 'NotAllowedError', message: 'Permission dismissed' }, 'mic', 'denied'],
+  ])('maps %o (%s) to %s and keeps the browser\'s message', (err, source, code) => {
+    const e = Object.assign(new Error(err.message), { name: err.name })
+    const mapped = toCaptureError(e, source as 'tab' | 'mic')
+    expect(mapped.code).toBe(code)
+    expect(mapped.message).toContain(err.message)
   })
 
   it('picks webm/opus, or mp4 where only that records (Safari)', () => {

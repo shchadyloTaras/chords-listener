@@ -83,7 +83,11 @@ export interface LiveOptions {
   paused?: boolean
 }
 
-export type CaptureErrorCode = 'denied' | 'no-audio' | 'unsupported' | 'insecure' | 'no-device' | 'failed'
+/**
+ * `denied`: the user closed or cancelled the prompt; `blocked`: the browser, a permission policy or the
+ * operating system refused without asking (a different fix).
+ */
+export type CaptureErrorCode = 'denied' | 'blocked' | 'no-audio' | 'unsupported' | 'insecure' | 'no-device' | 'failed'
 
 export class CaptureError extends Error {
   readonly code: CaptureErrorCode

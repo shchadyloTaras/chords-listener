@@ -80,13 +80,18 @@ function errorName(err: unknown): string {
 export function toCaptureError(err: unknown, source: 'mic' | 'tab'): CaptureError {
   if (err instanceof CaptureError) return err
   const name = errorName(err)
-  const detail = err instanceof Error && err.message ? err.message : name || String(err)
+  const message = err instanceof Error && err.message ? err.message : ''
+  // the browser's own words are the only clue to why it refused: keep them as the error's message
+  const detail = message ? (name ? `${name}: ${message}` : message) : name || String(err)
   let code: CaptureErrorCode
   switch (name) {
     case 'NotAllowedError':
     case 'PermissionDeniedError':
+      // cancelled / dismissed by the user, or refused by the system or a permission policy
+      code = /by system|policy/i.test(message) ? 'blocked' : 'denied'
+      break
     case 'SecurityError':
-      code = 'denied'
+      code = 'blocked'
       break
     case 'NotFoundError':
     case 'DevicesNotFoundError':
