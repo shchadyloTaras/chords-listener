@@ -6,12 +6,13 @@ import type { Job, TrackSummary } from '../../types'
 // the store listens for the page going away; settings are persisted
 vi.hoisted(() => {
   const data = new Map<string, string>()
-  vi.stubGlobal('window', Object.assign(new EventTarget(), { setTimeout, clearTimeout }))
-  vi.stubGlobal('localStorage', {
+  const localStorage = {
     getItem: (k: string) => data.get(k) ?? null,
     setItem: (k: string, v: string) => void data.set(k, v),
     removeItem: (k: string) => void data.delete(k),
-  })
+  }
+  vi.stubGlobal('window', Object.assign(new EventTarget(), { setTimeout, clearTimeout, localStorage }))
+  vi.stubGlobal('localStorage', localStorage)
 })
 
 const api = vi.hoisted(() => ({
@@ -34,7 +35,9 @@ vi.mock('../../lib/auth', async () => {
 import { useJobs } from '../../hooks/useJobs'
 import { ApiError } from '../../lib/api'
 import { useAuth } from '../../lib/auth'
-import { refreshTracks, useTracks } from './tracksStore'
+import { isDeleted } from '../../lib/cloud/deleted'
+import { useConnection } from '../../lib/serverMode'
+import { refreshTracks, scheduleDelete, useTracks } from './tracksStore'
 
 const song = (id: string): TrackSummary => ({ id, title: id, duration: 1, source: { type: 'file' }, createdAt: '2026-10-05T00:00:00Z' })
 const ids = () => useTracks.getState().tracks?.map((t) => t.id) ?? null
@@ -58,6 +61,7 @@ beforeEach(() => {
 
 afterEach(() => {
   useJobs.setState({ jobs: {} })
+  useConnection.setState({ status: 'checking', backend: null, apiBase: null, serverOrigin: null, remote: false })
 })
 
 describe('refreshTracks', () => {
@@ -140,5 +144,23 @@ describe('refreshTracks', () => {
     useTracks.setState({ tracks: [song('local-1')] })
     useAuth.setState({ user: { uid: 'uid42', email: null } })
     expect(ids()).toEqual(['local-1'])
+  })
+})
+
+describe('deleting', () => {
+  it('leaving the page while it can still be undone: remembered as deleted before the page goes', () => {
+    const CLOUD = 'https://chords-api-abc123-ew.a.run.app'
+    useConnection.setState({ status: 'server', backend: 'cloud', apiBase: `${CLOUD}/api`, serverOrigin: CLOUD, remote: true })
+    const fetchBefore = globalThis.fetch
+    globalThis.fetch = vi.fn(() => new Promise<Response>(() => undefined))
+    try {
+      scheduleDelete('0123456789ab', 'Song')
+      expect(isDeleted('uid42', '0123456789ab')).toBe(false)
+      window.dispatchEvent(new Event('pagehide'))
+      // nothing awaited: the page may be gone the next moment
+      expect(isDeleted('uid42', '0123456789ab')).toBe(true)
+    } finally {
+      globalThis.fetch = fetchBefore
+    }
   })
 })

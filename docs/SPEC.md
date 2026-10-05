@@ -122,7 +122,8 @@ The UI is also published as a static site (GitHub Pages, `VITE_BASE=/chords-list
 
 What changes it:
 - an edit or a reset replaces the kept track and its list entry;
-- a delete forgets the track everywhere;
+- a delete forgets the track everywhere. It is also remembered at once in localStorage (`src/lib/cloud/deleted.ts`, per uid, before anything is awaited — a page closed during the undo window may lose its IndexedDB write), so neither what is kept nor a list answer that set off before the delete brings it back; opening it asks the cloud. That note goes once a list asked after the delete no longer has the track, a list asked after the cloud confirmed the delete lists it again or a finished job makes the same id again (ids come from the content), or after 7 days;
+- opening a track the cloud no longer has (404, deleted on another device) forgets it here, list entry included;
 - every list the cloud sends squares what is kept with it: a track it no longer lists (deleted elsewhere) is forgotten completely, a kept track it lists differently (renamed, edited, re-analysed elsewhere) loses its JSON;
 - a job seen finishing (`getJob`, or the job list after a reload) drops its track's JSON and vocal notes, so the next open asks again, and makes the kept list stale;
 - a signed URL the cloud refuses (401) drops the track's JSON, and the track is asked again once for a fresh URL;

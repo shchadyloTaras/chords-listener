@@ -19,6 +19,7 @@ vi.mock('./auth', () => ({
 import * as api from './api'
 import { rememberServerJob } from './cloud/activity'
 import { cachedAudio, cachedList, cachedTrack, LIST_TTL_MS, saveTrack, TRACK_TTL_MS } from './cloud/cache'
+import { DELETED_TTL_MS } from './cloud/deleted'
 import { createMemoryRepo, setLocalRepo } from './local'
 import { useConnection, type ConnectionState } from './serverMode'
 
@@ -287,6 +288,112 @@ describe('a track', () => {
     await api.getTrack(ID)
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(await cachedTrack('uid42', ID)).toBeNull()
+  })
+})
+
+describe('a deleted track never comes back from this device', () => {
+  beforeEach(() => vi.stubGlobal('localStorage', memoryStorage()))
+
+  /** Listed, opened and played here: everything of it is kept. */
+  async function keptEverywhere() {
+    fetchMock.mockResolvedValueOnce(json([listedAs(cloudTrack()), summary('b')]))
+    await api.listTracks()
+    fetchMock.mockResolvedValueOnce(json(cloudTrack()))
+    await api.getTrack(ID)
+    fetchMock.mockResolvedValueOnce(new Response(new Blob(['mp3'])))
+    await api.fetchTrackAudio({ id: ID, audioUrl: `${CLOUD}${audioPath('old')}` })
+    fetchMock.mockClear()
+  }
+
+  it('deleted as the page closed (the DELETE goes out, the IndexedDB write is lost): not listed, not opened from here', async () => {
+    await keptEverywhere()
+    // pagehide: the request leaves with keepalive, the page is gone before IndexedDB does anything
+    fetchMock.mockReturnValueOnce(new Promise<Response>(() => undefined))
+    const factory = globalThis.indexedDB
+    Reflect.deleteProperty(globalThis, 'indexedDB')
+    void api.deleteTrack(ID, { keepalive: true })
+    globalThis.indexedDB = factory
+    expect(await cachedTrack('uid42', ID)).not.toBeNull()
+
+    // the next visit
+    expect((await api.listCachedTracks())?.map((t) => t.id)).toEqual(['b'])
+    expect((await api.listTracks()).map((t) => t.id)).toEqual(['b'])
+    fetchMock.mockResolvedValueOnce(json({ detail: 'Track not found', code: 'not_found' }, 404))
+    await expect(api.getTrack(ID)).rejects.toMatchObject({ code: 'not_found' })
+    expect(urls()).toEqual([`${CLOUD}/api/tracks/${ID}`, `${CLOUD}/api/tracks/${ID}`])
+    // the cloud says it is gone: nothing of it stays here
+    expect(await cachedTrack('uid42', ID)).toBeNull()
+    expect(await cachedAudio('uid42', ID)).toBeNull()
+    expect((await cachedList('uid42'))?.tracks.map((t) => t.id)).toEqual(['b'])
+  })
+
+  it('a list on its way when the delete went through does not bring it back', async () => {
+    await keptEverywhere()
+    vi.setSystemTime(Date.now() + LIST_TTL_MS)
+    let answer!: (res: Response) => void
+    fetchMock.mockReturnValueOnce(new Promise<Response>((resolve) => (answer = resolve)))
+    const late = api.listTracks()
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    await api.deleteTrack(ID)
+    // asked before the delete: still lists it
+    answer(json([listedAs(cloudTrack()), summary('b')]))
+    expect((await late).map((t) => t.id)).toEqual(['b'])
+    expect((await cachedList('uid42'))?.tracks.map((t) => t.id)).toEqual(['b'])
+    expect((await api.listCachedTracks())?.map((t) => t.id)).toEqual(['b'])
+  })
+
+  it('deleted on another device: opening it forgets what is kept of it, the list too', async () => {
+    fetchMock.mockResolvedValueOnce(json([summary(ID), summary('b')]))
+    await api.listTracks()
+    vi.setSystemTime(Date.now() + TRACK_TTL_MS)
+    fetchMock.mockResolvedValueOnce(json({ detail: 'Track not found', code: 'not_found' }, 404))
+    await expect(api.getTrack(ID)).rejects.toMatchObject({ code: 'not_found' })
+    expect((await cachedList('uid42'))?.tracks.map((t) => t.id)).toEqual(['b'])
+    expect((await api.listCachedTracks())?.map((t) => t.id)).toEqual(['b'])
+  })
+
+  it('the same song added again (same id) shows again', async () => {
+    await keptEverywhere()
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    await api.deleteTrack(ID)
+    // the same file uploaded again: the server gives it the same id
+    const job: Job = { id: 'job2', status: 'done', progress: 1, message: 'Done', trackId: ID, createdAt: '2026-10-05T12:00:00Z' }
+    fetchMock.mockResolvedValueOnce(json(job))
+    await api.getJob('job2')
+    fetchMock.mockResolvedValueOnce(json([listedAs(cloudTrack()), summary('b')]))
+    expect((await api.listTracks()).map((t) => t.id)).toEqual([ID, 'b'])
+  })
+
+  it('added again on another device after the delete went through: the next list shows it', async () => {
+    await keptEverywhere()
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    await api.deleteTrack(ID)
+    vi.setSystemTime(Date.now() + 1000)
+    fetchMock.mockResolvedValueOnce(json([listedAs(cloudTrack()), summary('b')]))
+    expect((await api.listTracks(undefined, { force: true })).map((t) => t.id)).toEqual([ID, 'b'])
+  })
+
+  it('a delete the cloud refused: the track is still there and shows', async () => {
+    await keptEverywhere()
+    fetchMock.mockResolvedValueOnce(json({ detail: 'Busy', code: 'internal' }, 500))
+    await expect(api.deleteTrack(ID)).rejects.toMatchObject({ code: 'internal' })
+    expect((await api.listCachedTracks())?.map((t) => t.id)).toEqual([ID, 'b'])
+    expect((await api.getTrack(ID)).id).toBe(ID)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('remembered for DELETED_TTL_MS at most', async () => {
+    await keptEverywhere()
+    fetchMock.mockReturnValueOnce(new Promise<Response>(() => undefined))
+    void api.deleteTrack(ID, { keepalive: true })
+    // the delete never arrived: the cloud keeps listing it
+    vi.setSystemTime(Date.now() + LIST_TTL_MS)
+    fetchMock.mockResolvedValueOnce(json([listedAs(cloudTrack()), summary('b')]))
+    expect((await api.listTracks()).map((t) => t.id)).toEqual(['b'])
+    vi.setSystemTime(Date.now() + DELETED_TTL_MS)
+    fetchMock.mockResolvedValueOnce(json([listedAs(cloudTrack()), summary('b')]))
+    expect((await api.listTracks()).map((t) => t.id)).toEqual([ID, 'b'])
   })
 })
 

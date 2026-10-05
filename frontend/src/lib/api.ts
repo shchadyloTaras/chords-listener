@@ -7,11 +7,13 @@
 //    IndexedDB. Ids starting with "local-" always belong to the browser library, in any mode.
 // The signed-in user's cloud library is kept on the device (lib/cloud/cache): the list, opened tracks, their
 // audio and notes are served from there without waking the cloud, and kept in step with edits, deletes and
-// finished jobs. Nothing is kept for a local server or a guest.
+// finished jobs; a track deleted here never comes back from it (lib/cloud/deleted). Nothing is kept for a local
+// server or a guest.
 import type { ChordSegment, ErrorCode, Health, Job, Track, TrackNotes, TrackSource, TrackSummary } from '../types'
 import { getIdToken, requestSignIn, useAuth } from './auth'
 import { forgetServerJob, recentServerJobs, rememberServerJob } from './cloud/activity'
 import * as cache from './cloud/cache'
+import { deleteConfirmed, forgetDeleted, isDeleted, rememberDeleted, settleDeleted, withoutDeleted } from './cloud/deleted'
 import { StorageUploadError, uploadToStorage } from './cloud/storage'
 import {
   cancelLocalTrackJobs,
@@ -232,6 +234,8 @@ async function keepTrack(uid: string | null, track: Track): Promise<Track> {
 async function noteFinishedJob(job: Job): Promise<void> {
   const uid = job.status === 'done' && job.trackId ? cloudCacheUid() : null
   if (!uid) return
+  // a song deleted here and made again (the same file gets the same id) shows again
+  forgetDeleted(uid, job.trackId as string)
   await cache.forgetTrack(uid, job.trackId as string, ['track', 'vocals'])
   await cache.markListStale(uid)
 }
@@ -383,17 +387,20 @@ export async function listTracks(signal?: AbortSignal, opts: { force?: boolean }
   if (conn.status !== 'server') return browserTracks
   const uid = cloudCacheUid(conn)
   const kept = uid ? await cache.cachedList(uid) : null
-  if (kept && !opts.force && cache.isFresh(kept.savedAt, cache.LIST_TTL_MS))
-    return byNewest([...browserTracks, ...kept.tracks.map(withServerUrls)])
+  const keptTracks = () => (uid && kept ? withoutDeleted(uid, kept.tracks).map(withServerUrls) : [])
+  if (kept && !opts.force && cache.isFresh(kept.savedAt, cache.LIST_TTL_MS)) return byNewest([...browserTracks, ...keptTracks()])
   let serverTracks: TrackSummary[]
   try {
+    const askedAt = Date.now()
     const raw = await request<TrackSummary[]>('/tracks', { signal, cache: 'no-store' })
-    if (stillKeeping(uid)) await cache.saveList(uid, raw)
-    serverTracks = raw.map(withServerUrls)
+    // an answer that set off before a delete here still lists the track
+    const listed = uid ? settleDeleted(uid, raw, askedAt) : raw
+    if (stillKeeping(uid)) await cache.saveList(uid, listed)
+    serverTracks = listed.map(withServerUrls)
   } catch (err) {
     const e = toApiError(err)
     // the server just went away: show what this device has (the next probe switches modes)
-    if (e.code === 'network' && kept) return byNewest([...browserTracks, ...kept.tracks.map(withServerUrls)])
+    if (e.code === 'network' && kept) return byNewest([...browserTracks, ...keptTracks()])
     if (e.code === 'network' && browserTracks.length) return browserTracks
     throw e
   }
@@ -407,18 +414,30 @@ export async function listTracks(signal?: AbortSignal, opts: { force?: boolean }
 export async function listCachedTracks(): Promise<TrackSummary[] | null> {
   const uid = cloudCacheUid(await whenSettled())
   const kept = uid ? await cache.cachedList(uid) : null
-  if (!kept) return null
+  if (!uid || !kept) return null
   const browserTracks = await local(listLocalTracks).catch(() => [])
-  return byNewest([...browserTracks, ...kept.tracks.map(withServerUrls)])
+  return byNewest([...browserTracks, ...withoutDeleted(uid, kept.tracks).map(withServerUrls)])
 }
 
-/** A cloud track opened in the last TRACK_TTL_MS comes from this device (lib/cloud/cache). */
+/**
+ * A cloud track opened in the last TRACK_TTL_MS comes from this device (lib/cloud/cache) — unless it was deleted
+ * here: then the cloud says whether it is gone.
+ */
 export async function getTrack(id: string, signal?: AbortSignal): Promise<Track> {
   if (isLocalId(id)) return local(() => getLocalTrack(id))
   const uid = cloudCacheUid(await whenSettled())
-  const kept = uid ? await cache.cachedTrack(uid, id) : null
+  const kept = uid && !isDeleted(uid, id) ? await cache.cachedTrack(uid, id) : null
   if (kept) return withServerUrls(kept)
-  return keepTrack(uid, await request<Track>(`/tracks/${enc(id)}`, { signal }))
+  try {
+    return await keepTrack(uid, await request<Track>(`/tracks/${enc(id)}`, { signal }))
+  } catch (err) {
+    // gone (deleted here or on another device): nothing of it stays on this device, its list entry neither
+    if (uid && toApiError(err).code === 'not_found') {
+      deleteConfirmed(uid, id)
+      await cache.forgetTrack(uid, id)
+    }
+    throw err
+  }
 }
 
 export async function updateTrack(id: string, patch: TrackPatch): Promise<Track> {
@@ -449,15 +468,25 @@ export async function deleteTrack(id: string, opts: { keepalive?: boolean } = {}
     return local(() => deleteLocalTrack(id))
   }
   const uid = cloudCacheUid()
+  // before anything is awaited: the page may be gone before IndexedDB or the answer gets a word in
+  if (uid) rememberDeleted(uid, id)
   // the page is going away (the answer may never be read): forget it here right now
   const forgotten = uid && opts.keepalive ? cache.forgetTrack(uid, id) : null
   try {
     await request(`/tracks/${enc(id)}`, { method: 'DELETE', keepalive: opts.keepalive })
   } catch (err) {
-    if (uid && toApiError(err).code === 'not_found') await cache.forgetTrack(uid, id)
+    if (uid && toApiError(err).code === 'not_found') {
+      deleteConfirmed(uid, id)
+      await cache.forgetTrack(uid, id)
+    } else if (uid) {
+      // not deleted: it shows again (the caller says the delete failed)
+      forgetDeleted(uid, id)
+    }
     throw err
   }
-  if (uid) await (forgotten ?? cache.forgetTrack(uid, id))
+  if (!uid) return
+  deleteConfirmed(uid, id)
+  await (forgotten ?? cache.forgetTrack(uid, id))
 }
 
 // ---------------------------------------------------------------- live piano notes

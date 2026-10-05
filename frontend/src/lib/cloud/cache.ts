@@ -12,6 +12,7 @@
 // Rows are `{ key, value, savedAt, size? }`. Nothing here throws: without IndexedDB (or with a broken one)
 // every read is null and every write does nothing.
 import type { Track, TrackSummary } from '../../types'
+import { clearDeleted } from './deleted'
 
 /**
  * The list is asked again when older than this. This device's own changes refresh it sooner (edits, deletes,
@@ -432,6 +433,7 @@ export function saveJson<T>(uid: string, kind: JsonKind, id: string, value: T): 
 
 /** Deletes everything kept here (sign-out, another account). Other tabs let go of the database for it. */
 export async function clearCloudCache(): Promise<void> {
+  clearDeleted()
   const previous = opened
   opened = null
   previous?.db.then(
