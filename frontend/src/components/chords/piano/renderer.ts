@@ -12,12 +12,15 @@
 //
 // Vocal overlay (optional): the sung melody (lib/vocals) drawn as outlined notes in the ink colour —
 // distinct from the instruments' pitch colours — and a dot on the key the singer is on.
+//
+// A key that is down shows its note's name ("E♭") near its front edge, when the key is wide enough.
 import { useApp } from '../../../store'
 import type { LiveNote } from '../../../lib/liveNotes'
 import type { NoteIndex } from '../../../lib/transcription'
-import { fitRange, foldNote, layoutKeyboard, maxOctavesFor, type KeyboardLayout, type KeyRange, type KeyRect } from './keyboard'
+import type { Spelling } from '../../../lib/music/notes'
+import { fitRange, foldNote, layoutKeyboard, maxOctavesFor, pitchName, type KeyboardLayout, type KeyRange, type KeyRect } from './keyboard'
 import { FrameLead, LiveClock } from './liveClock'
-import { chordRgb, mix, pitchColor, rgba, type Palette, type Rgb } from './palette'
+import { chordRgb, inkOn, mix, pitchColor, rgba, type Palette, type Rgb } from './palette'
 
 /** seconds of music visible above the keys */
 export const LOOKAHEAD = 3
@@ -27,6 +30,10 @@ const FELT = 4
 const PRESS_DEPTH = 2
 /** s: while paused, notes starting this soon after the playhead count as pressed */
 const PAUSED_REACH = 0.08
+/** note names on lit keys: font size (css px) and the strip at the key's front they take */
+const LABEL_PX = { white: 11, black: 9 }
+const LABEL_ZONE = { white: 18, black: 15 }
+const LABEL_FONT = '600 {px}px "Inter Variable", ui-sans-serif, system-ui, sans-serif'
 
 export interface RollChord {
   start: number
@@ -86,6 +93,7 @@ export class PianoRenderer {
   private index: NoteIndex | null = null
   private vocals: NoteIndex | null = null
   private transpose = 0
+  private spelling: Spelling = 'sharp'
   private chords: RollChord[] = []
   private downbeats: number[] = []
   private reduced = false
@@ -154,6 +162,13 @@ export class PianoRenderer {
     if (this.transpose === n) return
     this.transpose = n
     this.refit()
+  }
+
+  /** How black keys are named on lit keys (C♯ or D♭), as the song's chords are spelled. */
+  setSpelling(spelling: Spelling): void {
+    if (this.spelling === spelling) return
+    this.spelling = spelling
+    this.invalidate()
   }
 
   setChords(chords: RollChord[], downbeats: number[]): void {
@@ -491,8 +506,9 @@ export class PianoRenderer {
       if (!k) continue
       const black = BLACK_PC.has(key % 12)
       const cx = k.x + k.w / 2
-      const cy = y0 + k.h - (black ? Math.max(7, k.h * 0.18) : Math.max(9, k.h * 0.14))
       const rad = Math.max(3, Math.min(5.5, k.w * (black ? 0.3 : 0.22)))
+      // above the strip where a lit key prints its name
+      const cy = y0 + k.h - (black ? LABEL_ZONE.black : LABEL_ZONE.white) - rad - 3
       ctx.beginPath()
       ctx.arc(cx, cy, rad + 1.5, 0, Math.PI * 2)
       ctx.fillStyle = black ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.55)'
@@ -637,10 +653,11 @@ export class PianoRenderer {
     const lip = pressed ? Math.max(2, k.h * 0.03) : Math.max(3, k.h * 0.065)
     const h = k.h - depth
     // key body
+    let fill: Rgb | null = null
     if (pressed) {
       const flash = pressed.age < FLASH_MS ? 1 - pressed.age / FLASH_MS : 0
       const amount = 0.5 + 0.42 * pressed.velocity
-      let fill = mix(p.keyWhite, pressed.color, amount)
+      fill = mix(p.keyWhite, pressed.color, amount)
       if (flash > 0) fill = mix(fill, [255, 255, 255], 0.38 * flash)
       ctx.fillStyle = rgba(fill)
     } else ctx.fillStyle = gradient
@@ -657,7 +674,8 @@ export class PianoRenderer {
       sg.addColorStop(1, 'rgba(0,0,0,0)')
       ctx.fillStyle = sg
       ctx.fillRect(x, y0, w, Math.min(14, h * 0.2))
-      if (pressed.fold) this.foldMark(x + w / 2, y0 + h - lip - 7, pressed.fold, false)
+      const named = fill !== null && this.keyLabel(k.midi, x + w / 2, y0 + h - lip - 5, w - 2, LABEL_PX.white, fill)
+      if (pressed.fold) this.foldMark(x + w / 2, y0 + h - lip - 7 - (named ? LABEL_ZONE.white - 4 : 0), pressed.fold, false)
     }
     // the gap between keys
     ctx.fillStyle = dark ? 'rgba(0,0,0,0.55)' : 'rgba(0,0,0,0.2)'
@@ -669,9 +687,10 @@ export class PianoRenderer {
     const depth = pressed ? PRESS_DEPTH : 0
     const h = k.h - depth
     const r = Math.min(2.5, k.w * 0.18)
+    let fill: Rgb | null = null
     if (pressed) {
       const flash = pressed.age < FLASH_MS ? 1 - pressed.age / FLASH_MS : 0
-      let fill = mix(p.keyBlack, pressed.color, 0.58 + 0.38 * pressed.velocity)
+      fill = mix(p.keyBlack, pressed.color, 0.58 + 0.38 * pressed.velocity)
       if (flash > 0) fill = mix(fill, [255, 255, 255], 0.3 * flash)
       ctx.fillStyle = rgba(fill)
     } else ctx.fillStyle = gradient
@@ -685,7 +704,22 @@ export class PianoRenderer {
     // a thin highlight on the top face
     ctx.fillStyle = pressed ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.07)'
     ctx.fillRect(k.x + k.w * 0.18, y0, Math.max(1, k.w * 0.14), h - slope - 1)
-    if (pressed?.fold) this.foldMark(k.x + k.w / 2, y0 + h - slope - 6, pressed.fold, true)
+    const named = fill !== null && this.keyLabel(k.midi, k.x + k.w / 2, y0 + h - slope - 4, k.w - 2, LABEL_PX.black, fill)
+    if (pressed?.fold) this.foldMark(k.x + k.w / 2, y0 + h - slope - 6 - (named ? LABEL_ZONE.black - 4 : 0), pressed.fold, true)
+  }
+
+  /** The note's name centred at (cx, baseline) on a lit key; false (nothing drawn) when it does not fit. */
+  private keyLabel(midi: number, cx: number, baseline: number, room: number, px: number, fill: Rgb): boolean {
+    const { ctx } = this
+    const text = pitchName(midi, this.spelling)
+    ctx.font = LABEL_FONT.replace('{px}', String(px))
+    if (ctx.measureText(text).width > room) return false
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'alphabetic'
+    ctx.fillStyle = inkOn(fill)
+    ctx.fillText(text, cx, baseline)
+    ctx.textAlign = 'start'
+    return true
   }
 
   private roundRect(x: number, y: number, w: number, h: number, r: number | number[]): void {

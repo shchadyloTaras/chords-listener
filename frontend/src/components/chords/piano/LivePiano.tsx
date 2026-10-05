@@ -1,18 +1,21 @@
 // "Живе піаніно": the song's notes falling onto a piano keyboard whose keys go down in sync with the
 // audio (notes transcribed once per track, see lib/transcription — from the instruments stem when the
 // server separated the vocals), plus chord-preview notes and, when the vocals were transcribed, the
-// sung melody as an outlined overlay with its own toggle.
+// sung melody as an outlined overlay with its own toggle. Under the title: what the panel is doing,
+// then (notes ready) a legend for the two kinds of bars, or an offer to separate the voice when the
+// notes still come from the full mix.
 // Lazy-loaded by LivePianoSlot; rendered under the now-playing hero when the instrument is piano.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { LoaderCircle, Mic, RotateCcw, X } from 'lucide-react'
+import { AudioLines, LoaderCircle, Mic, RotateCcw, X } from 'lucide-react'
 import { useT } from '../../../i18n'
 import { useMediaQuery } from '../../../hooks/useMediaQuery'
 import { onLiveNotes } from '../../../lib/liveNotes'
 import { isMinorQuality } from '../../../lib/music/chord'
-import { requestNotes, type NotesState } from '../../../lib/transcription'
-import { fetchStem, useVocals } from '../../../lib/vocals'
+import { useConnection } from '../../../lib/serverMode'
+import { requestNotes, type NotesSource, type NotesState } from '../../../lib/transcription'
+import { fetchStem, startVocals, useVocals, vocalsSupport, type VocalsState } from '../../../lib/vocals'
 import { useApp } from '../../../store'
 import { useChordModel } from '../model'
 import { usePianoNotes } from '../score/pianoNotes'
@@ -31,7 +34,9 @@ export default function LivePiano() {
   const { track, chords, spelling, rhythm, transpose } = model
   const setSetting = useApp((s) => s.setSetting)
   const { notes, source } = usePianoNotes(track)
-  const vocals = useVocals(track, { knownOnly: true })
+  // a track that says it has no vocals is "missing" without asking the server (the offer below); one that
+  // does not say is not asked either — opening a song must not wake the cloud
+  const vocals = useVocals(track, { knownOnly: track.vocals !== false })
   const showVocals = useScoreSettings((s) => s.liveVocals)
   const setScoreSetting = useScoreSettings((s) => s.setScoreSetting)
   const reduced = useMediaQuery('(prefers-reduced-motion: reduce)')
@@ -102,6 +107,10 @@ export default function LivePiano() {
   }, [transpose])
 
   useEffect(() => {
+    renderer.current?.setSpelling(spelling)
+  }, [spelling])
+
+  useEffect(() => {
     renderer.current?.setReducedMotion(reduced)
   }, [reduced])
 
@@ -144,6 +153,7 @@ export default function LivePiano() {
         <div className="min-w-0 flex-1">
           <h2 className="font-display text-[15px] leading-tight font-semibold tracking-tight">{t('keys.title')}</h2>
           <Status state={notes} onRetry={() => request()} />
+          <VocalsLine notes={notes} source={source} vocals={vocals} showVocals={showVocals} />
         </div>
         {vocals.status === 'ready' && (
           <IconButton
@@ -227,6 +237,78 @@ function Status({ state, onRetry }: { state: NotesState; onRetry(): void }) {
       )}
     </div>
   )
+}
+
+/**
+ * Once the notes are there: what the outlined bars are (the voice, when shown), or — notes from the
+ * full mix, voice and instruments together — a one-line offer to separate the voice on the server.
+ */
+function VocalsLine({ notes, source, vocals, showVocals }: { notes: NotesState; source: NotesSource; vocals: VocalsState; showVocals: boolean }) {
+  const t = useT()
+  const { track } = useChordModel()
+  // re-render when the connection (or the cloud's features) change: they decide whether the offer works.
+  // Only starting asks the cloud anything (startVocals); showing the offer never does.
+  useConnection((s) => s.status)
+  useConnection((s) => s.health)
+  if (notes.status !== 'ready' || !notes.index.count) return null
+  const line = 'flex min-w-0 items-center gap-1.5 text-xs text-muted'
+  switch (vocals.status) {
+    case 'ready':
+      if (!showVocals) return null
+      return (
+        <div className={clsx(line, 'gap-3')} role="note" aria-label={t('keys.legend.aria')}>
+          <span className="inline-flex items-center gap-1.5" aria-hidden>
+            <span className="h-2 w-4 rounded-[3px]" style={{ background: 'linear-gradient(90deg, var(--chord-0), var(--chord-4), var(--chord-8))' }} />
+            {t('keys.legend.instruments')}
+          </span>
+          <span className="inline-flex items-center gap-1.5" aria-hidden>
+            <span className="h-2 w-4 rounded-[3px] border-[1.5px] border-text bg-text/15" />
+            {t('keys.legend.voice')}
+          </span>
+        </div>
+      )
+    case 'missing':
+      if (source !== 'mix' || vocalsSupport(track, { ask: false }) !== 'ok') return null
+      return (
+        <div className={line}>
+          <span className="truncate">{t('keys.vocals.hint')}</span>
+          <button
+            type="button"
+            onClick={() => void startVocals(track)}
+            title={t('keys.vocals.separate.title')}
+            className="inline-flex shrink-0 items-center gap-1 rounded px-1 py-0.5 font-medium text-accent underline-offset-2 hover:underline"
+          >
+            <AudioLines size={13} aria-hidden />
+            {t('keys.vocals.separate')}
+          </button>
+        </div>
+      )
+    case 'running':
+      return (
+        <div className={line}>
+          <LoaderCircle size={12} className="shrink-0 animate-spin" aria-hidden />
+          <span className="truncate" aria-live="polite">
+            {t('keys.vocals.running', { pct: Math.floor(vocals.progress * 100) })}
+          </span>
+        </div>
+      )
+    case 'error': {
+      if (vocals.during !== 'job') return null
+      const quota = vocals.code === 'quota_exceeded'
+      return (
+        <div className={clsx(line, 'text-danger')}>
+          <span className="truncate">{t(quota ? 'score.vocals.quota' : 'keys.vocals.error')}</span>
+          {!quota && (
+            <button type="button" onClick={() => void startVocals(track)} className="shrink-0 rounded px-1.5 py-0.5 font-medium text-text underline-offset-2 hover:underline">
+              {t('keys.retry')}
+            </button>
+          )}
+        </div>
+      )
+    }
+    default:
+      return null
+  }
 }
 
 /** Explanations shown over the empty roll (first transcription, the demo without audio). */

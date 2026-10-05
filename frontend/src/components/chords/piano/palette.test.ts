@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chordRgb, fifthsIndex, mix, oklchToRgb, parseCssColor, pitchColor, rgba, type Palette } from './palette'
+import { chordRgb, fifthsIndex, inkOn, mix, oklchToRgb, parseCssColor, pitchColor, rgba, type Palette } from './palette'
 
 describe('parseCssColor', () => {
   it('reads hex and rgb()', () => {
@@ -51,5 +51,14 @@ describe('colour helpers', () => {
     expect(mix([0, 0, 0], [200, 100, 50], 0.5)).toEqual([100, 50, 25])
     expect(rgba([1, 2, 3])).toBe('rgb(1,2,3)')
     expect(rgba([1, 2, 3], 0.25)).toBe('rgba(1,2,3,0.250)')
+  })
+})
+
+describe('inkOn', () => {
+  it('writes dark on light fills and white on dark ones', () => {
+    expect(inkOn([255, 255, 255])).toMatch(/^rgba\(0,0,0/)
+    expect(inkOn([240, 200, 120])).toMatch(/^rgba\(0,0,0/)
+    expect(inkOn([0, 0, 0])).toMatch(/^rgba\(255,255,255/)
+    expect(inkOn([90, 40, 140])).toMatch(/^rgba\(255,255,255/)
   })
 })

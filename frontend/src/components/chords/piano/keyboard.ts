@@ -225,8 +225,13 @@ export function maxOctavesFor(width: number): number {
 const NAMES_SHARP = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B']
 const NAMES_FLAT = ['C', 'D♭', 'D', 'E♭', 'E', 'F', 'G♭', 'G', 'A♭', 'A', 'B♭', 'B']
 
+/** "C", "F♯" / "G♭": the note's name without the octave (what is printed on a lit key). */
+export function pitchName(midi: number, spelling: 'sharp' | 'flat' = 'sharp'): string {
+  const pc = ((midi % 12) + 12) % 12
+  return (spelling === 'flat' ? NAMES_FLAT : NAMES_SHARP)[pc]
+}
+
 /** "C4", "F♯3" / "G♭3" (scientific pitch notation, middle C = C4). */
 export function noteName(midi: number, spelling: 'sharp' | 'flat' = 'sharp'): string {
-  const pc = ((midi % 12) + 12) % 12
-  return `${(spelling === 'flat' ? NAMES_FLAT : NAMES_SHARP)[pc]}${Math.floor(midi / 12) - 1}`
+  return `${pitchName(midi, spelling)}${Math.floor(midi / 12) - 1}`
 }

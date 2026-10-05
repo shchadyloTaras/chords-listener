@@ -114,6 +114,17 @@ export function rgba(c: Rgb, alpha = 1): string {
   return alpha >= 1 ? `rgb(${c[0]},${c[1]},${c[2]})` : `rgba(${c[0]},${c[1]},${c[2]},${Math.max(0, alpha).toFixed(3)})`
 }
 
+/** Text colour readable on `bg`: near-black on light fills, white on dark ones (WCAG relative luminance). */
+export function inkOn(bg: Rgb): string {
+  const lin = (c: number) => {
+    const v = c / 255
+    return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4
+  }
+  const l = 0.2126 * lin(bg[0]) + 0.7152 * lin(bg[1]) + 0.0722 * lin(bg[2])
+  // the luminance where black and white text have the same contrast ratio
+  return l > 0.179 ? 'rgba(0,0,0,0.78)' : 'rgba(255,255,255,0.95)'
+}
+
 /** C=0, G=1, D=2 … F=11 (the --chord-N index of a pitch class). */
 export function fifthsIndex(pc: number): number {
   return (((pc % 12) + 12) % 12 * 7) % 12

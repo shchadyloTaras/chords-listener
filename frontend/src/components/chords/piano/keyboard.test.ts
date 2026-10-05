@@ -7,6 +7,7 @@ import {
   layoutKeyboard,
   maxOctavesFor,
   noteName,
+  pitchName,
   octaveCount,
   octaveRange,
   PIANO_HIGH,
@@ -142,5 +143,11 @@ describe('helpers', () => {
     expect(noteName(61, 'flat')).toBe('D♭4')
     expect(noteName(21)).toBe('A0')
     expect(noteName(108)).toBe('C8')
+  })
+  it('names a key without its octave (the label on a lit key)', () => {
+    expect(pitchName(60)).toBe('C')
+    expect(pitchName(63)).toBe('D♯')
+    expect(pitchName(63, 'flat')).toBe('E♭')
+    expect(pitchName(-1, 'flat')).toBe('B')
   })
 })

@@ -25,6 +25,16 @@ export const keys: Dict = {
     'keys.error.failed': 'Не вдалося розпізнати ноти.',
     'keys.retry': 'Спробувати ще',
 
+    'keys.legend.instruments': 'Інструменти',
+    'keys.legend.voice': 'Голос',
+    'keys.legend.aria': 'Кольорові смуги — інструменти, контурні — голос',
+    'keys.vocals.hint': 'Голос тут змішаний з музикою.',
+    'keys.vocals.separate': 'Відокремити голос',
+    'keys.vocals.separate.title':
+      'Сервер відділить голос від музики за 1–3 хвилини: клавіші гратимуть лише інструменти, а мелодія голосу зʼявиться контуром.',
+    'keys.vocals.running': 'Відокремлюю голос… {pct}%',
+    'keys.vocals.error': 'Не вдалося відокремити голос.',
+
     'keys.recompute': 'Розпізнати заново',
     'keys.recompute.title': 'Розпізнати ноти заново (займе трохи часу)',
     'keys.hide': 'Сховати живе піаніно',
@@ -67,6 +77,16 @@ export const keys: Dict = {
     'keys.error.model': 'Couldn’t load the note recognition model. Check your connection.',
     'keys.error.failed': 'Couldn’t recognize the notes.',
     'keys.retry': 'Try again',
+
+    'keys.legend.instruments': 'Instruments',
+    'keys.legend.voice': 'Voice',
+    'keys.legend.aria': 'Coloured bars are the instruments, outlined ones the voice',
+    'keys.vocals.hint': 'The voice is mixed in with the music here.',
+    'keys.vocals.separate': 'Separate the voice',
+    'keys.vocals.separate.title':
+      'The server separates the voice from the music in 1–3 minutes: the keys then play the instruments only, and the sung melody appears as outlines.',
+    'keys.vocals.running': 'Separating the voice… {pct}%',
+    'keys.vocals.error': 'Could not separate the voice.',
 
     'keys.recompute': 'Recognize again',
     'keys.recompute.title': 'Recognize the notes again (takes a moment)',
