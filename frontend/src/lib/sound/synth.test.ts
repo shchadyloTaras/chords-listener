@@ -1,7 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { volumeGain } from './engine'
 import { handpanDecay, handpanPartials, handpanRelease } from './handpanTone'
-import { CELESTE_CENTS, HARMONIUM_RELEASE, HARMONIUM_STEP, harmoniumAttack, harmoniumEnvelope, reedAmplitude, reedWave } from './harmonium'
+import {
+  HARMONIUM_RELEASE,
+  HARMONIUM_RMS,
+  HARMONIUM_SPECTRA,
+  HARMONIUM_TAIL,
+  harmoniumDetune,
+  harmoniumParams,
+  harmoniumSpectrum,
+  reedSpeech,
+  renderHarmonium,
+  speechCurve,
+} from './harmonium'
 import { inharmonicity, pianoEnvelope, pianoPartials } from './piano'
 import { allpassCoefficient, pluckParams, pluckRelease, renderPluck, type PluckInstrument } from './pluck'
 import { roomImpulse } from './reverb'
@@ -186,42 +197,107 @@ describe('handpan tone', () => {
 })
 
 describe('harmonium reeds', () => {
-  it('have a dense, slightly nasal spectrum (odd harmonics a bit stronger)', () => {
-    const { real, imag } = reedWave()
-    expect(real.every((v) => v === 0)).toBe(true)
-    expect(imag[0]).toBe(0)
-    expect(imag.length).toBeGreaterThanOrEqual(20)
-    for (let n = 3; n < imag.length; n += 2) {
-      expect(reedAmplitude(n)).toBeGreaterThan(reedAmplitude(n - 1))
-      expect(reedAmplitude(n)).toBeGreaterThan(reedAmplitude(n + 1))
+  const fs = 16000
+  /** Amplitude of the component at `freq` (Hann-windowed DFT over [from, from + seconds)). */
+  const amplitude = (x: Float32Array, freq: number, from: number, seconds: number) => {
+    const a = Math.round(from * fs)
+    const n = Math.round(seconds * fs)
+    let re = 0
+    let im = 0
+    let ws = 0
+    for (let i = 0; i < n; i++) {
+      const w = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / n)
+      re += x[a + i] * w * Math.cos((2 * Math.PI * freq * i) / fs)
+      im += x[a + i] * w * Math.sin((2 * Math.PI * freq * i) / fs)
+      ws += w
     }
-    expect(reedAmplitude(10)).toBeGreaterThan(reedAmplitude(1) * 0.1) // still rich up top
-    expect(CELESTE_CENTS).toBeGreaterThan(0)
+    return (2 * Math.hypot(re, im)) / ws
+  }
+  const rms = (x: Float32Array, from: number, to: number) => {
+    let s = 0
+    const a = Math.round(from * fs)
+    const b = Math.round(to * fs)
+    for (let i = a; i < b; i++) s += x[i] * x[i]
+    return Math.sqrt(s / (b - a))
+  }
+  const render = (midi: number, hold = 1.2) => renderHarmonium(harmoniumParams(midi, hold, fs))
+
+  it('sound two reeds per key: the written pitch and a bass reed an octave below, detuned as measured', () => {
+    const x = render(60)
+    const f = 261.63
+    const bass = (f / 2) * Math.pow(2, -harmoniumDetune(60) / 1200)
+    const main = amplitude(x, f, 0.4, 0.75)
+    expect(amplitude(x, bass, 0.4, 0.75)).toBeGreaterThan(main * 0.3)
+    // nothing between the harmonics
+    expect(amplitude(x, f * 0.75, 0.4, 0.75)).toBeLessThan(main * 0.02)
+    expect(amplitude(x, f * 1.25, 0.4, 0.75)).toBeLessThan(main * 0.02)
+    // the main reed is in tune (the pitch wanders about a cent)
+    const near = [-6, -3, 0, 3, 6].map((c) => amplitude(x, f * Math.pow(2, c / 1200), 0.2, 0.95))
+    expect(Math.max(...near)).toBe(near[2])
+    // every key its own beating, as on the recorded instrument
+    const detunes = Array.from({ length: 37 }, (_, k) => harmoniumDetune(48 + k))
+    expect(Math.min(...detunes)).toBeLessThan(0)
+    expect(Math.max(...detunes)).toBeGreaterThan(10)
+    expect(new Set(detunes).size).toBeGreaterThan(15)
   })
 
-  it('swell with the bellows, hold with a faint tremolo, then release', () => {
-    const hold = 2.6
-    const env = harmoniumEnvelope(60, hold)
-    const at = (t: number) => env[Math.round(t / HARMONIUM_STEP)]
-    expect(env.length).toBe(Math.ceil((hold + HARMONIUM_RELEASE) / HARMONIUM_STEP) + 1)
-    expect(env[0]).toBe(0)
-    expect(env[env.length - 1]).toBe(0)
-    const attack = harmoniumAttack(60)
-    expect(at(attack / 2)).toBeGreaterThan(0.2)
-    expect(at(attack / 2)).toBeLessThan(0.8)
-    // the hold: flat within the tremolo's ±2 %, and it does move
-    const held = Array.from(env.slice(Math.ceil((attack + 0.01) / HARMONIUM_STEP), Math.floor(hold / HARMONIUM_STEP)))
-    expect(Math.min(...held)).toBeGreaterThan(0.975)
-    expect(Math.max(...held)).toBeLessThan(1.025)
-    expect(Math.max(...held) - Math.min(...held)).toBeGreaterThan(0.02)
-    // released within HARMONIUM_RELEASE
-    expect(at(hold + HARMONIUM_RELEASE / 2)).toBeLessThan(0.6)
+  it('have the measured spectra: rich, interpolated between the measured keys', () => {
+    for (const s of HARMONIUM_SPECTRA) {
+      expect(Math.max(...s.main, ...s.bass)).toBe(0) // dB re the key's strongest partial
+      expect(s.main.length).toBeGreaterThanOrEqual(7)
+      expect(s.bass.length).toBeGreaterThanOrEqual(15)
+    }
+    const a = harmoniumSpectrum(60)
+    const b = harmoniumSpectrum(63)
+    const mid = harmoniumSpectrum(61.5)
+    expect(mid.main[0]).toBeCloseTo((a.main[0] + b.main[0]) / 2, 6)
+    expect(harmoniumSpectrum(30)).toEqual(harmoniumSpectrum(48))
   })
 
-  it('speak slower in the bass', () => {
-    expect(harmoniumAttack(36)).toBeCloseTo(0.08, 6)
-    expect(harmoniumAttack(72)).toBeCloseTo(0.04, 6)
-    expect(harmoniumAttack(48)).toBeGreaterThan(harmoniumAttack(60))
+  it('speak like reeds: the main fundamental first, then its harmonics, the bass reed last', () => {
+    const x = render(53) // F3 over F2, the recording's cleanly started key
+    const f = 174.61
+    const bass = (f / 2) * Math.pow(2, -harmoniumDetune(53) / 1200)
+    const level = (freq: number, t: number) => amplitude(x, freq, t, 0.04) / amplitude(x, freq, 0.8, 0.04)
+    const firstAbove = (freq: number, ratio: number) => {
+      for (let t = 0; t < 0.6; t += 0.005) if (level(freq, t) >= ratio) return t
+      return Infinity
+    }
+    const main = firstAbove(f, 0.5)
+    const harmonics = firstAbove(3 * f, 0.5)
+    const low = firstAbove(bass, 0.5)
+    expect(main).toBeLessThan(0.12)
+    expect(harmonics).toBeGreaterThan(main + 0.03)
+    expect(low).toBeGreaterThan(main)
+    expect(Math.max(harmonics, low)).toBeLessThan(0.4)
+    expect(rms(x, 0, 0.02)).toBeLessThan(rms(x, 0.6, 1.1) * 0.1)
+    expect(reedSpeech(87)).toBeGreaterThan(reedSpeech(175))
+    expect(reedSpeech(2000)).toBe(0.025)
+    expect(speechCurve(0)).toBeCloseTo(0.01, 6)
+    expect(speechCurve(1)).toBe(1)
+  })
+
+  it('stop as the pallet closes and end in silence', () => {
+    const hold = 1.2
+    const x = render(64, hold)
+    expect(x.length).toBe(Math.round((hold + HARMONIUM_TAIL) * fs))
+    const steady = rms(x, 0.6, 1.1)
+    expect(rms(x, hold + 0.03, hold + 0.05)).toBeLessThan(steady * 0.1)
+    expect(Math.abs(x[x.length - 1])).toBeLessThan(1e-6)
+    expect(Math.abs(x[0])).toBeLessThan(1e-3)
+    expect(HARMONIUM_RELEASE).toBeLessThan(0.02)
+  })
+
+  it('are deterministic, clean and level across the keys', () => {
+    expect(render(67)).toEqual(render(67))
+    for (const m of [48, 55, 62, 69, 76, 84]) {
+      const x = render(m)
+      let peak = 0
+      for (const v of x) peak = Math.max(peak, Math.abs(v))
+      expect(peak).toBeLessThan(0.9)
+      const db = 20 * Math.log10(rms(x, 0.6, 1.1) / HARMONIUM_RMS)
+      expect(Math.abs(db)).toBeLessThan(3)
+    }
   })
 })
 

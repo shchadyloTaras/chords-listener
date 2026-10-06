@@ -14,7 +14,7 @@ import { emitLiveNotes, type LiveNote } from '../liveNotes'
 import type { NoteEvent } from './chordNotes'
 import { clamp, mulberry32 } from './dsp'
 import { startHandpanNote } from './handpanTone'
-import { startHarmoniumNote } from './harmonium'
+import { harmoniumParams, renderHarmonium } from './harmonium'
 import { startPianoNote } from './piano'
 import { pluckParams, pluckRelease, renderPluck, type PluckInstrument } from './pluck'
 import { roomImpulse } from './reverb'
@@ -62,7 +62,9 @@ const BUS: Record<Instrument, { level: number; reverb: number }> = {
 }
 /** Per-string level of the cached plucks (they are RMS-normalized). */
 const PLUCK_LEVEL = 0.55
-const PLUCK_CACHE_MAX = 48
+/** Per-key level of the cached harmonium notes (rendered at HARMONIUM_RMS); touch barely matters. */
+const HARMONIUM_LEVEL = 0.44
+const BUFFER_CACHE_MAX = 48
 
 /** Perceptual volume curve of the chordSoundVolume setting (0..1). */
 export function volumeGain(volume: number): number {
@@ -141,21 +143,26 @@ function busFor(g: Graph, instrument: Instrument): GainNode {
   return bus
 }
 
-// Plucked strings are rendered once per (instrument, pitch, sample rate); least recently used dropped.
-const pluckCache = new Map<string, AudioBuffer>()
+// Plucked strings (per instrument, pitch, sample rate) and harmonium keys (per pitch, hold, sample
+// rate) are rendered once; least recently used dropped.
+const bufferCache = new Map<string, AudioBuffer>()
+
+function cachedBuffer(ctx: BaseAudioContext, key: string, render: () => Float32Array): AudioBuffer {
+  let buffer = bufferCache.get(key)
+  if (buffer) bufferCache.delete(key)
+  else {
+    const data = render()
+    buffer = ctx.createBuffer(1, data.length, ctx.sampleRate)
+    buffer.getChannelData(0).set(data)
+    while (bufferCache.size >= BUFFER_CACHE_MAX) bufferCache.delete(bufferCache.keys().next().value as string)
+  }
+  bufferCache.set(key, buffer)
+  return buffer
+}
 
 function pluckBuffer(ctx: BaseAudioContext, instrument: PluckInstrument, midi: number): { buffer: AudioBuffer; release: number } {
   const params = pluckParams(instrument, midi, ctx.sampleRate)
-  const key = `${instrument}:${midi}:${ctx.sampleRate}`
-  let buffer = pluckCache.get(key)
-  if (buffer) pluckCache.delete(key)
-  else {
-    const data = renderPluck(params)
-    buffer = ctx.createBuffer(1, data.length, ctx.sampleRate)
-    buffer.getChannelData(0).set(data)
-    while (pluckCache.size >= PLUCK_CACHE_MAX) pluckCache.delete(pluckCache.keys().next().value as string)
-  }
-  pluckCache.set(key, buffer)
+  const buffer = cachedBuffer(ctx, `${instrument}:${midi}:${ctx.sampleRate}`, () => renderPluck(params))
   return { buffer, release: pluckRelease(params) }
 }
 
@@ -169,6 +176,20 @@ function startPluckNote(ctx: BaseAudioContext, when: number, instrument: PluckIn
   src.connect(out)
   src.start(when)
   return { out, level, sources: [src], nodes: [src, out], end: when + buffer.duration, release }
+}
+
+/** A harmonium key held `hold` seconds: its rendered note (the release is in the buffer). */
+function startHarmoniumNote(ctx: BaseAudioContext, when: number, midi: number, velocity: number, hold: number): VoiceParts {
+  const params = harmoniumParams(midi, hold, ctx.sampleRate)
+  const buffer = cachedBuffer(ctx, `harmonium:${midi}:${hold}:${ctx.sampleRate}`, () => renderHarmonium(params))
+  const src = ctx.createBufferSource()
+  src.buffer = buffer
+  const level = HARMONIUM_LEVEL * (0.85 + 0.15 * clamp(velocity, 0, 1))
+  const out = ctx.createGain()
+  out.gain.value = level
+  src.connect(out)
+  src.start(when)
+  return { out, level, sources: [src], nodes: [src, out], end: when + buffer.duration, release: hold }
 }
 
 function startVoice(g: Graph, instrument: Instrument, kind: PlayKind, n: NoteEvent, when: number): VoiceParts {
