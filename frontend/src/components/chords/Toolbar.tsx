@@ -222,6 +222,7 @@ function SettingsMenu() {
   const barsPerLine = useApp((s) => s.barsPerLine)
   const showDiagrams = useApp((s) => s.showDiagrams)
   const instrument = useApp((s) => s.instrument)
+  const keepAwake = useApp((s) => s.keepAwake)
   const setSetting = useApp((s) => s.setSetting)
   const collapse = useChordUi((s) => s.collapseRepeats)
   const sheetFit = useChordUi((s) => s.sheetFit)
@@ -269,6 +270,12 @@ function SettingsMenu() {
           <Switch checked={showDiagrams} onChange={(v) => setSetting('showDiagrams', v)} label={t('chords.diagrams')} />
           <LiveKeysSwitch />
           <Switch checked={collapse} onChange={setCollapse} label={t('chords.collapse')} hint={t('chords.collapse.title')} />
+          <Switch
+            checked={keepAwake}
+            onChange={(v) => setSetting('keepAwake', v)}
+            label={t('core.settings.keepAwake')}
+            hint={t('core.settings.keepAwakeHint')}
+          />
           <SoundSettings />
         </div>
       </Floating>

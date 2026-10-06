@@ -19,6 +19,8 @@ import { useRoute, type Route } from './hooks/useRoute'
 import { useDocumentTheme } from './hooks/useTheme'
 import { startAuth } from './lib/auth'
 import { watchLibrary } from './lib/cloud/libraryWatch'
+import { useKeepScreenAwake } from './lib/wakeLock'
+import { useApp } from './store'
 
 function Page({ route }: { route: Route }) {
   switch (route.name) {
@@ -47,6 +49,9 @@ export default function App() {
   useDocumentTheme()
   useHealthPolling()
   useGlobalHotkeys({ onHelp: openHelp })
+
+  // The phone screen stays on while the app is open (every page, a recording too) unless turned off in settings
+  useKeepScreenAwake(useApp((s) => s.keepAwake))
 
   useEffect(() => {
     void syncServerJobs()

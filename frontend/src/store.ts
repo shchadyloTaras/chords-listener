@@ -68,6 +68,8 @@ export interface Settings {
   liveKeys: boolean
   /** manual audio/visual sync correction for the live piano, ms (positive = keys light later) */
   syncOffsetMs: number
+  /** the screen stays on while the app is open and visible (Screen Wake Lock, lib/wakeLock.ts); this device only */
+  keepAwake: boolean
 }
 
 export interface AppState extends Settings {
@@ -125,6 +127,7 @@ const defaultSettings: Settings = {
   chordSoundVolume: 0.8,
   liveKeys: true,
   syncOffsetMs: 0,
+  keepAwake: true,
 }
 
 let toastSeq = 1
@@ -210,6 +213,7 @@ export const useApp = create<AppState>()(
         chordSoundVolume: s.chordSoundVolume,
         liveKeys: s.liveKeys,
         syncOffsetMs: s.syncOffsetMs,
+        keepAwake: s.keepAwake,
       }),
     },
   ),
