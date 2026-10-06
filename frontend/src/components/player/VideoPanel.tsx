@@ -134,8 +134,11 @@ export function VideoPanel({ engine, videoId, trackId }: VideoPanelProps) {
         className="pointer-events-none fixed inset-x-2 top-16"
         style={{ bottom: 'calc(var(--player-h, 0px) + 8px)' }}
       />
+      {/* the tour's bubble keeps clear of the floating video; the video docked under the header on phones adds to its top inset */}
       <motion.section
         aria-label={t('core.video.title')}
+        data-tour-avoid={docked ? undefined : ''}
+        data-tour-top={docked && !isDesktop ? '' : undefined}
         drag={!docked}
         dragControls={controls}
         dragListener={false}

@@ -12,6 +12,7 @@ import { ShortcutsModal } from './components/layout/ShortcutsModal'
 import { TrackPage } from './components/layout/TrackPage'
 import { JobPage } from './components/jobs/JobPage'
 import { Toaster } from './components/ui/Toaster'
+import { TourHost } from './components/tour/TourHost'
 import { useHealthPolling } from './hooks/useHealth'
 import { useGlobalHotkeys } from './hooks/useHotkeys'
 import { syncServerJobs } from './hooks/useJobs'
@@ -19,6 +20,7 @@ import { useRoute, type Route } from './hooks/useRoute'
 import { useDocumentTheme } from './hooks/useTheme'
 import { startAuth } from './lib/auth'
 import { watchLibrary } from './lib/cloud/libraryWatch'
+import { tourRouteKey } from './lib/tour/trigger'
 import { useKeepScreenAwake } from './lib/wakeLock'
 import { useApp } from './store'
 
@@ -65,12 +67,7 @@ export default function App() {
   useEffect(() => watchLibrary(), [])
 
   // New page → start at the top.
-  const routeKey =
-    route.name === 'job' || route.name === 'track'
-      ? `${route.name}:${route.id}`
-      : route.name === 'capture'
-        ? `capture:${route.videoId}`
-        : route.name
+  const routeKey = tourRouteKey(route)
   useEffect(() => {
     window.scrollTo(0, 0)
   }, [routeKey])
@@ -87,6 +84,7 @@ export default function App() {
       <DropOverlay />
       <AuthDialogHost />
       <Toaster />
+      <TourHost />
       <ShortcutsModal open={helpOpen} onClose={() => setHelpOpen(false)} />
     </MotionConfig>
   )
