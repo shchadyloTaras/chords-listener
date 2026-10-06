@@ -8,7 +8,6 @@ import { useApp, type Instrument } from '../../store'
 import { getLoadedDb, loadChordDb, type ChordDb, type FretInstrument } from '../diagrams/chordsDb'
 import { fretVoicings } from '../diagrams/fretted'
 import { resolveScale } from '../handpan'
-import { keyInstrument } from '../instruments'
 import { parseChord, type ParsedChord } from '../music/chord'
 import {
   fallbackFretNotes,
@@ -16,6 +15,7 @@ import {
   handpanChordNotes,
   handpanFieldNote,
   harmoniumChordNotes,
+  harmoniumKeyNote,
   pianoChordNotes,
   pianoKeyNote,
   pickChordIndex,
@@ -126,11 +126,18 @@ export function clickChordSound(label: string, opts: SoundOptions & { unlessPlay
   return true
 }
 
-/** One key of a chord's keyboard diagram (key 0 = C4), on the harmonium when `opts.instrument` is it, else the piano. */
+/** One key of a chord's piano diagram (key 0 = C4). */
 export function playPianoKey(label: string, key: number, opts: SoundOptions = {}): void {
   if (!soundEngine.unlock()) return unavailable()
   feedback(opts)
-  void soundEngine.play({ instrument: keyInstrument(opts.instrument), kind: 'note', label, notes: [pianoKeyNote(key)] })
+  void soundEngine.play({ instrument: 'piano', kind: 'note', label, notes: [pianoKeyNote(key)] })
+}
+
+/** One key of a chord's harmonium diagram (key 0 = C3). */
+export function playHarmoniumKey(label: string, key: number, opts: SoundOptions = {}): void {
+  if (!soundEngine.unlock()) return unavailable()
+  feedback(opts)
+  void soundEngine.play({ instrument: 'harmonium', kind: 'note', label, notes: [harmoniumKeyNote(key)] })
 }
 
 /** One field (0 = ding) of the selected handpan, in a chord's handpan diagram. */

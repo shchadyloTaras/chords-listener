@@ -13,7 +13,7 @@ import { Segmented } from './ui/controls'
 /** Tailwind's `sm` breakpoint. */
 export const WIDE_QUERY = '(min-width: 640px)'
 
-export function InstrumentPicker({ className }: { className?: string }) {
+export function InstrumentPicker({ className, tour }: { className?: string; tour?: string }) {
   const t = useT()
   const instrument = useApp((s) => s.instrument)
   const setSetting = useApp((s) => s.setSetting)
@@ -31,11 +31,16 @@ export function InstrumentPicker({ className }: { className?: string }) {
         onChange={(v) => setSetting('instrument', v)}
         options={INSTRUMENTS.map((v) => ({ value: v, label: name(v), title }))}
         className={className}
+        tour={tour}
       />
     )
   }
   return (
-    <span className={clsx('relative inline-flex h-7 items-center rounded-lg bg-surface-2 text-xs font-medium text-text hover:bg-surface-3', className)} title={title}>
+    <span
+      data-tour={tour}
+      className={clsx('relative inline-flex h-7 items-center rounded-lg bg-surface-2 text-xs font-medium text-text hover:bg-surface-3', className)}
+      title={title}
+    >
       <select
         aria-label={label}
         value={instrument}

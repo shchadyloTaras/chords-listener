@@ -9,10 +9,12 @@ import { useDocumentTitle } from '../../hooks/useDocumentTitle'
 import { useJobs } from '../../hooks/useJobs'
 import { useCanListenInTab } from '../../hooks/useMediaQuery'
 import { navigate, paths } from '../../hooks/useRoute'
+import { listenReady } from '../../lib/tour/trigger'
 import { useCloudInvite } from '../account/cloudInvite'
 import { errorText } from '../jobs/errorText'
 import { startFiles } from '../input/startFiles'
 import { FILE_ACCEPT } from '../input/url'
+import { useTourTrigger } from '../tour/hooks'
 import { Button } from '../ui/IconButton'
 import { LiveChordsView } from '../live'
 import { CaptureErrorAlert } from './CaptureErrorAlert'
@@ -118,6 +120,8 @@ export function ListenPage({ initialSource, title }: { initialSource: CaptureSou
   const phase = state.phase
   const capturing = isCapturing(phase)
   const busy = phase === 'stopping' || phase === 'saving' || phase === 'done'
+  // the Listen tour: at the start button; a recording keeps running if the tour is opened during it
+  useTourTrigger('listen', listenReady(phase), capturing)
 
   const download = () => {
     const rec = capture.recording
@@ -162,7 +166,7 @@ export function ListenPage({ initialSource, title }: { initialSource: CaptureSou
               <p className="text-sm text-muted">
                 {phase === 'paused' ? t('cloud.capture.paused') : t('cloud.listen.listening')} · {t('cloud.listen.limit')}
               </p>
-              <div className="flex gap-2">
+              <div data-tour="listen.controls" className="flex gap-2">
                 <Button size="sm" variant="ghost" icon={<X className="size-4" />} onClick={capture.cancel} className="flex-1 sm:flex-none">
                   {t('cloud.listen.discard')}
                 </Button>
@@ -222,7 +226,7 @@ export function ListenPage({ initialSource, title }: { initialSource: CaptureSou
             </div>
           ) : (
             <>
-              <div role="radiogroup" aria-label={t('cloud.listen.title')} className="grid gap-3 sm:grid-cols-2">
+              <div role="radiogroup" data-tour="listen.sources" aria-label={t('cloud.listen.title')} className="grid gap-3 sm:grid-cols-2">
                 <SourceCard
                   selected={source === 'mic'}
                   disabled={phase === 'requesting'}
@@ -245,6 +249,7 @@ export function ListenPage({ initialSource, title }: { initialSource: CaptureSou
               <div className="mt-6 flex flex-wrap items-center gap-3">
                 <Button
                   variant="primary"
+                  data-tour="listen.start"
                   disabled={phase === 'requesting'}
                   icon={phase === 'requesting' ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" fill="currentColor" />}
                   onClick={() => {

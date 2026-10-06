@@ -1,13 +1,14 @@
 // Track data → Score: measures from the chord sheet's bars, the sung melody (VocalNotes) as the
-// "Вокал" part, the instrument notes (TrackNotes) as the "Фортепіано" grand staff, chord symbols from
-// the displayed chords, key signature from the transposed key.
+// "Вокал" part, the instrument notes (TrackNotes) as the "Фортепіано" grand staff — or, at the simple
+// level, the displayed chords as the piano diagram writes them — chord symbols from the displayed
+// chords, key signature from the transposed key.
 
 import type { KeyInfo } from '../../types'
 import type { Bar } from '../music/bars'
 import type { NoteArrays } from '../transcription/compact'
 import { chordSymbolsFromBars } from './chordSymbols'
 import { notate } from './notation'
-import { arrangePiano } from './piano'
+import { arrangePiano, chordPiano, type PianoHands } from './piano'
 import { keySignature } from './spelling'
 import { buildTimeMap, DIV } from './timeMap'
 import type { Part, Score, ScoreOptions, Staff } from './types'
@@ -36,7 +37,7 @@ export interface ScoreInput {
   timeSignature: number
   /** the chord sheet's bars (effective rhythm) with their displayed chord slots */
   bars: readonly Pick<Bar, 'start' | 'end' | 'boundaries' | 'pickup' | 'slots'>[]
-  /** instrument notes, null while not available */
+  /** instrument notes, null while not available (not needed at the simple level) */
   piano: readonly NoteRow[] | null
   pianoSource: 'instruments' | 'mix' | null
   /** sung notes, null while not available */
@@ -55,14 +56,14 @@ export function rowsFromArrays(a: NoteArrays): NoteRow[] {
 export function buildScore(input: ScoreInput): Score {
   const map = buildTimeMap(input.bars, input.timeSignature)
   const key = keySignature(input.key ?? null, input.transpose, input.accidentals)
-  const step = input.options.simplified ? 2 : 1
+  const { level } = input.options
+  const full = level === 'full'
+  const step = full ? 1 : 2
   const parts: Part[] = []
 
-  // simplified: an eighth grid, and rests shorter than a quarter are closed (legato)
+  // medium / simple: an eighth grid, and rests shorter than a quarter are closed (legato)
   const vocalEvents =
-    input.vocals && input.options.vocals
-      ? quantizeVocal(input.vocals, map, { step, transpose: input.transpose, minRest: input.options.simplified ? DIV : DIV / 2 })
-      : null
+    input.vocals && input.options.vocals ? quantizeVocal(input.vocals, map, { step, transpose: input.transpose, minRest: full ? DIV / 2 : DIV }) : null
   if (vocalEvents) {
     const median = medianPitch(vocalEvents)
     parts.push({
@@ -73,14 +74,21 @@ export function buildScore(input: ScoreInput): Score {
       staves: [{ clef: median !== null && median < 60 ? 'treble8vb' : 'treble', events: vocalEvents, measures: [] }],
     })
   }
-  if (input.piano && input.options.piano) {
-    const hands = arrangePiano(input.piano, map, {
+  let hands: Pick<PianoHands, 'rh' | 'lh'> | null = null
+  if (input.options.piano && level === 'simple') {
+    const chords = chordPiano(input.bars, map.measures)
+    // a sheet without chords has nothing to play
+    if (chords.rh.length) hands = chords
+  } else if (input.options.piano && input.piano) {
+    hands = arrangePiano(input.piano, map, {
       step,
       transpose: input.transpose,
-      simplified: input.options.simplified,
+      simplified: level === 'medium',
       // a transcription of the full mix also hears the singer
       vocals: input.pianoSource === 'mix' ? input.vocals : null,
     })
+  }
+  if (hands) {
     parts.push({
       id: 'piano',
       name: input.labels.piano,
@@ -116,6 +124,6 @@ export function buildScore(input: ScoreInput): Score {
     parts,
     chords,
     chordsOn,
-    pianoSource: parts.some((p) => p.id === 'piano') ? input.pianoSource : null,
+    pianoSource: parts.some((p) => p.id === 'piano') ? (level === 'simple' ? 'chords' : input.pianoSource) : null,
   }
 }

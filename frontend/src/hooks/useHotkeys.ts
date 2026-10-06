@@ -18,8 +18,8 @@ export function isTypingTarget(target: EventTarget | null): boolean {
   return false
 }
 
-/** Another dialog is open (ours or the chord editor's) — global shortcuts stay quiet. */
-function modalOpen(): boolean {
+/** Another dialog is open (ours, the chord editor's, the tour) — global shortcuts, paste and drop stay quiet. */
+export function modalOpen(): boolean {
   return document.querySelector('[aria-modal="true"]') !== null
 }
 

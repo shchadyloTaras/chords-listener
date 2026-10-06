@@ -198,7 +198,7 @@ export function RecentTracks() {
     return (
       <section className="mt-14 rounded-2xl border border-dashed border-border-strong px-6 py-8 text-center">
         <p className="text-sm text-muted">{t('core.history.empty')}</p>
-        <a href={`#${paths.demo()}`} className="mt-3 inline-block text-sm font-medium text-accent hover:underline">
+        <a href={`#${paths.demo()}`} className="mt-3 inline-block text-sm font-medium text-accent hover:underline" data-tour="home.demo">
           {t('core.history.tryDemo')}
         </a>
       </section>
@@ -206,7 +206,7 @@ export function RecentTracks() {
   }
 
   return (
-    <section className="mt-14" aria-labelledby="recent-heading">
+    <section className="mt-14" aria-labelledby="recent-heading" data-tour="home.library" data-tour-until="li">
       <div className="mb-2 flex items-center justify-between gap-2 px-2">
         <h2 id="recent-heading" className="font-display text-lg font-semibold tracking-tight">
           {t('core.history.title')}

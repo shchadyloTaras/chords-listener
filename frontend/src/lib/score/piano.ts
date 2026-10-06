@@ -1,9 +1,15 @@
 // Piano arrangement of the transcribed instrument notes (Basic Pitch): ghost notes dropped, onsets and
 // offsets on the grid, the two hands split around middle C by a smooth adaptive split point, notes
 // with the same onset in a hand written as a chord (one voice per hand, at most 4 notes, outer voices
-// kept), each chord lasting until its notes end or the hand's next onset.
+// kept), each chord lasting until its notes end or the hand's next onset. The simple level needs no
+// transcription: the chord sheet's chords as the piano diagram writes them (chordPiano).
 
-import { DIV, quantizeSpan, type TimeMap } from './timeMap'
+import { pianoVoicing } from '../diagrams/piano'
+import { staffChord, type SpelledNote } from '../diagrams/staff'
+import type { BarSlot } from '../music/bars'
+import { parseChord } from '../music/chord'
+import type { SpelledPitch, Step } from './spelling'
+import { barStretch, DIV, quantizeSpan, type Measure, type TimeMap } from './timeMap'
 import type { ScoreNote } from './types'
 import type { NoteRow } from './vocal'
 
@@ -48,6 +54,8 @@ export const PIANO = {
   /** candidate split points (MIDI) */
   splitLow: 48,
   splitHigh: 72,
+  /** the simple level: velocity of the chords from the chord sheet */
+  chordVelocity: 0.7,
 }
 
 /** Notes whose onsets are this close (s) were struck together (the transcription jitters a little). */
@@ -324,4 +332,71 @@ function mergeRepeats(notes: ScoreNote[]): ScoreNote[] {
     out.push({ ...n, pitches: [...n.pitches] })
   }
   return out
+}
+
+type ChordSlot = Pick<BarSlot, 'label' | 'isNone' | 'beat' | 'span'>
+type Voiced = Pick<ScoreNote, 'pitches' | 'spelling'>
+
+const STEPS: readonly Step[] = ['C', 'D', 'E', 'F', 'G', 'A', 'B']
+
+function voiced(notes: readonly SpelledNote[]): Voiced {
+  return {
+    pitches: notes.map((n) => n.midi),
+    spelling: notes.map((n): SpelledPitch => ({ step: STEPS[n.letter], alter: n.accidental, octave: n.octave })),
+  }
+}
+
+/**
+ * The two hands of a displayed chord as the piano diagram's staff writes them (lib/diagrams/staff):
+ * the pitches and their spelling by thirds from the written root (Gm: B♭ in any key); null = rest.
+ */
+function chordHands(label: string): { rh: Voiced; lh: Voiced } | null {
+  const chord = parseChord(label)
+  if (!chord) return null
+  const { treble, bass } = staffChord(chord, pianoVoicing(chord))
+  return { rh: voiced(treble), lh: voiced([bass]) }
+}
+
+/**
+ * The simple level: the chord sheet's displayed chords (bar i = measure i) — the keyboard voicing from
+ * middle C in the right hand, the bass (slash bass, else root) in the octave below in the left. A
+ * chord is struck where it changes and again at every barline (no ties; a split long last bar too),
+ * lasting until the next change or the end of its slot; no chord ("N") and unknown labels are rests.
+ */
+export function chordPiano(bars: readonly { slots: readonly ChordSlot[] }[], measures: readonly Measure[]): { rh: ScoreNote[]; lh: ScoreNote[] } {
+  const rh: ScoreNote[] = []
+  const lh: ScoreNote[] = []
+  bars.forEach((bar, i) => {
+    const stretch = barStretch(measures, i, bars.length)
+    if (!stretch) return
+    // chord changes in the bar, on the beat grid of chordSymbolsFromBars (so the symbols sit on these notes)
+    const spans: { label: string; start: number; end: number }[] = []
+    for (const slot of bar.slots) {
+      const label = slot.isNone ? 'N' : slot.label
+      const start = Math.min(stretch.beats - 1, Math.max(0, slot.beat))
+      const end = Math.min(stretch.beats, Math.max(start + 1, slot.beat + slot.span))
+      const prev = spans[spans.length - 1]
+      if (prev && prev.label === label) prev.end = Math.max(prev.end, end)
+      else if (prev && prev.start === start) {
+        // clamped onto the same beat (a bar longer than its measures): the later chord wins
+        prev.label = label
+        prev.end = end
+      } else {
+        if (prev) prev.end = start
+        spans.push({ label, start, end })
+      }
+    }
+    for (const span of spans) {
+      const hands = chordHands(span.label)
+      if (!hands) continue
+      const cuts = [span.start, ...stretch.barlines.filter((b) => b > span.start && b < span.end), span.end]
+      for (let k = 0; k + 1 < cuts.length; k++) {
+        const start = stretch.offset + cuts[k] * DIV
+        const end = stretch.offset + cuts[k + 1] * DIV
+        rh.push({ start, end, ...hands.rh, velocity: PIANO.chordVelocity })
+        lh.push({ start, end, ...hands.lh, velocity: PIANO.chordVelocity })
+      }
+    }
+  })
+  return { rh, lh }
 }

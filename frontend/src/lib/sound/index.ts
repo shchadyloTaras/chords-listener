@@ -9,6 +9,7 @@ export {
   pickSongChord,
   playChordSound,
   playHandpanField,
+  playHarmoniumKey,
   playHotkeyChord,
   playPianoKey,
   playTestSound,

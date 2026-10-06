@@ -189,6 +189,8 @@ export const core: Dict = {
     'core.theme.dark': 'Темна',
     'core.theme.light': 'Світла',
     'core.theme.system': 'Як у системі',
+    'core.settings.keepAwake': 'Не вимикати екран',
+    'core.settings.keepAwakeHint': 'Поки застосунок відкритий, екран телефону не гасне',
 
     // shortcuts
     'core.keys.space': 'Пробіл',
@@ -390,6 +392,8 @@ export const core: Dict = {
     'core.theme.dark': 'Dark',
     'core.theme.light': 'Light',
     'core.theme.system': 'Match system',
+    'core.settings.keepAwake': 'Keep the screen on',
+    'core.settings.keepAwakeHint': 'While the app is open, the phone screen stays on',
 
     'core.keys.space': 'Space',
     'core.shortcuts.title': 'Keyboard shortcuts',

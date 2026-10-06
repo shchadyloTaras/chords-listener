@@ -316,6 +316,7 @@ export function ServerStatus({ compact = false }: { compact?: boolean }) {
       <button
         ref={buttonRef}
         type="button"
+        data-tour="header.mode"
         aria-expanded={open}
         aria-controls={id}
         aria-haspopup="dialog"
@@ -330,13 +331,14 @@ export function ServerStatus({ compact = false }: { compact?: boolean }) {
           'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border text-xs font-medium transition-colors duration-150',
           'border-border bg-surface-2 text-muted hover:bg-surface-3 hover:text-text',
           open && 'bg-surface-3 text-text',
-          compact ? 'w-8 justify-center' : 'w-8 justify-center sm:w-auto sm:px-2.5',
+          // the words from md: at 640–767 px they leave no room for the header's «Інструкція» button
+          compact ? 'w-8 justify-center' : 'w-8 justify-center md:w-auto md:px-2.5',
           connected && 'text-text',
         )}
       >
         {icon}
-        {!compact && <span className="hidden whitespace-nowrap sm:inline">{label}</span>}
-        {!compact && connected && <Check className="hidden size-3.5 text-success sm:block" aria-hidden="true" />}
+        {!compact && <span className="hidden whitespace-nowrap md:inline">{label}</span>}
+        {!compact && connected && <Check className="hidden size-3.5 text-success md:block" aria-hidden="true" />}
       </button>
 
       <AnimatePresence>

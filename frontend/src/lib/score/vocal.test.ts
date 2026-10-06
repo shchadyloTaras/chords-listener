@@ -134,7 +134,7 @@ describe('quantizeVocal', () => {
     expect(quantizeVocal([[0.18, 0.5, 60, 0.8]], map, { step: 1 })[0].start).toBe(2)
   })
 
-  it('uses an eighth grid in simplified mode and transposes', () => {
+  it('uses an eighth grid (the medium and simple levels) and transposes', () => {
     const out = quantizeVocal([[0.13, 0.62, 60, 0.8]], map, { step: 2, transpose: 2 })
     expect(out).toEqual([{ start: 2, end: 6, pitches: [62], velocity: 0.8 }])
     expect(out[0].start % 2).toBe(0)

@@ -48,7 +48,7 @@ export const chords: Dict = {
     'chords.instrument.guitar': 'Гітара',
     'chords.instrument.bass': 'Бас',
     'chords.instrument.ukulele': 'Укулеле',
-    'chords.instrument.piano': 'Піаніно',
+    'chords.instrument.piano': 'Фортепіано',
     'chords.instrument.harmonium': 'Фісгармонія',
     'chords.instrument.handpan': 'Хендпан',
     'chords.instrument.title': 'Аплікатури для інструмента (I)',

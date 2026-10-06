@@ -89,6 +89,17 @@ describe('chord symbols', () => {
     ])
   })
 
+  it('a long last bar (split into two measures): a change after its 4th beat sits on the next downbeat', () => {
+    const song = steadyBars({ bpm: 120, bars: 2, tail: 1, chords: [['C', 0, 4], ['F', 4, 4], ['G', 8, 1]] })
+    const map = buildTimeMap(song.bars, 4)
+    expect(map.measures.map((m) => m.offset)).toEqual([0, 16, 32])
+    expect(chordSymbolsFromBars(song.bars, map.measures)).toEqual([
+      { tick: 0, label: 'C' },
+      { tick: 16, label: 'F' },
+      { tick: 32, label: 'G' },
+    ])
+  })
+
   it('MusicXML harmony for every quality', () => {
     expect(harmonyOf('Bbm7/F')).toEqual({
       root: { step: 'B', alter: -1 },

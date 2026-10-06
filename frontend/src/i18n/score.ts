@@ -13,8 +13,14 @@ export const score: Dict = {
     'score.toggle.piano.title': 'Партія фортепіано: ноти інструментів (права й ліва рука)',
     'score.toggle.chords': 'Акорди',
     'score.toggle.chords.title': 'Назви акордів над нотами',
-    'score.toggle.simple': 'Спрощено',
-    'score.toggle.simple.title': 'Простіший запис: восьмі замість шістнадцятих і менше нот в акордах',
+
+    'score.level': 'Складність нот',
+    'score.level.full': 'Складний',
+    'score.level.full.title': 'Усі розпізнані ноти: шістнадцяті й до чотирьох нот у кожній руці',
+    'score.level.medium': 'Середній',
+    'score.level.medium.title': 'Простіший запис: восьмі замість шістнадцятих і менше нот в акордах',
+    'score.level.simple': 'Спрощений',
+    'score.level.simple.title': 'Лише акорди: акорд у правій руці й бас у лівій, як на діаграмі фортепіано',
 
     'score.part.vocal': 'Вокал',
     'score.part.vocalAbbr': 'Вок.',
@@ -31,6 +37,7 @@ export const score: Dict = {
     'score.piano.firstRun': 'Ноти розпізнаються один раз прямо в браузері й зберігаються, тож наступного разу партитура відкриється одразу.',
     'score.piano.error': 'Не вдалося розпізнати ноти інструментів.',
     'score.piano.unavailable': 'У цієї пісні немає звуку, тож нот немає.',
+    'score.piano.noChords': 'У пісні немає акордів, тож спрощеної партії фортепіано немає.',
     'score.retry': 'Спробувати ще',
 
     'score.vocals.loading': 'Завантажую мелодію вокалу…',
@@ -72,7 +79,7 @@ export const score: Dict = {
     'score.export.musicxml.hint': 'Для MuseScore, Dorico, Finale, Sibelius',
     'score.export.midi': 'MIDI',
     'score.export.midi.hint': 'Для GarageBand, Logic, FL Studio та інших',
-    'score.export.menu': 'Ноти для піаніно',
+    'score.export.menu': 'Ноти для фортепіано',
     'score.export.preparing': 'Готую ноти…',
     'score.export.pdfWorking': 'Створюю PDF…',
     'score.export.done': 'Збережено {name}',
@@ -100,8 +107,14 @@ export const score: Dict = {
     'score.toggle.piano.title': 'Piano part: the notes of the instruments (right and left hand)',
     'score.toggle.chords': 'Chords',
     'score.toggle.chords.title': 'Chord names above the notes',
-    'score.toggle.simple': 'Simplified',
-    'score.toggle.simple.title': 'Easier to read: eighths instead of sixteenths and fewer notes per chord',
+
+    'score.level': 'Notation level',
+    'score.level.full': 'Complex',
+    'score.level.full.title': 'Every transcribed note: sixteenths and up to four notes per hand',
+    'score.level.medium': 'Medium',
+    'score.level.medium.title': 'Easier to read: eighths instead of sixteenths and fewer notes per chord',
+    'score.level.simple': 'Simple',
+    'score.level.simple.title': 'Chords only: the chord in the right hand and the bass in the left, like the piano diagram',
 
     'score.part.vocal': 'Vocals',
     'score.part.vocalAbbr': 'Voc.',
@@ -118,6 +131,7 @@ export const score: Dict = {
     'score.piano.firstRun': 'Notes are transcribed once, right in your browser, and saved — next time the score opens at once.',
     'score.piano.error': 'Could not transcribe the instruments.',
     'score.piano.unavailable': 'This song has no audio, so there are no notes.',
+    'score.piano.noChords': 'The song has no chords, so there is no simple piano part.',
     'score.retry': 'Try again',
 
     'score.vocals.loading': 'Loading the vocal melody…',

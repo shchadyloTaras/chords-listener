@@ -162,6 +162,22 @@ export function buildTimeMap(frames: readonly Pick<BarFrame, 'start' | 'end' | '
   return { measures, timeSignature: ts, totalTicks, toTicks, toSeconds, measureAtTick }
 }
 
+/**
+ * Bar `i` of the chord sheet's `barCount` bars on the measures: measure i — for the last bar also the
+ * extra measure of a split long last bar — as one stretch of `beats` beats from tick `offset`, with
+ * the barlines inside it (beats from its start).
+ */
+export function barStretch(measures: readonly Measure[], i: number, barCount: number): { offset: number; beats: number; barlines: number[] } | null {
+  const first = measures[i]
+  if (!first) return null
+  const own = i === barCount - 1 ? measures.slice(i) : [first]
+  return {
+    offset: first.offset,
+    beats: own.reduce((n, m) => n + m.beats, 0),
+    barlines: own.slice(1).map((m) => (m.offset - first.offset) / DIV),
+  }
+}
+
 /** `t` (seconds) on a grid of `step` ticks. */
 export function quantize(map: TimeMap, t: number, step: number): number {
   return Math.round(map.toTicks(t) / step) * step

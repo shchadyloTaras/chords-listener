@@ -6,7 +6,7 @@ import type { ChordQuality } from '../../types'
 import type { Bar } from '../music/bars'
 import { parseChord } from '../music/chord'
 import type { Step } from './spelling'
-import { DIV, type Measure } from './timeMap'
+import { barStretch, DIV, type Measure } from './timeMap'
 import type { ChordSymbol } from './types'
 
 /** Chord changes on the measures (a no-chord stretch is written as N.C. when it lasts 2+ beats). */
@@ -14,13 +14,14 @@ export function chordSymbolsFromBars(bars: readonly Pick<Bar, 'slots'>[], measur
   const out: ChordSymbol[] = []
   let current: string | null = null
   bars.forEach((bar, i) => {
-    const m = measures[i]
-    if (!m) return
+    // a split long last bar goes on over its extra measure
+    const stretch = barStretch(measures, i, bars.length)
+    if (!stretch) return
     for (const slot of bar.slots) {
       const label = slot.isNone ? 'N' : slot.label
       if (label === current) continue
       if (label === 'N' && (current === null || slot.span < 2)) continue
-      const tick = m.offset + Math.min(m.beats - 1, Math.max(0, slot.beat)) * DIV
+      const tick = stretch.offset + Math.min(stretch.beats - 1, Math.max(0, slot.beat)) * DIV
       const prev = out[out.length - 1]
       if (prev && prev.tick === tick) prev.label = label
       else out.push({ tick, label })

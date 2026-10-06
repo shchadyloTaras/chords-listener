@@ -1,4 +1,4 @@
-import { ExternalLink, Keyboard, Monitor, Moon, MoreHorizontal, RefreshCw, Sun, Trash2 } from 'lucide-react'
+import { CircleHelp, ExternalLink, Keyboard, Monitor, Moon, MoreHorizontal, RefreshCw, Sun, Trash2 } from 'lucide-react'
 import { useT } from '../../i18n'
 import { toApiError } from '../../lib/api'
 import { useApp } from '../../store'
@@ -38,10 +38,12 @@ interface HeaderMenuProps {
   /** include theme / language / shortcuts (phones, where they are not in the header) */
   withSettings: boolean
   onHelp(): void
+  /** «Інструкція» (only where the current screen has a tour) */
+  onGuide?(): void
 }
 
 /** Overflow menu: track actions (source, re-analyze, delete) and, on phones, app settings. */
-export function HeaderMenu({ track, demo, withSettings, onHelp }: HeaderMenuProps) {
+export function HeaderMenu({ track, demo, withSettings, onHelp, onGuide }: HeaderMenuProps) {
   const t = useT()
   const theme = useApp((s) => s.theme)
   const lang = useApp((s) => s.lang)
@@ -118,6 +120,14 @@ export function HeaderMenu({ track, demo, withSettings, onHelp }: HeaderMenuProp
           <MenuSeparator />
           <MenuItem icon={<Keyboard />} onSelect={onHelp} hint="?">
             {t('core.shortcuts.title')}
+          </MenuItem>
+        </>
+      )}
+      {onGuide && (
+        <>
+          {!withSettings && track && (href || canEdit) && <MenuSeparator />}
+          <MenuItem icon={<CircleHelp />} onSelect={onGuide}>
+            {t('tour.open')}
           </MenuItem>
         </>
       )}

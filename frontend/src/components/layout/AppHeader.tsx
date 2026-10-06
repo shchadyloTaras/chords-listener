@@ -4,7 +4,7 @@ import type { Route } from '../../hooks/useRoute'
 import { paths } from '../../hooks/useRoute'
 import { JobPills } from '../jobs/JobPills'
 import { LogoMark, Wordmark } from '../ui/Logo'
-import { HelpButton, LangSwitch, ThemeMenu } from './HeaderSettings'
+import { GuideButton, HelpButton, LangSwitch, ThemeMenu } from './HeaderSettings'
 import { ServerStatus } from './ServerStatus'
 import { HeaderMenu, SourceLink } from './TrackActions'
 import { TrackTitleBar } from './TrackTitleBar'
@@ -13,7 +13,7 @@ import { TrackTitleBar } from './TrackTitleBar'
  * One slim sticky bar. Track pages swap the wordmark for back + title so the
  * chord view keeps as much height as possible.
  */
-export function AppHeader({ route, onHelp }: { route: Route; onHelp(): void }) {
+export function AppHeader({ route, onHelp, onGuide }: { route: Route; onHelp(): void; onGuide?: () => void }) {
   const isTrack = route.name === 'track' || route.name === 'demo'
   const demo = route.name === 'demo'
   const track = useApp((s) => (isTrack ? s.track : null))
@@ -40,18 +40,19 @@ export function AppHeader({ route, onHelp }: { route: Route; onHelp(): void }) {
           )}
           {isTrack && track && !demo && (
             <div className="hidden sm:block">
-              <HeaderMenu track={track} demo={demo} withSettings={false} onHelp={onHelp} />
+              <HeaderMenu track={track} demo={demo} withSettings={false} onHelp={onHelp} onGuide={onGuide} />
             </div>
           )}
-          <div className="hidden items-center gap-1 sm:flex">
+          <div className="hidden items-center gap-1 sm:flex" data-tour="header.settings">
             <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
             <LangSwitch />
             <ThemeMenu />
             <HelpButton onHelp={onHelp} />
+            {onGuide && <GuideButton onGuide={onGuide} />}
           </div>
           <AccountButton />
-          <div className="sm:hidden">
-            <HeaderMenu track={track} demo={demo} withSettings onHelp={onHelp} />
+          <div className="sm:hidden" data-tour="header.more">
+            <HeaderMenu track={track} demo={demo} withSettings onHelp={onHelp} onGuide={onGuide} />
           </div>
         </div>
       </div>

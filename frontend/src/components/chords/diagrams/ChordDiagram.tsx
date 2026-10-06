@@ -4,17 +4,19 @@ import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useT } from '../../../i18n'
 import type { FretInstrument } from '../../../lib/diagrams/chordsDb'
 import { fretVoicings } from '../../../lib/diagrams/fretted'
+import { harmoniumVoicing } from '../../../lib/diagrams/harmonium'
 import { pianoVoicing } from '../../../lib/diagrams/piano'
 import { isFretted, isKeyboard } from '../../../lib/instruments'
 import { staffChord } from '../../../lib/diagrams/staff'
 import { parseChord } from '../../../lib/music/chord'
 import { chordTone } from '../../../lib/music/color'
 import type { Spelling } from '../../../lib/music/notes'
-import { playChordSound, playHandpanField, playPianoKey, useSoundingTargets } from '../../../lib/sound'
+import { playChordSound, playHandpanField, playHarmoniumKey, playPianoKey, useSoundingTargets } from '../../../lib/sound'
 import type { Instrument } from '../../../store'
 import { HandpanDiagram } from '../handpan/HandpanDiagram'
 import { useChordUi } from '../uiStore'
 import { FretChart } from './FretChart'
+import { HARMONIUM_ASPECT, HarmoniumChart } from './HarmoniumChart'
 import { PianoChart } from './PianoChart'
 import { StaffChart } from './StaffChart'
 import { useChordDb } from './useChordDb'
@@ -24,21 +26,23 @@ const WIDTHS = {
   bass: { sm: 56, md: 80, lg: 100 },
   ukulele: { sm: 52, md: 76, lg: 96 },
   piano: { sm: 120, md: 168, lg: 210 },
-  harmonium: { sm: 120, md: 168, lg: 210 },
+  // 37 keys: ~5.7 px white keys in the legend (a tile as narrow as the piano's, two per row on a 360 px
+  // phone), ~10.4 / ~11.5 px in the popover / hero
+  harmonium: { sm: 132, md: 240, lg: 264 },
   handpan: { sm: 80, md: 124, lg: 148 },
 } as const
 
-/** grand-staff height (px) shown above the piano keyboard */
+/** grand-staff height (px) shown above the piano / harmonium keyboard */
 const STAFF_HEIGHTS = { sm: 72, md: 96, lg: 124 } as const
 
 export type DiagramSize = 'sm' | 'md' | 'lg'
 
 /**
  * Chord diagram for the selected instrument. Guitar / ukulele: chart from chords-db, bass: generated
- * shapes (lib/diagrams/bass.ts), each with a voicing switcher (shared choice per chord); piano /
- * harmonium: 2-octave keyboard; handpan: the selected scale with the chord's tone fields lit. A
- * click plays the chord (a piano key / handpan field: just that note); the notes light up while
- * they sound.
+ * shapes (lib/diagrams/bass.ts), each with a voicing switcher (shared choice per chord); piano:
+ * 2-octave keyboard, harmonium: the instrument's 37 keys (C3–C6) under its carved panel, both under
+ * the grand staff; handpan: the selected scale with the chord's tone fields lit. A click plays the
+ * chord (a key / handpan field: just that note); the notes light up while they sound.
  */
 export const ChordDiagram = memo(function ChordDiagram({
   label,
@@ -92,7 +96,7 @@ export const ChordDiagram = memo(function ChordDiagram({
     return (
       <div
         className={clsx('flex items-center justify-center rounded-lg border border-dashed border-border text-faint', className)}
-        style={{ width, height: isKeyboard(instrument) ? width * 0.32 : width * 1.18 }}
+        style={{ width, height: instrument === 'harmonium' ? width * HARMONIUM_ASPECT : isKeyboard(instrument) ? width * 0.32 : width * 1.18 }}
         aria-hidden
       >
         —
@@ -120,7 +124,18 @@ export const ChordDiagram = memo(function ChordDiagram({
           title={t('chords.staff.label', { chord: label, notes: right, bass: staff.bass.name })}
           clefTitles={{ treble: t('chords.staff.treble'), bass: t('chords.staff.bass') }}
         />
-        <PianoChart voicing={v} color={color} width={width} title={title} sounding={sounding} onKey={(k) => playPianoKey(label, k, { instrument })} />
+        {instrument === 'harmonium' ? (
+          <HarmoniumChart
+            voicing={harmoniumVoicing(parsed)}
+            color={color}
+            width={width}
+            title={title}
+            sounding={sounding}
+            onKey={(k) => playHarmoniumKey(label, k)}
+          />
+        ) : (
+          <PianoChart voicing={v} color={color} width={width} title={title} sounding={sounding} onKey={(k) => playPianoKey(label, k)} />
+        )}
         <figcaption className="font-mono text-[11px] tracking-wide text-muted">
           {parsed.bassPc != null && `${staff.bass.name} / `}
           {staff.treble.map((n) => n.name).join('  ')}

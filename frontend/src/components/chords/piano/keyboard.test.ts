@@ -3,8 +3,10 @@ import {
   DEFAULT_RANGE,
   fitRange,
   foldNote,
+  HARMONIUM_RANGE,
   isBlack,
   layoutKeyboard,
+  liveRange,
   maxOctavesFor,
   noteName,
   pitchName,
@@ -127,6 +129,48 @@ describe('layoutKeyboard', () => {
   it('keeps key length within limits', () => {
     expect(layoutKeyboard({ low: 21, high: 108 }, 380).whiteH).toBe(56)
     expect(layoutKeyboard({ low: 48, high: 59 }, 1200).whiteH).toBe(132)
+  })
+})
+
+describe('the harmonium: its own 37 keys', () => {
+  const song = weights([[30, 5], [43, 8], [60, 10], [64, 8], [100, 2]])
+
+  it('shows C3–C6 whatever the song and the screen; the piano keeps fitting the song', () => {
+    expect(HARMONIUM_RANGE).toEqual({ low: 48, high: 84 })
+    for (const width of [375, 800, 1400]) {
+      expect(liveRange('harmonium', song, width)).toEqual(HARMONIUM_RANGE)
+      expect(liveRange('harmonium', new Float64Array(128), width)).toEqual(HARMONIUM_RANGE)
+      expect(liveRange('piano', song, width)).toEqual(fitRange(song, { minOctaves: 4, maxOctaves: maxOctavesFor(width) }))
+    }
+  })
+
+  it('lays out a range that ends on a C: 22 white keys, 15 black, the top C flush right', () => {
+    const k = layoutKeyboard(HARMONIUM_RANGE, 660)
+    expect(whiteCount(HARMONIUM_RANGE)).toBe(22)
+    expect(k.whites).toHaveLength(22)
+    expect(k.blacks).toHaveLength(15)
+    expect(k.whiteW).toBe(30)
+    expect(k.keys[48]).toMatchObject({ x: 0, w: 30, black: false })
+    expect(k.keys[83]).toMatchObject({ x: 600, black: false }) // B5
+    expect(k.keys[84]).toMatchObject({ x: 630, w: 30, black: false }) // C6, the last key
+    expect(k.keys[85]).toBeUndefined()
+    expect(k.keys[47]).toBeUndefined()
+    // the last octave's black keys sit where they do in every other octave
+    expect(k.keys[82]!.x - k.keys[70]!.x).toBeCloseTo(7 * 30, 6)
+    for (const b of k.blacks) expect(b.x + b.w).toBeLessThan(630)
+    const [lx, lw] = k.lane(84)
+    expect(lx).toBeGreaterThan(630)
+    expect(lx + lw).toBeLessThan(660)
+  })
+
+  it('folds notes outside C3–C6 by octaves onto it', () => {
+    const r = HARMONIUM_RANGE
+    expect(foldNote(84, r)).toEqual({ key: 84, fold: 0 }) // C6 is on the instrument
+    expect(foldNote(85, r)).toEqual({ key: 73, fold: 1 }) // C#6 → C#5
+    expect(foldNote(96, r)).toEqual({ key: 84, fold: 1 }) // C7 → C6
+    expect(foldNote(95, r)).toEqual({ key: 83, fold: 1 }) // B6 → B5
+    expect(foldNote(47, r)).toEqual({ key: 59, fold: -1 }) // B2 → B3
+    expect(foldNote(24, r)).toEqual({ key: 48, fold: -1 }) // C1 → C3
   })
 })
 

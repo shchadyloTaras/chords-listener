@@ -1,10 +1,11 @@
-// "Живе піаніно": the song's notes falling onto a piano keyboard whose keys go down in sync with the
+// "Живе фортепіано": the song's notes falling onto a piano keyboard whose keys go down in sync with the
 // audio (notes transcribed once per track, see lib/transcription — from the instruments stem when the
 // server separated the vocals), plus chord-preview notes and, when the vocals were transcribed, the
 // sung melody as an outlined overlay with its own toggle. Under the title: what the panel is doing,
 // then (notes ready) a legend for the two kinds of bars, or an offer to separate the voice when the
 // notes still come from the full mix.
-// Lazy-loaded by LivePianoSlot; rendered under the now-playing hero when the instrument is piano.
+// Lazy-loaded by LivePianoSlot; rendered under the now-playing hero when the instrument is a keyboard:
+// the piano's keys fitted to the song, the harmonium's own 37 keys (C3–C6).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
@@ -13,10 +14,12 @@ import { useT } from '../../../i18n'
 import { useMediaQuery } from '../../../hooks/useMediaQuery'
 import { onLiveNotes } from '../../../lib/liveNotes'
 import { isMinorQuality } from '../../../lib/music/chord'
+import { keysNotesReady } from '../../../lib/tour/trigger'
 import { useConnection } from '../../../lib/serverMode'
 import { requestNotes, type NotesSource, type NotesState } from '../../../lib/transcription'
 import { fetchStem, startVocals, useVocals, vocalsSupport, type VocalsState } from '../../../lib/vocals'
 import { useApp } from '../../../store'
+import { useTourFlags, useTourTrigger } from '../../tour/hooks'
 import { useChordModel } from '../model'
 import { usePianoNotes } from '../score/pianoNotes'
 import { useScoreSettings } from '../score/scoreSettings'
@@ -33,7 +36,12 @@ export default function LivePiano() {
   const model = useChordModel()
   const { track, chords, spelling, rhythm, transpose } = model
   const setSetting = useApp((s) => s.setSetting)
+  const keyboard = useApp((s) => (s.instrument === 'harmonium' ? 'harmonium' : 'piano'))
   const { notes, source } = usePianoNotes(track)
+  // the Live keys tour: the panel is shown with its notes ready (never the demo: it has no audio)
+  const notesReady = keysNotesReady(notes)
+  useTourFlags({ keysPanel: true, keysReady: notesReady })
+  useTourTrigger('keys', notesReady)
   // a track that says it has no vocals is "missing" without asking the server (the offer below); one that
   // does not say is not asked either — opening a song must not wake the cloud
   const vocals = useVocals(track, { knownOnly: track.vocals !== false })
@@ -93,6 +101,10 @@ export default function LivePiano() {
       renderer.current = null
     }
   }, [])
+
+  useEffect(() => {
+    renderer.current?.setKeyboard(keyboard)
+  }, [keyboard])
 
   useEffect(() => {
     renderer.current?.setNotes(notes.status === 'ready' ? notes.index : null)
@@ -158,6 +170,7 @@ export default function LivePiano() {
         {vocals.status === 'ready' && (
           <IconButton
             label={t('score.live.vocals.title')}
+            data-tour="keys.voice"
             size="sm"
             active={showVocals}
             aria-pressed={showVocals}
@@ -181,8 +194,8 @@ export default function LivePiano() {
           </div>
         )}
       </div>
-      <div ref={wrap} className="relative border-t border-border">
-        <canvas ref={canvas} role="img" aria-label={t('keys.canvas')} className="block w-full" style={{ height: layout.height || undefined }} />
+      <div ref={wrap} className="relative border-t border-border" data-tour="keys.canvas">
+        <canvas ref={canvas} role="img" aria-label={t(keyboard === 'harmonium' ? 'keys.canvas.harmonium' : 'keys.canvas')} className="block w-full" style={{ height: layout.height || undefined }} />
         {layout.roll > 0 && <RollMessage state={notes} height={layout.roll} />}
         <p className="sr-only" aria-live="polite">
           {announce}
@@ -274,6 +287,7 @@ function VocalsLine({ notes, source, vocals, showVocals }: { notes: NotesState; 
           <span className="truncate">{t('keys.vocals.hint')}</span>
           <button
             type="button"
+            data-tour="keys.voice"
             onClick={() => void startVocals(track)}
             title={t('keys.vocals.separate.title')}
             className="inline-flex shrink-0 items-center gap-1 rounded px-1 py-0.5 font-medium text-accent underline-offset-2 hover:underline"

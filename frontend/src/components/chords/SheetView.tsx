@@ -219,7 +219,7 @@ const SheetLine = memo(function SheetLine({ group, gi, perLine }: { group: LineG
   const last = rep.bars[rep.bars.length - 1].index
 
   return (
-    <div data-group={gi} className="group/line relative flex items-stretch">
+    <div data-group={gi} data-tour={gi === 0 ? 'song.grid' : undefined} className="group/line relative flex items-stretch">
       <div
         className="grid min-w-0 flex-1"
         style={{ gridTemplateColumns: `repeat(${perLine}, minmax(0, 1fr))` }}
@@ -311,6 +311,7 @@ const BarCell = memo(function BarCell({
       {selected && <span aria-hidden className="pointer-events-none absolute inset-0 ring-1 ring-accent/50 ring-inset" />}
       <button
         type="button"
+        data-tour={bar.index === 0 ? 'song.barNumber' : undefined}
         onClick={(e) => selectBar(bar.index, e.shiftKey)}
         title={t('chords.bar.select', { n: bar.index + 1 })}
         aria-label={t('chords.bar.select', { n: bar.index + 1 })}

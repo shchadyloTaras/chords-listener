@@ -65,6 +65,7 @@ export function Segmented<T extends string | number>({
   label,
   className,
   size = 'md',
+  tour,
 }: {
   value: T
   options: SegmentOption<T>[]
@@ -72,9 +73,11 @@ export function Segmented<T extends string | number>({
   label: string
   className?: string
   size?: 'sm' | 'md'
+  /** a guided-tour anchor (data-tour) */
+  tour?: string
 }) {
   return (
-    <div role="radiogroup" aria-label={label} className={clsx('inline-flex shrink-0 rounded-lg bg-surface-2 p-0.5', className)}>
+    <div role="radiogroup" aria-label={label} data-tour={tour} className={clsx('inline-flex shrink-0 rounded-lg bg-surface-2 p-0.5', className)}>
       {options.map((o) => {
         const on = o.value === value
         return (

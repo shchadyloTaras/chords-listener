@@ -1,7 +1,7 @@
 // Score model: quantized parts on the measures of lib/score/timeMap, ready for the MusicXML / MIDI
 // writers. Times are ticks (DIV per quarter note = sixteenths) from the start of the first measure.
 
-import type { KeySig } from './spelling'
+import type { KeySig, SpelledPitch } from './spelling'
 import type { TimeMap } from './timeMap'
 
 /** A note or chord of one voice, quantized. Voices never overlap: the gaps are rests. */
@@ -12,6 +12,8 @@ export interface ScoreNote {
   end: number
   /** MIDI notes (transposed), ascending, at least one */
   pitches: number[]
+  /** how each pitch is written (same order) when the source knows (a chord's own spelling); else from the key */
+  spelling?: SpelledPitch[]
   /** 0..1 */
   velocity: number
 }
@@ -31,6 +33,8 @@ export interface WrittenNote {
   dots: number
   /** empty = rest */
   pitches: number[]
+  /** the note's own spelling of the pitches (ScoreNote.spelling) */
+  spelling?: SpelledPitch[]
   velocity: number
   /** a rest filling the whole measure */
   measureRest: boolean
@@ -88,9 +92,19 @@ export interface Score {
   chords: ChordSymbol[]
   /** the part whose first staff carries the chord symbols */
   chordsOn: PartId | null
-  /** which audio the piano part was transcribed from */
-  pianoSource: 'instruments' | 'mix' | null
+  /** which audio the piano part was transcribed from, or 'chords' (the simple level: built from the chord sheet) */
+  pianoSource: 'instruments' | 'mix' | 'chords' | null
 }
+
+/**
+ * How much of the transcription the piano part writes: 'full' = every transcribed note (sixteenths, up
+ * to 4 notes per hand), 'medium' = an eighth grid and a thinner texture, 'simple' = only the chord
+ * sheet's chords (the piano diagram's voicing + bass), no transcription needed. The vocals are on the
+ * sixteenth grid at 'full', on the eighth grid otherwise.
+ */
+export type ScoreLevel = 'full' | 'medium' | 'simple'
+
+export const SCORE_LEVELS: readonly ScoreLevel[] = ['full', 'medium', 'simple']
 
 export interface ScoreOptions {
   /** show the vocal part (when vocal notes exist) */
@@ -99,8 +113,8 @@ export interface ScoreOptions {
   piano: boolean
   /** chord symbols */
   chords: boolean
-  /** eighth-note grid and a thinner piano texture */
-  simplified: boolean
+  /** notation level */
+  level: ScoreLevel
 }
 
-export const DEFAULT_SCORE_OPTIONS: ScoreOptions = { vocals: true, piano: true, chords: true, simplified: false }
+export const DEFAULT_SCORE_OPTIONS: ScoreOptions = { vocals: true, piano: true, chords: true, level: 'full' }

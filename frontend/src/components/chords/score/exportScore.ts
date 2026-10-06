@@ -1,7 +1,7 @@
 // "Download the score" (score view header and the toolbar's copy / download menu): PDF for reading and
 // printing on any device, MusicXML for notation editors, MIDI for DAWs. The score is the one shown in
-// the score view (same parts / chords / simplified options); started elsewhere, the notes are loaded
-// (or transcribed) first.
+// the score view (same parts / chords / notation level); started elsewhere, the notes are loaded (or
+// transcribed, except at the simple level) first.
 
 import { create } from 'zustand'
 import { translate } from '../../../i18n'

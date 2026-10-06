@@ -15,6 +15,7 @@ import { useCloudInvite } from '../account/cloudInvite'
 import { Button, IconButton } from '../ui/IconButton'
 import { VideoSiteIcon } from '../ui/Logo'
 import { formatBytes } from '../ui/format'
+import { useTourBlock } from '../tour/hooks'
 import { startFiles } from './startFiles'
 import { startLink, submitWhenConnected } from './startLink'
 import { checkUrl, FILE_ACCEPT, findUrl } from './url'
@@ -156,6 +157,8 @@ export function SmartInput({ className }: { className?: string }) {
   const onCloud = useConnection((s) => s.backend === 'cloud')
   const invite = useCloudInvite()
   const tabCapable = useCanListenInTab()
+  // no tour starts by itself while a link or a file is on its way or the field has text
+  useTourBlock(busy || uploading || value !== '')
 
   useEffect(() => {
     if (autoFocus) inputRef.current?.focus()
@@ -358,6 +361,7 @@ export function SmartInput({ className }: { className?: string }) {
       <h2 className="sr-only">{t('cloud.ways.label')}</h2>
       <form onSubmit={onSubmit} noValidate>
         <div
+          data-tour="home.input"
           className={clsx(
             'group flex h-16 items-center gap-2 rounded-2xl border bg-surface pr-2 pl-4 transition-[border-color,box-shadow] duration-150',
             'focus-within:border-accent focus-within:shadow-[0_0_0_4px_var(--accent-soft)]',
@@ -434,7 +438,7 @@ export function SmartInput({ className }: { className?: string }) {
       </form>
       {hint.kind === 'account' && !connected && invite && <AccountNotice onDismiss={() => setHint({ kind: 'idle' })} />}
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+      <div className="mt-4 grid gap-3 sm:grid-cols-2" data-tour="home.sources">
         <WayCard
           icon={<FolderOpen className="size-5" aria-hidden="true" />}
           title={t('cloud.ways.file.title')}

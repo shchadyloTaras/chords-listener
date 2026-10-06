@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { bassVoicings } from '../diagrams/bass'
+import { harmoniumVoicing } from '../diagrams/harmonium'
 import { loadChordDb, lookupLabel, type DbInstrument } from '../diagrams/chordsDb'
 import { customScale, DEFAULT_HANDPAN_NOTES, formatHandpanNote, parseHandpanNote, presetScale } from '../handpan'
 import { parseChord } from '../music/chord'
@@ -14,6 +15,7 @@ import {
   handpanMidis,
   HARMONIUM_SPREAD,
   harmoniumChordNotes,
+  harmoniumKeyNote,
   pianoChordNotes,
   pianoKeyNote,
   pickChordIndex,
@@ -155,17 +157,30 @@ describe('bass: the generated voicing', () => {
   })
 })
 
-describe('harmonium: the piano diagram, held together', () => {
-  it('plays the piano diagram notes, the right hand 10 ms after the bass', () => {
+describe('harmonium: the staff notes on its 37 keys, held together', () => {
+  it('plays the piano staff notes, the right hand 10 ms after the bass', () => {
     for (const label of ['C', 'F#m7', 'C/E']) {
       const h = harmoniumChordNotes(label)
       const p = pianoChordNotes(label)
       expect(midis(h)).toEqual(midis(p))
-      expect(h.map((n) => n.target)).toEqual(p.map((n) => n.target))
       expect(h[0].offset).toBe(0)
       for (const n of h.slice(1)) expect(n.offset).toBeCloseTo(HARMONIUM_SPREAD, 6)
     }
     expect(harmoniumChordNotes('N')).toEqual([])
+  })
+
+  it('lights the harmonium keys the notes sound on (key 0 = C3)', () => {
+    expect(harmoniumChordNotes('C').map((n) => n.target)).toEqual([0, 12, 16, 19])
+    expect(harmoniumChordNotes('C/E').map((n) => n.target)).toEqual([4, 24, 28, 31])
+    for (const label of ['Am', 'Bb', 'G7', 'Cmaj7', 'C/G', 'B9']) {
+      expect(harmoniumChordNotes(label).map((n) => n.target)).toEqual(harmoniumVoicing(parseChord(label)!).notes)
+    }
+  })
+
+  it('plays a clicked key from C3, leaving the piano diagram at C4', () => {
+    expect(harmoniumKeyNote(0)).toMatchObject({ midi: 48, target: 0 })
+    expect(harmoniumKeyNote(36)).toMatchObject({ midi: 84, target: 36 })
+    expect(pianoKeyNote(0)).toMatchObject({ midi: 60, target: 0 })
   })
 })
 

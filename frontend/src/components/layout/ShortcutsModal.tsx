@@ -1,3 +1,4 @@
+import { CircleHelp } from 'lucide-react'
 import { Fragment } from 'react'
 import { useT } from '../../i18n'
 import { Kbd } from '../ui/Kbd'
@@ -51,7 +52,7 @@ function useGroups(): Array<{ title: string; items: Shortcut[] }> {
   ]
 }
 
-export function ShortcutsModal({ open, onClose }: { open: boolean; onClose(): void }) {
+export function ShortcutsModal({ open, onClose, onGuide }: { open: boolean; onClose(): void; onGuide?(): void }) {
   const t = useT()
   const groups = useGroups()
   return (
@@ -84,6 +85,15 @@ export function ShortcutsModal({ open, onClose }: { open: boolean; onClose(): vo
         ))}
       </div>
       <p className="mt-5 text-sm text-faint">{t('core.shortcuts.note')}</p>
+      {onGuide && (
+        <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted">
+          {t('tour.shortcuts.hint')}
+          <button type="button" onClick={onGuide} className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">
+            <CircleHelp className="size-4" aria-hidden="true" />
+            {t('tour.open')}
+          </button>
+        </p>
+      )}
     </Modal>
   )
 }

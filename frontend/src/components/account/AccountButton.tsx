@@ -30,6 +30,7 @@ export function AccountButton() {
         variant="ghost"
         size="sm"
         aria-label={t('account.signIn')}
+        data-tour="header.signin"
         icon={<LogIn className="size-4" aria-hidden="true" />}
         onClick={() => openAuthDialog('signIn')}
         className="max-sm:size-9 max-sm:rounded-xl max-sm:px-0"

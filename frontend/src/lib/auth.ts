@@ -32,8 +32,8 @@ const createAuthStore = () => create<AuthState>()(() => ({ user: null, ready: fa
 
 // Dev only: this module re-runs when a dependency hot-reloads; keep the one store the running
 // auth listener writes to, or the header would wait for a session forever.
-export const useAuth: ReturnType<typeof createAuthStore> = import.meta.hot?.data.useAuth ?? createAuthStore()
-if (import.meta.hot) import.meta.hot.data.useAuth = useAuth
+export const useAuth: ReturnType<typeof createAuthStore> = import.meta.hot?.data?.useAuth ?? createAuthStore()
+if (import.meta.hot?.data) import.meta.hot.data.useAuth = useAuth
 
 type AuthSdk = typeof import('firebase/auth')
 type LoadedAuth = { auth: Auth; sdk: AuthSdk }
@@ -220,8 +220,8 @@ const createDialogStore = () =>
   create<AuthDialogState>()(() => ({ open: false, mode: 'signIn', reason: null, session: 0 }))
 
 /** The one account dialog of the app (rendered by components/account/AuthDialogHost). */
-export const useAuthDialog: ReturnType<typeof createDialogStore> = import.meta.hot?.data.useAuthDialog ?? createDialogStore()
-if (import.meta.hot) import.meta.hot.data.useAuthDialog = useAuthDialog
+export const useAuthDialog: ReturnType<typeof createDialogStore> = import.meta.hot?.data?.useAuthDialog ?? createDialogStore()
+if (import.meta.hot?.data) import.meta.hot.data.useAuthDialog = useAuthDialog
 
 let signInWaiters: Array<(signedIn: boolean) => void> = []
 

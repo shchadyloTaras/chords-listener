@@ -37,7 +37,7 @@ it('shows the six instruments as buttons on a wide screen', () => {
   wide = true
   render()
   const radios = [...host.querySelectorAll('[role="radio"]')]
-  expect(radios.map((r) => r.textContent)).toEqual(['Гітара', 'Бас', 'Укулеле', 'Піаніно', 'Фісгармонія', 'Хендпан'])
+  expect(radios.map((r) => r.textContent)).toEqual(['Гітара', 'Бас', 'Укулеле', 'Фортепіано', 'Фісгармонія', 'Хендпан'])
   click(radios[4])
   expect(useApp.getState().instrument).toBe('harmonium')
 })
@@ -49,7 +49,7 @@ it("uses the phone's own picker on a narrow screen (never clipped by the hero)",
   expect(host.querySelector('[role="menu"], [aria-haspopup="menu"]')).toBeNull()
   const select = host.querySelector('select')!
   expect(select.getAttribute('aria-label')).toBe('Інструмент')
-  expect([...select.options].map((o) => o.textContent)).toEqual(['Гітара', 'Бас', 'Укулеле', 'Піаніно', 'Фісгармонія', 'Хендпан'])
+  expect([...select.options].map((o) => o.textContent)).toEqual(['Гітара', 'Бас', 'Укулеле', 'Фортепіано', 'Фісгармонія', 'Хендпан'])
   expect(select.value).toBe('guitar')
   act(() => {
     select.value = 'bass'
@@ -57,4 +57,12 @@ it("uses the phone's own picker on a narrow screen (never clipped by the hero)",
   })
   expect(useApp.getState().instrument).toBe('bass')
   expect(host.querySelector('select')!.value).toBe('bass')
+})
+
+it('carries its tour anchor on a wide and on a narrow screen', () => {
+  for (const isWide of [true, false]) {
+    wide = isWide
+    act(() => root!.render(createElement(InstrumentPicker, { tour: 'song.instrument' })))
+    expect(host.querySelector('[data-tour="song.instrument"]'), `wide=${isWide}`).not.toBeNull()
+  }
 })

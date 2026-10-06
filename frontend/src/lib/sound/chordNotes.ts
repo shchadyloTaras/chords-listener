@@ -1,10 +1,11 @@
 // Which notes the chord sound plays — always exactly what the diagram for the selected instrument
-// shows: the piano's staff voicing (also the harmonium's), the displayed guitar / ukulele / bass
+// shows: the staff voicing on the piano / harmonium keys, the displayed guitar / ukulele / bass
 // voicing (strummed low → high; the bass arpeggiated), or the chord tones the selected handpan
 // really has (a low → high arpeggio). Pure functions.
 
 import { BASS_TUNING } from '../diagrams/bass'
 import type { DbInstrument, FretInstrument, Voicing } from '../diagrams/chordsDb'
+import { HARMONIUM_LOW } from '../diagrams/harmonium'
 import { pianoVoicing } from '../diagrams/piano'
 import { staffChord } from '../diagrams/staff'
 import { noteMidi, playability, type HandpanScale } from '../handpan'
@@ -18,7 +19,7 @@ export interface NoteEvent {
   offset: number
   /** 0..1 */
   velocity: number
-  /** what lights up while it sounds: piano key index (0 = C4 of the diagram), guitar / ukulele / bass string index, handpan note index (0 = ding) */
+  /** what lights up while it sounds: piano key index (0 = C4 of the diagram), harmonium key index (0 = C3), guitar / ukulele / bass string index, handpan note index (0 = ding) */
   target: number
   /** stereo position −1..1 (when the instrument does not pan by pitch) */
   pan?: number
@@ -56,9 +57,17 @@ export function pianoKeyNote(key: number): NoteEvent {
 /** The harmonium's right hand speaks this long after the bass (s): pressed together, no roll. */
 export const HARMONIUM_SPREAD = 0.01
 
-/** The piano diagram's notes on the harmonium: bass first, the rest together just after. */
+/**
+ * The staff's notes (the piano's) on the harmonium, lighting its own keys (0 = C3): bass first, the
+ * rest together just after.
+ */
 export function harmoniumChordNotes(label: string): NoteEvent[] {
-  return pianoChordNotes(label).map((n, i) => ({ ...n, offset: i === 0 ? 0 : HARMONIUM_SPREAD }))
+  return pianoChordNotes(label).map((n, i) => ({ ...n, offset: i === 0 ? 0 : HARMONIUM_SPREAD, target: n.midi - HARMONIUM_LOW }))
+}
+
+/** One key of the harmonium diagram (key 0 = C3, its lowest key). */
+export function harmoniumKeyNote(key: number): NoteEvent {
+  return { midi: HARMONIUM_LOW + key, offset: 0, velocity: 0.68, target: key }
 }
 
 // ---------- guitar / ukulele / bass ----------

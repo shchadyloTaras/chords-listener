@@ -24,7 +24,7 @@ export const ChordLegend = memo(function ChordLegend() {
   const showDiagrams = useApp((s) => s.showDiagrams)
   if (!unique.length) return null
   return (
-    <section aria-labelledby="cw-legend" className="flex flex-col gap-3">
+    <section aria-labelledby="cw-legend" data-tour="song.legend" data-tour-until="li" className="flex flex-col gap-3">
       <h2 id="cw-legend" className="flex items-baseline gap-2 text-sm font-medium text-muted">
         {t('chords.legend.title')}
         <span className="font-mono text-xs text-faint tabular-nums">{unique.length}</span>
@@ -34,7 +34,8 @@ export const ChordLegend = memo(function ChordLegend() {
           'grid gap-2',
           showDiagrams
             ? isKeyboard(instrument)
-              ? 'grid-cols-[repeat(auto-fill,minmax(150px,1fr))]'
+              ? // the 120 px piano / 132 px harmonium + the tile's padding; two columns from a 340 px phone
+                'grid-cols-[repeat(auto-fill,minmax(150px,1fr))]'
               : 'grid-cols-[repeat(auto-fill,minmax(112px,1fr))]'
             : 'grid-cols-[repeat(auto-fill,minmax(104px,1fr))]',
         )}

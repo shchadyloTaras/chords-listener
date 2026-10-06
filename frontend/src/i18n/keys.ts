@@ -3,8 +3,10 @@ import type { Dict } from './index'
 // Owned by the "keys" agent (live piano). Keys prefixed "keys.".
 export const keys: Dict = {
   uk: {
-    'keys.title': 'Живе піаніно',
-    'keys.canvas': 'Клавіатура піаніно: клавіші натискаються й світяться, коли в пісні звучать відповідні ноти',
+    'keys.title': 'Живе фортепіано',
+    'keys.canvas': 'Клавіатура фортепіано: клавіші натискаються й світяться, коли в пісні звучать відповідні ноти',
+    'keys.canvas.harmonium':
+      'Клавіші фісгармонії, 37 від «до» малої октави до «до» третьої: клавіші натискаються й світяться, коли в пісні звучать відповідні ноти',
     'keys.sounding': 'Звучить: {notes}',
     'keys.silence': 'Ноти не звучать',
 
@@ -37,8 +39,8 @@ export const keys: Dict = {
 
     'keys.recompute': 'Розпізнати заново',
     'keys.recompute.title': 'Розпізнати ноти заново (займе трохи часу)',
-    'keys.hide': 'Сховати живе піаніно',
-    'keys.hidden': 'Живе піаніно сховано. Повернути можна в налаштуваннях вигляду.',
+    'keys.hide': 'Сховати живе фортепіано',
+    'keys.hidden': 'Живе фортепіано сховано. Повернути можна в налаштуваннях вигляду.',
     'keys.show': 'Повернути',
 
     'keys.sync': 'Синхронізація',
@@ -52,12 +54,13 @@ export const keys: Dict = {
       'Якщо клавіші світяться раніше, ніж ти чуєш ноту (так буває з Bluetooth-навушниками), посунь повзунок праворуч. Якщо пізніше — ліворуч.',
     'keys.sync.latency': 'Пристрій повідомляє затримку звуку ≈ {n} мс. Браузер уже її враховує.',
 
-    'keys.settings.toggle': 'Живе піаніно',
+    'keys.settings.toggle': 'Живе фортепіано',
     'keys.settings.hint': 'Клавіші світяться разом із нотами пісні',
   },
   en: {
     'keys.title': 'Live piano',
     'keys.canvas': 'Piano keyboard: keys go down and light up as the matching notes sound in the song',
+    'keys.canvas.harmonium': 'Harmonium keyboard, 37 keys from C3 to C6: keys go down and light up as the matching notes sound in the song',
     'keys.sounding': 'Sounding: {notes}',
     'keys.silence': 'No notes sounding',
 

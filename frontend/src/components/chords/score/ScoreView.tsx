@@ -1,18 +1,19 @@
 // "Ноти": the song as sheet music — the sung melody ("Вокал", when the server transcribed it) above a
-// piano grand staff with the instruments' notes, chord symbols on top — drawn by OpenSheetMusicDisplay
-// from the MusicXML that is also exported. A cursor follows the playback (auto-scroll with "follow"),
-// clicking a note plays from there. Lazy-loaded (OSMD is a big library).
+// piano grand staff with the instruments' notes (or, at the simple level, the chord sheet's chords),
+// chord symbols on top — drawn by OpenSheetMusicDisplay from the MusicXML that is also exported. A
+// cursor follows the playback (auto-scroll with "follow"), clicking a note plays from there.
+// Lazy-loaded (OSMD is a big library).
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import clsx from 'clsx'
-import { AudioLines, CloudUpload, Download, FileMusic, FileText, Hash, LoaderCircle, Mic, Music2, Piano, RotateCcw, Wand2 } from 'lucide-react'
+import { AudioLines, CloudUpload, Download, FileMusic, FileText, Hash, LoaderCircle, Mic, Music2, Piano, RotateCcw } from 'lucide-react'
 import { useT } from '../../../i18n'
 import { navigate, paths } from '../../../hooks/useRoute'
 import { moveToCloud, onTransferDone, transferLabel, useTransfers } from '../../../lib/cloud/transfer'
 import { isLocalId } from '../../../lib/local/tracks'
 import { FALLBACK_FONT, registerScoreFont, SCORE_FONT } from '../../../lib/score/fonts'
 import { baseOptions, configureRules, fracAt, measureLayout, OpenSheetMusicDisplay, xAt, type ScoreColors, type ScoreLayout } from '../../../lib/score/osmd'
-import type { Score } from '../../../lib/score/types'
+import { SCORE_LEVELS, type Score, type ScoreLevel } from '../../../lib/score/types'
 import { useConnection } from '../../../lib/serverMode'
 import { requestNotes, type NotesState } from '../../../lib/transcription'
 import { loadVocals, startVocals, vocalsSupport, type VocalsState } from '../../../lib/vocals'
@@ -24,8 +25,9 @@ import { useClockEffect } from '../clock'
 import { isTypingTarget } from '../hotkeys'
 import { useChordModel } from '../model'
 import { useChordUi } from '../uiStore'
+import { useTourFlags, useTourTrigger } from '../../tour/hooks'
 import { Floating } from '../ui/Floating'
-import { ToggleChip } from '../ui/controls'
+import { Divider, Segmented, ToggleChip } from '../ui/controls'
 import { EXPORT_KINDS, exportScore, useScoreExport, type ExportKind } from './exportScore'
 import { useScoreData } from './scoreData'
 import { useScoreSettings } from './scoreSettings'
@@ -77,8 +79,12 @@ export default function ScoreView() {
   const model = useChordModel()
   const data = useScoreData(model)
   const settings = useScoreSettings()
+  // the Score tour: the view's header is on screen (the notes need not be ready)
+  useTourTrigger('score', true)
   const set = settings.setScoreSetting
   const vocalsReady = data.vocals.status === 'ready'
+  // the simple level's piano part is the chord sheet: nothing is transcribed for it
+  const simple = settings.level === 'simple'
 
   return (
     <section aria-label={t('score.label')} className="overflow-hidden rounded-[22px] border border-border bg-surface">
@@ -88,43 +94,52 @@ export default function ScoreView() {
           <h2 className="sr-only font-display text-[15px] font-semibold tracking-tight sm:not-sr-only">{t('score.title')}</h2>
         </div>
         <div className="cw-no-scrollbar cw-fade-end relative -my-1 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-1 pr-5" role="group" aria-label={t('score.title')}>
-          <ToggleChip
-            pressed={settings.vocals}
-            onClick={() => set('vocals', !settings.vocals)}
-            title={t('score.toggle.vocals.title')}
-            icon={<Mic size={15} />}
-            className={clsx(!vocalsReady && settings.vocals && 'opacity-80')}
-          >
-            {t('score.toggle.vocals')}
-          </ToggleChip>
-          <ToggleChip pressed={settings.piano} onClick={() => set('piano', !settings.piano)} title={t('score.toggle.piano.title')} icon={<Piano size={15} />}>
-            {t('score.toggle.piano')}
-          </ToggleChip>
-          <ToggleChip pressed={settings.chords} onClick={() => set('chords', !settings.chords)} title={t('score.toggle.chords.title')} icon={<Hash size={15} />}>
+          <span className="flex shrink-0 items-center gap-1" data-tour="score.parts">
+            <ToggleChip
+              pressed={settings.vocals}
+              onClick={() => set('vocals', !settings.vocals)}
+              title={t('score.toggle.vocals.title')}
+              icon={<Mic size={15} />}
+              className={clsx(!vocalsReady && settings.vocals && 'opacity-80')}
+            >
+              {t('score.toggle.vocals')}
+            </ToggleChip>
+            <ToggleChip pressed={settings.piano} onClick={() => set('piano', !settings.piano)} title={t('score.toggle.piano.title')} icon={<Piano size={15} />}>
+              {t('score.toggle.piano')}
+            </ToggleChip>
+          </span>
+          <ToggleChip pressed={settings.chords} data-tour="score.chords" onClick={() => set('chords', !settings.chords)} title={t('score.toggle.chords.title')} icon={<Hash size={15} />}>
             {t('score.toggle.chords')}
           </ToggleChip>
-          <ToggleChip
-            pressed={settings.simplified}
-            onClick={() => set('simplified', !settings.simplified)}
-            title={t('score.toggle.simple.title')}
-            icon={<Wand2 size={15} />}
-          >
-            {t('score.toggle.simple')}
-          </ToggleChip>
+          <Divider />
+          <Segmented<ScoreLevel>
+            tour="score.level"
+            label={t('score.level')}
+            value={settings.level}
+            onChange={(v) => set('level', v)}
+            options={SCORE_LEVELS.map((v) => ({ value: v, label: t(`score.level.${v}`), title: t(`score.level.${v}.title`) }))}
+          />
         </div>
         <div className="shrink-0">
           <ExportMenu score={data.score} />
         </div>
       </div>
 
-      <StatusLine piano={data.piano} vocals={data.vocals} showPiano={settings.piano} showVocals={settings.vocals} />
+      <StatusLine piano={data.piano} vocals={data.vocals} showPiano={settings.piano && !simple} showVocals={settings.vocals} />
       {settings.vocals && <VocalsCard state={data.vocals} />}
 
       {data.score && data.xml ? (
         <ScoreCanvas xml={data.xml} score={data.score} />
       ) : (
         <Placeholder>
-          {!settings.vocals && !settings.piano ? t('score.empty') : <PianoProgress state={data.piano} />}
+          {!settings.vocals && !settings.piano ? (
+            t('score.empty')
+          ) : simple ? (
+            // a chord part is there at once: without one the sheet has no chords (the vocals card says the rest)
+            settings.piano && <p>{t('score.piano.noChords')}</p>
+          ) : (
+            <PianoProgress state={data.piano} />
+          )}
         </Placeholder>
       )}
     </section>
@@ -391,6 +406,7 @@ function ExportMenu({ score }: { score: Score | null }) {
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
+        data-tour="score.export"
         onClick={() => setOpen((v) => !v)}
         disabled={!score && !busy}
         className="inline-flex h-9 items-center gap-2 rounded-lg bg-accent px-3 text-sm font-semibold text-accent-fg shadow-[0_1px_0_rgb(255_255_255/0.2)_inset] hover:brightness-105 disabled:opacity-40"
@@ -452,6 +468,8 @@ function ScoreCanvas({ xml, score }: { xml: string; score: Score }) {
   const loaded = useRef<string | null>(null)
   const loadedTheme = useRef<string | null>(null)
   const [phase, setPhase] = useState<Phase>('lib')
+  // the Score tour's canvas step only once the notes are drawn
+  useTourFlags({ scoreRendered: phase === 'ready' })
   const [version, setVersion] = useState(0)
   const theme = useTheme()
   const width = useWidth(wrap)
@@ -627,6 +645,7 @@ function ScoreCanvas({ xml, score }: { xml: string; score: Score }) {
       <div
         ref={wrap}
         role="img"
+        data-tour="score.canvas"
         aria-label={`${t('score.label')}: ${parts}. ${t('score.seekHint')}`}
         title={phase === 'ready' ? t('score.seekHint') : undefined}
         onClick={onClick}

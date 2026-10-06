@@ -12,6 +12,9 @@ import { ShortcutsModal } from './components/layout/ShortcutsModal'
 import { TrackPage } from './components/layout/TrackPage'
 import { JobPage } from './components/jobs/JobPage'
 import { Toaster } from './components/ui/Toaster'
+import { useGuideAvailable } from './components/tour/hooks'
+import { TourHost } from './components/tour/TourHost'
+import { startCurrentTour } from './components/tour/tourStore'
 import { useHealthPolling } from './hooks/useHealth'
 import { useGlobalHotkeys } from './hooks/useHotkeys'
 import { syncServerJobs } from './hooks/useJobs'
@@ -19,6 +22,9 @@ import { useRoute, type Route } from './hooks/useRoute'
 import { useDocumentTheme } from './hooks/useTheme'
 import { startAuth } from './lib/auth'
 import { watchLibrary } from './lib/cloud/libraryWatch'
+import { tourRouteKey } from './lib/tour/trigger'
+import { useKeepScreenAwake } from './lib/wakeLock'
+import { useApp } from './store'
 
 function Page({ route }: { route: Route }) {
   switch (route.name) {
@@ -43,10 +49,21 @@ export default function App() {
   const route = useRoute()
   const [helpOpen, setHelpOpen] = useState(false)
   const openHelp = useCallback(() => setHelpOpen(true), [])
+  // «Інструкція»: the current screen's tour (the entries hide on job / not-found and while a song loads)
+  const guide = useGuideAvailable(route)
+  const openGuide = useCallback(() => startCurrentTour(), [])
+  // from the shortcuts dialog: close it, start once it has left the page
+  const openGuideFromHelp = useCallback(() => {
+    setHelpOpen(false)
+    startCurrentTour({ afterModal: true })
+  }, [])
 
   useDocumentTheme()
   useHealthPolling()
   useGlobalHotkeys({ onHelp: openHelp })
+
+  // The phone screen stays on while the app is open (every page, a recording too) unless turned off in settings
+  useKeepScreenAwake(useApp((s) => s.keepAwake))
 
   useEffect(() => {
     void syncServerJobs()
@@ -60,12 +77,7 @@ export default function App() {
   useEffect(() => watchLibrary(), [])
 
   // New page → start at the top.
-  const routeKey =
-    route.name === 'job' || route.name === 'track'
-      ? `${route.name}:${route.id}`
-      : route.name === 'capture'
-        ? `capture:${route.videoId}`
-        : route.name
+  const routeKey = tourRouteKey(route)
   useEffect(() => {
     window.scrollTo(0, 0)
   }, [routeKey])
@@ -73,7 +85,7 @@ export default function App() {
   return (
     <MotionConfig reducedMotion="user">
       <div className="flex min-h-full flex-col">
-        <AppHeader route={route} onHelp={openHelp} />
+        <AppHeader route={route} onHelp={openHelp} onGuide={guide ? openGuide : undefined} />
         {route.name !== 'demo' && <HealthBanner />}
         <main className="flex flex-1 flex-col">
           <Page route={route} />
@@ -82,7 +94,8 @@ export default function App() {
       <DropOverlay />
       <AuthDialogHost />
       <Toaster />
-      <ShortcutsModal open={helpOpen} onClose={() => setHelpOpen(false)} />
+      <TourHost />
+      <ShortcutsModal open={helpOpen} onClose={() => setHelpOpen(false)} onGuide={guide ? openGuideFromHelp : undefined} />
     </MotionConfig>
   )
 }
