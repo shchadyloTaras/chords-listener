@@ -194,8 +194,9 @@ tour closes.
   - Listen and YouTube: the capture phase is `idle` (not `requesting`, `error`, `stopping`, `saving`);
     YouTube also needs its player loaded;
 - *(added)* no `aria-modal` dialog, menu (`[role="menu"]`) or anchored panel is open (no
-  `[aria-expanded="true"]` control in the page), no text is being typed (a focused but empty link field does not count — the home field autofocuses on desktop), the song is not playing,
-  no recording or capture is running, and the page is visible.
+  `[aria-expanded="true"]` control in the page), no text is being typed (a focused but empty link
+  field does not count — the home field autofocuses on desktop), the song is not playing, no
+  recording or capture is running, and the page is visible.
 
 Only one tour runs at a time. A tour that becomes due while another runs waits; when that one ends, the
 queued tour re-checks the conditions above, waits the same 500 ms and starts. It is not marked seen by
@@ -242,10 +243,10 @@ Written first (red), in the repo's vitest layout:
   back / next at the ends; a vanished anchor (300 ms) vs *centre* fallback; running out of steps marks
   seen; no available step → not opened, not seen; route change closes without marking seen; queue.
 - `lib/tour/trigger`: the auto-start gate — not before ready, not while an `aria-modal` / menu /
-  expanded control is open, focus is in a text field, the song plays, a recording runs or the page is
-  hidden; starts 500 ms after the last condition clears; never once seen. The re-open mapping: home,
-  listen, capture (both variants), track / demo × view ∈ {sheet, timeline, score} × live keys on / off;
-  `job` / `notFound` → none.
+  expanded control is open, text is being typed (an empty focused field does not count), the song
+  plays, a recording runs or the page is hidden; starts 500 ms after the last condition clears; never
+  once seen. The re-open mapping: home, listen, capture (both variants), track / demo × view ∈
+  {sheet, timeline, score} × live keys on / off; `job` / `notFound` → none.
 - `lib/tour/storage`: read / write, and both throwing.
 - A static test that every anchor id in `tours.ts` exists as a `data-tour="…"` in `src/`.
 - `i18n/tour.test.ts`: every `tour.*` key has a non-empty uk and en entry (the repo has no i18n
