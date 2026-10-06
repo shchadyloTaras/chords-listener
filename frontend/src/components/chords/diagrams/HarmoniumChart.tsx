@@ -132,10 +132,10 @@ function CarvedHalf({ mirror }: { mirror?: boolean }) {
   )
 }
 
-/** Bellows folds fanning out towards the high end (the bellows open there). */
+/** Bellows folds fanning out towards the low end, where the left hand pumps them; hinged at the high end. */
 const FOLDS = 6
 const foldY = (i: number, left: boolean) => {
-  const top = left ? 4.5 : 0.5
+  const top = left ? 0.5 : 4.5
   return r2(top + ((BELLOWS + 1 - top) * i) / FOLDS)
 }
 

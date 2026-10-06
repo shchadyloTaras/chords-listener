@@ -26,8 +26,9 @@ const WIDTHS = {
   bass: { sm: 56, md: 80, lg: 100 },
   ukulele: { sm: 52, md: 76, lg: 96 },
   piano: { sm: 120, md: 168, lg: 210 },
-  // 37 keys: wide enough for ~6.7 px white keys in a phone's two-column legend, ~11 px in the popover / hero
-  harmonium: { sm: 148, md: 240, lg: 264 },
+  // 37 keys: ~5.7 px white keys in the legend (a tile as narrow as the piano's, two per row on a 360 px
+  // phone), ~10.4 / ~11.5 px in the popover / hero
+  harmonium: { sm: 132, md: 240, lg: 264 },
   handpan: { sm: 80, md: 124, lg: 148 },
 } as const
 

@@ -26,7 +26,7 @@ const COLOR = 'rgb(1, 2, 3)'
 
 function render(label: string, extra: { sounding?: ReadonlySet<number>; onKey?(key: number): void } = {}) {
   const voicing = harmoniumVoicing(parseChord(label)!)
-  act(() => root!.render(createElement(HarmoniumChart, { voicing, color: COLOR, width: 148, title: `${label} — harmonium`, ...extra })))
+  act(() => root!.render(createElement(HarmoniumChart, { voicing, color: COLOR, width: 132, title: `${label} — harmonium`, ...extra })))
   return host.querySelector('svg')!
 }
 
@@ -37,10 +37,18 @@ it('draws the instrument at its own proportions, without any text', () => {
   const svg = render('C')
   expect(svg.getAttribute('role')).toBe('img')
   expect(svg.getAttribute('aria-label')).toBe('C — harmonium')
-  expect(Number(svg.getAttribute('height'))).toBeCloseTo(148 * HARMONIUM_ASPECT, 6)
+  expect(Number(svg.getAttribute('height'))).toBeCloseTo(132 * HARMONIUM_ASPECT, 6)
   expect(HARMONIUM_ASPECT).toBeGreaterThan(0.3)
   expect(HARMONIUM_ASPECT).toBeLessThan(0.45)
   expect(svg.querySelector('text')).toBeNull()
+})
+
+it('opens the bellows at the low end (the left hand pumps there), hinged at the high end', () => {
+  const svg = render('C')
+  // the bellows' back edge runs from the low (left) end to the high (right) end; both reach down to the body
+  const back = svg.querySelector('path[fill="#15110f"]')!.getAttribute('d')!
+  const [low, high] = /^M[\d.]+ ([\d.]+)L[\d.]+ ([\d.]+)/.exec(back)!.slice(1).map(Number)
+  expect(low).toBeLessThan(high)
 })
 
 it('lights the chord tones and marks the bass', () => {

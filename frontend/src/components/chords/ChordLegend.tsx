@@ -33,12 +33,10 @@ export const ChordLegend = memo(function ChordLegend() {
         className={clsx(
           'grid gap-2',
           showDiagrams
-            ? instrument === 'harmonium'
-              ? // the 148 px harmonium + the tile's padding; still two columns on a 375 px phone
-                'grid-cols-[repeat(auto-fill,minmax(166px,1fr))]'
-              : isKeyboard(instrument)
-                ? 'grid-cols-[repeat(auto-fill,minmax(150px,1fr))]'
-                : 'grid-cols-[repeat(auto-fill,minmax(112px,1fr))]'
+            ? isKeyboard(instrument)
+              ? // the 120 px piano / 132 px harmonium + the tile's padding; two columns from a 340 px phone
+                'grid-cols-[repeat(auto-fill,minmax(150px,1fr))]'
+              : 'grid-cols-[repeat(auto-fill,minmax(112px,1fr))]'
             : 'grid-cols-[repeat(auto-fill,minmax(104px,1fr))]',
         )}
       >
