@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { FileAudio } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useT } from '../../i18n'
+import { modalOpen } from '../../hooks/useHotkeys'
 import { startFiles } from '../input/startFiles'
 
 function hasFiles(e: DragEvent): boolean {
@@ -16,15 +17,17 @@ export function DropOverlay() {
 
   useEffect(() => {
     const onEnter = (e: DragEvent) => {
-      if (!hasFiles(e)) return
+      // the tour (or another dialog) is open: no overlay
+      if (!hasFiles(e) || modalOpen()) return
       e.preventDefault()
       depth.current += 1
       setActive(true)
     }
     const onOver = (e: DragEvent) => {
       if (!hasFiles(e)) return
+      // still prevented during a dialog: otherwise the browser would open the file in place of the app
       e.preventDefault()
-      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+      if (e.dataTransfer) e.dataTransfer.dropEffect = modalOpen() ? 'none' : 'copy'
     }
     const onLeave = (e: DragEvent) => {
       if (!hasFiles(e)) return
@@ -36,6 +39,7 @@ export function DropOverlay() {
       e.preventDefault()
       depth.current = 0
       setActive(false)
+      if (modalOpen()) return
       const files = e.dataTransfer?.files
       if (files?.length) startFiles(files)
     }
