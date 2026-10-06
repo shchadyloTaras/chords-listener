@@ -111,3 +111,20 @@ export function tourRouteKey(route: Route): string {
       return route.name
   }
 }
+
+/** The home library as the Home tour sees it (RecentTracks: songs waiting for their undo do not count). */
+export type LibraryState = 'loading' | 'failed' | 'empty' | 'list'
+
+export function libraryState(
+  tracks: readonly { id: string }[] | null,
+  error: unknown,
+  pendingDelete: Readonly<Record<string, true>>,
+): LibraryState {
+  if (tracks === null) return error ? 'failed' : 'loading'
+  return tracks.some((tr) => !pendingDelete[tr.id]) ? 'list' : 'empty'
+}
+
+/** Home: the connection settled, auth ready, the library loaded or failed (the link field: useTourBlock). */
+export function homeReady(i: { settled: boolean; authReady: boolean; library: LibraryState }): boolean {
+  return i.settled && i.authReady && i.library !== 'loading'
+}

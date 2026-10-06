@@ -43,14 +43,14 @@ export function AppHeader({ route, onHelp }: { route: Route; onHelp(): void }) {
               <HeaderMenu track={track} demo={demo} withSettings={false} onHelp={onHelp} />
             </div>
           )}
-          <div className="hidden items-center gap-1 sm:flex">
+          <div className="hidden items-center gap-1 sm:flex" data-tour="header.settings">
             <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
             <LangSwitch />
             <ThemeMenu />
             <HelpButton onHelp={onHelp} />
           </div>
           <AccountButton />
-          <div className="sm:hidden">
+          <div className="sm:hidden" data-tour="header.more">
             <HeaderMenu track={track} demo={demo} withSettings onHelp={onHelp} />
           </div>
         </div>

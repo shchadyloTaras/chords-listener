@@ -316,6 +316,7 @@ export function ServerStatus({ compact = false }: { compact?: boolean }) {
       <button
         ref={buttonRef}
         type="button"
+        data-tour="header.mode"
         aria-expanded={open}
         aria-controls={id}
         aria-haspopup="dialog"

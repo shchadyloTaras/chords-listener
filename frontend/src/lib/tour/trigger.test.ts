@@ -2,7 +2,7 @@
 // condition clears, never once seen) and which tour the «Інструкція» entries open on each screen.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Route } from '../../hooks/useRoute'
-import { createAutoStart, gateOpen, guideAvailable, reopenTours, tourRouteKey, type GateInput } from './trigger'
+import { createAutoStart, gateOpen, guideAvailable, homeReady, libraryState, reopenTours, tourRouteKey, type GateInput } from './trigger'
 
 const QUIET: GateInput = {
   seen: false,
@@ -139,5 +139,23 @@ describe('re-opening', () => {
     expect(tourRouteKey(capture(false))).toBe('capture:dQw4w9WgXcQ')
     expect(tourRouteKey(listen)).toBe('listen')
     expect(tourRouteKey(home)).toBe('home')
+  })
+})
+
+describe('Home readiness', () => {
+  it('the library: loading, failed, empty (also when every song waits for its undo) or with songs', () => {
+    expect(libraryState(null, null, {})).toBe('loading')
+    expect(libraryState(null, 'network', {})).toBe('failed')
+    expect(libraryState([], null, {})).toBe('empty')
+    expect(libraryState([{ id: 'a' }], null, { a: true })).toBe('empty')
+    expect(libraryState([{ id: 'a' }, { id: 'b' }], null, { a: true })).toBe('list')
+  })
+
+  it('ready once the connection is settled, auth is ready and the library loaded or failed', () => {
+    expect(homeReady({ settled: true, authReady: true, library: 'empty' })).toBe(true)
+    expect(homeReady({ settled: true, authReady: true, library: 'failed' })).toBe(true)
+    expect(homeReady({ settled: true, authReady: true, library: 'loading' })).toBe(false)
+    expect(homeReady({ settled: false, authReady: true, library: 'list' })).toBe(false)
+    expect(homeReady({ settled: true, authReady: false, library: 'list' })).toBe(false)
   })
 })
