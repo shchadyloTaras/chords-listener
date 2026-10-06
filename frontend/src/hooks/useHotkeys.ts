@@ -19,7 +19,7 @@ export function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 /** Another dialog is open (ours or the chord editor's) — global shortcuts stay quiet. */
-function modalOpen(): boolean {
+export function modalOpen(): boolean {
   return document.querySelector('[aria-modal="true"]') !== null
 }
 
