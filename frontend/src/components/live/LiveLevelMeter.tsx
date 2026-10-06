@@ -27,6 +27,7 @@ export const LiveLevelMeter = memo(function LiveLevelMeter({
   return (
     <div
       role="meter"
+      data-tour="live.level"
       aria-label={t('live.level')}
       aria-valuemin={0}
       aria-valuemax={100}

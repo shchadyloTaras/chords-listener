@@ -163,6 +163,7 @@ export const LiveChordsView = memo(function LiveChordsView({ session, title, com
           {view.key && <KeyBadge info={view.key} spelling={spelling} compact={compact} />}
           {view.tempo != null && view.tempo > 0 && (
             <span
+              data-tour="live.tempo"
               className="inline-flex h-7 items-center rounded-lg px-1.5 font-mono text-xs text-muted tabular-nums"
               title={t('live.tempo.title', { n: Math.round(view.tempo) })}
             >
@@ -233,7 +234,7 @@ const Hero = memo(function Hero({
   const heroBox = compact ? 'clamp(3.2rem, 11vw, 5.5rem)' : 'clamp(4.6rem, 15vw, 9.5rem)'
   const heroSize = `calc(${heroBox} * ${shown ? heroScale(shown.label) : 1})`
   return (
-    <div className="min-w-0 flex-1">
+    <div className="min-w-0 flex-1" data-tour="live.chord">
       <div className="relative min-w-[2ch]" style={{ height: heroBox }}>
         <AnimatePresence mode="popLayout" initial={false}>
           <motion.div
@@ -312,6 +313,7 @@ function KeyBadge({ info, spelling, compact }: { info: KeyInfo; spelling: Spelli
   const { label: name, parsed } = displayLabel(info.name, { transpose: 0, simplify: false, spelling })
   return (
     <span
+      data-tour="live.key"
       className="inline-flex h-7 items-center gap-1.5 rounded-lg bg-surface-2 px-2.5 text-sm"
       title={t('live.key.title', { key: name })}
       aria-label={`${t('live.key')}: ${name}`}

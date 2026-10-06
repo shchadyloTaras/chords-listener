@@ -3,7 +3,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Route } from '../../hooks/useRoute'
 import type { NotesState } from '../transcription'
-import { createAutoStart, gateOpen, guideAvailable, homeReady, keysNotesReady, libraryState, reopenTours, tourRouteKey, type GateInput } from './trigger'
+import {
+  captureReady,
+  createAutoStart,
+  gateOpen,
+  guideAvailable,
+  homeReady,
+  keysNotesReady,
+  libraryState,
+  listenReady,
+  reopenTours,
+  tourRouteKey,
+  type GateInput,
+} from './trigger'
 
 const QUIET: GateInput = {
   seen: false,
@@ -169,5 +181,19 @@ describe('Live keys readiness', () => {
     expect(keysNotesReady({ status: 'unavailable' })).toBe(false)
     expect(keysNotesReady({ status: 'loading' })).toBe(false)
     expect(keysNotesReady({ status: 'idle' })).toBe(false)
+  })
+})
+
+describe('Listen and YouTube readiness', () => {
+  it('only at the start button: not while asking, failing, stopping or saving', () => {
+    expect(listenReady('idle')).toBe(true)
+    for (const phase of ['requesting', 'starting', 'live', 'paused', 'stopping', 'saving', 'done', 'error']) expect(listenReady(phase), phase).toBe(false)
+  })
+
+  it('YouTube also needs its player loaded', () => {
+    expect(captureReady('idle', 'ready')).toBe(true)
+    expect(captureReady('idle', 'loading')).toBe(false)
+    expect(captureReady('idle', 'embed')).toBe(false)
+    expect(captureReady('requesting', 'ready')).toBe(false)
   })
 })

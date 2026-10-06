@@ -134,3 +134,13 @@ export function homeReady(i: { settled: boolean; authReady: boolean; library: Li
 export function keysNotesReady(notes: NotesState): boolean {
   return notes.status === 'ready' && notes.index.count > 0
 }
+
+/** Listen: the capture phase is `idle` (not requesting, error, stopping or saving). */
+export function listenReady(phase: string): boolean {
+  return phase === 'idle'
+}
+
+/** YouTube in a tab: idle, and the embedded player has loaded. */
+export function captureReady(phase: string, player: string): boolean {
+  return phase === 'idle' && player === 'ready'
+}

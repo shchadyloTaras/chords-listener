@@ -25,12 +25,14 @@ import { useJobs } from '../../hooks/useJobs'
 import { useCanListenInTab } from '../../hooks/useMediaQuery'
 import { navigate, paths } from '../../hooks/useRoute'
 import { toApiError } from '../../lib/api'
+import { captureReady } from '../../lib/tour/trigger'
 import { useCloudInvite } from '../account/cloudInvite'
 import { copyWithToast } from '../chords/useCopy'
 import { errorText } from '../jobs/errorText'
 import { startFiles } from '../input/startFiles'
 import { FILE_ACCEPT } from '../input/url'
 import { isEmbedBlockedError, loadYouTubeApi, YT_STATE, type YTPlayer } from '../player/sources/youtubeApi'
+import { useTourTrigger } from '../tour/hooks'
 import { Button } from '../ui/IconButton'
 import { VideoSiteIcon } from '../ui/Logo'
 import { formatTime } from '../ui/format'
@@ -72,8 +74,12 @@ function failureText(error: CaptureFailure | null, reason: string): string {
   }
 }
 
-function Card({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={clsx('rounded-3xl border border-border bg-surface p-5 sm:p-6', className)}>{children}</div>
+function Card({ children, className, tour }: { children: ReactNode; className?: string; tour?: string }) {
+  return (
+    <div data-tour={tour} className={clsx('rounded-3xl border border-border bg-surface p-5 sm:p-6', className)}>
+      {children}
+    </div>
+  )
 }
 
 /** Upload progress of the recording (cloud): the newest upload entry. */
@@ -105,7 +111,7 @@ function NoTabCapture({ url, title }: { url: string; title: string | null }) {
   const t = useT()
   const fileRef = useRef<HTMLInputElement>(null)
   return (
-    <Card>
+    <Card tour="capture.alt">
       <div className="flex items-start gap-3">
         <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent">
           <MonitorSmartphone className="size-5" aria-hidden="true" />
@@ -407,6 +413,8 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
   const errorMessage = state.error ? failureText(state.error, errorText(toApiError(capture.saveError).code)) : ''
   // pressing "Start" again would fail the same way: offer the other ways to get the chords instead
   const gaveUp = phase === 'error' && state.error !== null && !isRetryable(state.error)
+  // the YouTube tour: at the start button with the player loaded; a recording keeps running if opened during it
+  useTourTrigger('capture', captureReady(phase, playerStatus), capturing)
 
   const statusText =
     phase === 'requesting'
@@ -451,7 +459,7 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
       <div className="mt-6 grid gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)] lg:items-start">
         {/* ---- video */}
         <div>
-          <div className="relative aspect-video overflow-hidden rounded-2xl border border-border-strong bg-black">
+          <div data-tour="capture.video" className="relative aspect-video overflow-hidden rounded-2xl border border-border-strong bg-black">
             <div ref={mountRef} className="absolute inset-0 [&_iframe]:size-full" />
             {playerStatus === 'loading' && (
               <div className="absolute inset-0 flex items-center justify-center text-white/60" role="status">
@@ -509,7 +517,7 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
           </div>
 
           {(capturing || phase === 'requesting') && (
-            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-3 rounded-2xl border border-accent/40 bg-surface px-4 py-3">
+            <div data-tour="capture.controls" className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-3 rounded-2xl border border-accent/40 bg-surface px-4 py-3">
               <p aria-live="polite" className="min-w-0 flex-1 basis-56 text-sm text-text">
                 {statusText}
                 {capturing && <span className="mt-0.5 block text-xs text-faint">{t('cloud.capture.keepTab')}</span>}
@@ -578,20 +586,23 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
               ) : (
                 <>
                   <h2 className="font-display text-lg font-semibold tracking-tight">{t('cloud.capture.howTitle')}</h2>
-                  <ol className="mt-3 space-y-2.5 text-[15px] leading-snug text-muted">
-                    {['cloud.capture.step1', 'cloud.capture.step2', 'cloud.capture.step3'].map((key, i) => (
-                      <li key={key} className="flex gap-2.5">
-                        <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-surface-3 font-mono text-xs text-text">
-                          {i + 1}
-                        </span>
-                        <span className={clsx(i === 1 && 'text-text')}>{t(key)}</span>
-                      </li>
-                    ))}
-                  </ol>
-                  <ShareTabIllustration className="mt-4" />
+                  <div data-tour="capture.howto">
+                    <ol className="mt-3 space-y-2.5 text-[15px] leading-snug text-muted">
+                      {['cloud.capture.step1', 'cloud.capture.step2', 'cloud.capture.step3'].map((key, i) => (
+                        <li key={key} className="flex gap-2.5">
+                          <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-surface-3 font-mono text-xs text-text">
+                            {i + 1}
+                          </span>
+                          <span className={clsx(i === 1 && 'text-text')}>{t(key)}</span>
+                        </li>
+                      ))}
+                    </ol>
+                    <ShareTabIllustration className="mt-4" />
+                  </div>
                   <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                     <Button
                       variant="primary"
+                      data-tour="capture.start"
                       disabled={playerStatus !== 'ready' || phase === 'requesting'}
                       icon={phase === 'requesting' ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" fill="currentColor" />}
                       onClick={() => void begin(false)}
