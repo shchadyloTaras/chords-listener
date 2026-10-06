@@ -12,7 +12,9 @@ import { ShortcutsModal } from './components/layout/ShortcutsModal'
 import { TrackPage } from './components/layout/TrackPage'
 import { JobPage } from './components/jobs/JobPage'
 import { Toaster } from './components/ui/Toaster'
+import { useGuideAvailable } from './components/tour/hooks'
 import { TourHost } from './components/tour/TourHost'
+import { startCurrentTour } from './components/tour/tourStore'
 import { useHealthPolling } from './hooks/useHealth'
 import { useGlobalHotkeys } from './hooks/useHotkeys'
 import { syncServerJobs } from './hooks/useJobs'
@@ -47,6 +49,14 @@ export default function App() {
   const route = useRoute()
   const [helpOpen, setHelpOpen] = useState(false)
   const openHelp = useCallback(() => setHelpOpen(true), [])
+  // «Інструкція»: the current screen's tour (the entries hide on job / not-found and while a song loads)
+  const guide = useGuideAvailable(route)
+  const openGuide = useCallback(() => startCurrentTour(), [])
+  // from the shortcuts dialog: close it, start once it has left the page
+  const openGuideFromHelp = useCallback(() => {
+    setHelpOpen(false)
+    startCurrentTour({ afterModal: true })
+  }, [])
 
   useDocumentTheme()
   useHealthPolling()
@@ -75,7 +85,7 @@ export default function App() {
   return (
     <MotionConfig reducedMotion="user">
       <div className="flex min-h-full flex-col">
-        <AppHeader route={route} onHelp={openHelp} />
+        <AppHeader route={route} onHelp={openHelp} onGuide={guide ? openGuide : undefined} />
         {route.name !== 'demo' && <HealthBanner />}
         <main className="flex flex-1 flex-col">
           <Page route={route} />
@@ -85,7 +95,7 @@ export default function App() {
       <AuthDialogHost />
       <Toaster />
       <TourHost />
-      <ShortcutsModal open={helpOpen} onClose={() => setHelpOpen(false)} />
+      <ShortcutsModal open={helpOpen} onClose={() => setHelpOpen(false)} onGuide={guide ? openGuideFromHelp : undefined} />
     </MotionConfig>
   )
 }

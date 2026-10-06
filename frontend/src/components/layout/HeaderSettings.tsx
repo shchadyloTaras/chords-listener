@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { Keyboard, Monitor, Moon, Sun } from 'lucide-react'
+import { CircleHelp, Keyboard, Monitor, Moon, Sun } from 'lucide-react'
 import { useT } from '../../i18n'
 import { useApp, type Lang, type ThemePref } from '../../store'
 import { IconButton } from '../ui/IconButton'
@@ -68,6 +68,16 @@ export function HelpButton({ onHelp }: { onHelp(): void }) {
   return (
     <IconButton label={t('core.shortcuts.title')} hint="?" onClick={onHelp}>
       <Keyboard className="size-[18px]" />
+    </IconButton>
+  )
+}
+
+/** «Інструкція»: the current screen's guided tour (desktop header, right after the shortcuts button). */
+export function GuideButton({ onGuide }: { onGuide(): void }) {
+  const t = useT()
+  return (
+    <IconButton label={t('tour.open')} onClick={onGuide}>
+      <CircleHelp className="size-[18px]" />
     </IconButton>
   )
 }

@@ -1,9 +1,10 @@
 // How screens talk to the tour: useTourTrigger (this screen's tour may start by itself once `ready`),
 // useTourFlags (facts the step conditions read), useTourBlock (hold every auto-start back for now).
 import { useEffect, useId } from 'react'
+import type { Route } from '../../hooks/useRoute'
 import { isTourSeen } from '../../lib/tour/storage'
 import type { TourFlag, TourFlags, TourId } from '../../lib/tour/tours'
-import { createAutoStart, gateOpen } from '../../lib/tour/trigger'
+import { createAutoStart, gateOpen, guideAvailable } from '../../lib/tour/trigger'
 import { useApp } from '../../store'
 import { domBlockers } from './dom'
 import { startTour, useTourStore } from './tourStore'
@@ -67,4 +68,10 @@ export function useTourBlock(blocked: boolean): void {
         return { blocks }
       })
   }, [id, blocked])
+}
+
+/** Whether the «Інструкція» entries show here (no tour on job / not-found; a song page only once loaded). */
+export function useGuideAvailable(route: Route): boolean {
+  const trackLoaded = useApp((s) => s.track !== null)
+  return guideAvailable(route, trackLoaded)
 }
