@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { demoSong } from './__fixtures__/song'
+import { demoSong, steadyBars } from './__fixtures__/song'
 import { buildScore, type ScoreInput } from './build'
 import { toMusicXml } from './musicxml'
 import type { NoteRow } from './vocal'
@@ -236,6 +236,33 @@ describe('toMusicXml', () => {
     ])
     expect(Array.from(d.getElementsByTagName('harmony')).map((h) => textOf(kid(h, 'root'), 'root-step'))).toEqual(['A', 'F', 'C', 'G'])
     checkDurations(d, s.map.measures.map((m) => m.ticks))
+  })
+
+  it('the simple level spells the chords as written, not by the key (Gm in D major: B♭, Fm in C: A♭)', () => {
+    const song = steadyBars({ bpm: 100, bars: 2, chords: [['Gm', 0, 4], ['A#', 4, 4]], spelling: 'flat' })
+    const pitches = (key: ScoreInput['key']) => {
+      const s = buildScore(demoInput({ key, bars: song.bars, piano: null, pianoSource: null, vocals: null, options: { vocals: false, piano: true, chords: true, level: 'simple' } }))
+      const d = parse(toMusicXml(s, { date: '2026-10-04' }))
+      return kids(d.getElementsByTagName('part')[0], 'measure').map((m) =>
+        kids(m, 'note').map((n) => {
+          const p = kid(n, 'pitch')
+          return `${textOf(p, 'step')}${textOf(p, 'alter') ?? ''}${textOf(p, 'octave')}${textOf(n, 'accidental') ? ` ${textOf(n, 'accidental')}` : ''}`
+        }),
+      )
+    }
+    expect(pitches({ tonic: 'D', mode: 'major', name: 'D' })).toEqual([
+      ['G4', 'B-14 flat', 'D5', 'G3'],
+      ['B-14 flat', 'D5', 'F5 natural', 'B-13 flat'],
+    ])
+    const fm = steadyBars({ bpm: 100, bars: 1, chords: [['Fm', 0, 4]] })
+    const s = buildScore(demoInput({ key: { tonic: 'C', mode: 'major', name: 'C' }, bars: fm.bars, piano: null, pianoSource: null, vocals: null, options: { vocals: false, piano: true, chords: true, level: 'simple' } }))
+    const d = parse(toMusicXml(s, { date: '2026-10-04' }))
+    const rh = kids(kids(d.getElementsByTagName('part')[0], 'measure')[0], 'note').filter((n) => textOf(n, 'staff') === '1')
+    expect(rh.map((n) => [textOf(kid(n, 'pitch'), 'step'), textOf(kid(n, 'pitch'), 'alter') ?? '0', textOf(n, 'accidental') ?? ''])).toEqual([
+      ['F', '0', ''],
+      ['A', '-1', 'flat'],
+      ['C', '0', ''],
+    ])
   })
 
   it('matches the stored fixture', async () => {

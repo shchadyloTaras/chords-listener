@@ -1,7 +1,7 @@
 // Score model: quantized parts on the measures of lib/score/timeMap, ready for the MusicXML / MIDI
 // writers. Times are ticks (DIV per quarter note = sixteenths) from the start of the first measure.
 
-import type { KeySig } from './spelling'
+import type { KeySig, SpelledPitch } from './spelling'
 import type { TimeMap } from './timeMap'
 
 /** A note or chord of one voice, quantized. Voices never overlap: the gaps are rests. */
@@ -12,6 +12,8 @@ export interface ScoreNote {
   end: number
   /** MIDI notes (transposed), ascending, at least one */
   pitches: number[]
+  /** how each pitch is written (same order) when the source knows (a chord's own spelling); else from the key */
+  spelling?: SpelledPitch[]
   /** 0..1 */
   velocity: number
 }
@@ -31,6 +33,8 @@ export interface WrittenNote {
   dots: number
   /** empty = rest */
   pitches: number[]
+  /** the note's own spelling of the pitches (ScoreNote.spelling) */
+  spelling?: SpelledPitch[]
   velocity: number
   /** a rest filling the whole measure */
   measureRest: boolean

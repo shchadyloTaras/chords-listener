@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { effectiveRhythm } from '../tempo/rhythm'
 import { buildBarGrid } from '../music/bars'
 import { steadyBars } from './__fixtures__/song'
-import { buildTimeMap, DIV, quantize } from './timeMap'
+import { barStretch, buildTimeMap, DIV, quantize } from './timeMap'
 
 describe('buildTimeMap', () => {
   it('maps seconds to ticks through the beats (one beat = DIV ticks)', () => {
@@ -69,6 +69,10 @@ describe('buildTimeMap', () => {
     ])
     expect(map.measures[2].start).toBeCloseTo(4)
     expect(map.toTicks(4.25)).toBeCloseTo(32 + 2)
+    // the sheet's last bar goes on over the extra measure
+    expect(barStretch(map.measures, 0, 2)).toEqual({ offset: 0, beats: 4, barlines: [] })
+    expect(barStretch(map.measures, 1, 2)).toEqual({ offset: 16, beats: 8, barlines: [4] })
+    expect(barStretch(map.measures, 3, 4)).toBeNull()
   })
 
   it('extrapolates before the first and after the last beat', () => {

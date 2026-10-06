@@ -26,6 +26,22 @@ describe('score settings', () => {
     expect(migrateScoreSettings(null, 1)).toEqual({ level: 'full' })
   })
 
+  it('an unknown level (broken storage, a newer build) falls back to full, at any version', () => {
+    expect(migrateScoreSettings({ vocals: true, level: 'easy' }, 3)).toEqual({ vocals: true, level: 'full' })
+    expect(migrateScoreSettings({ level: 'simple' }, 3)).toEqual({ level: 'simple' })
+    expect(migrateScoreSettings({ simplified: true, level: 7 }, 1)).toEqual({ level: 'medium' })
+  })
+
+  it('never hydrates an unknown level', async () => {
+    const key = 'chords-listener-score'
+    localStorage.setItem(key, JSON.stringify({ state: { vocals: true, piano: true, chords: false, level: 'easy', liveVocals: true }, version: 2 }))
+    await useScoreSettings.persist.rehydrate()
+    expect(scoreOptions(useScoreSettings.getState())).toEqual({ vocals: true, piano: true, chords: false, level: 'full' })
+    localStorage.setItem(key, JSON.stringify({ state: { level: 'simple' }, version: 2 }))
+    await useScoreSettings.persist.rehydrate()
+    expect(useScoreSettings.getState().level).toBe('simple')
+  })
+
   it('reads a state stored by v1 and stores it as v2', async () => {
     const key = 'chords-listener-score'
     localStorage.setItem(key, JSON.stringify({ state: { vocals: true, piano: false, chords: true, simplified: true, liveVocals: true }, version: 1 }))

@@ -71,7 +71,7 @@ function fromChords(options: ScoreOptions): boolean {
 }
 
 export interface ScoreData {
-  /** the instruments' transcription (idle at the simple level: nothing is transcribed for the score) */
+  /** the instruments' transcription (not shown at the simple level: nothing is transcribed for its piano part) */
   piano: NotesState
   pianoSource: NotesSource | 'chords'
   vocals: VocalsState
@@ -86,14 +86,18 @@ export function useScoreData(model: ChordModel): ScoreData {
   const settings = useScoreSettings()
   const options = useMemo(() => scoreOptions(settings), [settings])
   const simple = options.level === 'simple'
-  const { notes: piano, source } = usePianoNotes(simple ? null : track)
+  // the simple level starts no transcription (one already running goes on, for the other levels)
+  const { notes: piano, source } = usePianoNotes(track, { start: !simple })
   const vocals = useVocals(track)
   const lang = useApp((s) => s.lang)
   const accidentals = useApp((s) => s.accidentals)
   const offset = track.startOffset ?? 0
 
-  // idle at the simple level (no track → nothing transcribed)
-  const pianoRows = useMemo(() => (piano.status === 'ready' ? toTrackTime(rowsFromArrays(piano.index.notes), offset) : null), [piano, offset])
+  // not used at the simple level
+  const pianoRows = useMemo(
+    () => (!simple && piano.status === 'ready' ? toTrackTime(rowsFromArrays(piano.index.notes), offset) : null),
+    [simple, piano, offset],
+  )
   const vocalRows = useMemo(() => (vocals.status === 'ready' ? (vocals.notes.notes as NoteRow[]) : null), [vocals])
 
   const score = useMemo(() => {

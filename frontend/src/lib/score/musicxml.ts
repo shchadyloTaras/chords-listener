@@ -112,7 +112,8 @@ function noteXml(out: Out, w: WrittenNote, opts: { voice: number; staff: number 
     return
   }
   w.pitches.forEach((midi, i) => {
-    const p = spellMidi(midi, opts.score.key)
+    // the note's own spelling (a chord of the simple level), else from the key
+    const p = w.spelling?.[i] ?? spellMidi(midi, opts.score.key)
     const acc = opts.acc.next(p.step, p.octave, p.alter, w.tieStop)
     out.open('note')
     if (i > 0) out.line('<chord/>')

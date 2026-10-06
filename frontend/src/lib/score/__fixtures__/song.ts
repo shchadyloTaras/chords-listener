@@ -14,6 +14,8 @@ export interface SteadySong {
   bars: number
   /** first downbeat (s) */
   offset?: number
+  /** beats of audio after the last full bar (the song ends inside a new bar) */
+  tail?: number
   /** [label, start beat, beats] counted from the first downbeat */
   chords?: [string, number, number][]
   transpose?: number
@@ -26,7 +28,7 @@ export function steadyBars(s: SteadySong): { bars: Bar[]; beats: number[]; durat
   const ts = s.ts ?? 4
   const beat = 60 / s.bpm
   const offset = s.offset ?? 0
-  const n = s.bars * ts
+  const n = s.bars * ts + (s.tail ?? 0)
   // beats before the first downbeat too (a pickup)
   const lead = Math.floor(offset / beat + 1e-9)
   const beats: number[] = []

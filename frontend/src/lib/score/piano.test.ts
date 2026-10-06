@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { demoSong, steadyBars } from './__fixtures__/song'
 import { arrangePiano, capChord, chordPiano, PIANO, splitPoints } from './piano'
+import { midiOf } from './spelling'
 import { buildTimeMap, DIV } from './timeMap'
 import type { ScoreNote } from './types'
 import type { NoteRow } from './vocal'
@@ -142,8 +143,8 @@ describe('arrangePiano', () => {
 
 describe('chordPiano (the simple level)', () => {
   /** bars of a steady song with these chords ([label, start beat, beats]) and their measures */
-  const sheet = (chords: [string, number, number][], bars: number, ts = 4) => {
-    const song = steadyBars({ bpm: 120, bars, ts, chords })
+  const sheet = (chords: [string, number, number][], bars: number, ts = 4, tail = 0) => {
+    const song = steadyBars({ bpm: 120, bars, ts, chords, tail })
     return { bars: song.bars, measures: buildTimeMap(song.bars, ts).measures }
   }
   const strikes = (ns: ScoreNote[]) => ns.map((n) => [n.start, n.end, n.pitches])
@@ -236,6 +237,59 @@ describe('chordPiano (the simple level)', () => {
       [0, 12, [50]],
       [12, 24, [52]],
     ])
+  })
+
+  it('a long last bar (split into two measures): the chord holds to the barline, the tail is struck on the next downbeat', () => {
+    // the song ends a beat into a new bar: a 5-beat last bar → measures 4 and 5
+    const { bars, measures } = sheet([['C', 0, 12], ['F', 12, 4], ['G', 16, 1]], 4, 4, 1)
+    expect(bars.map((b) => b.beats)).toEqual([4, 4, 4, 5])
+    expect(bars[3].slots.map((s) => [s.label, s.beat, s.span])).toEqual([
+      ['F', 0, 4],
+      ['G', 4, 1],
+    ])
+    expect(measures.map((m) => m.offset)).toEqual([0, 16, 32, 48, 64])
+    const { rh, lh } = chordPiano(bars, measures)
+    expect(strikes(rh).slice(3)).toEqual([
+      [48, 64, [65, 69, 72]],
+      [64, 68, [67, 71, 74]],
+    ])
+    expect(strikes(lh).slice(3)).toEqual([
+      [48, 64, [53]],
+      [64, 68, [55]],
+    ])
+  })
+
+  it('a long last bar: a chord over all of it is struck again at the inner barline; a final no-chord is a rest', () => {
+    const held = sheet([['G', 0, 4], ['C', 4, 5]], 2, 4, 1)
+    expect(strikes(chordPiano(held.bars, held.measures).rh)).toEqual([
+      [0, 16, [67, 71, 74]],
+      [16, 32, [60, 64, 67]],
+      [32, 36, [60, 64, 67]],
+    ])
+    const ending = sheet([['G', 0, 4], ['C', 4, 4], ['N', 8, 1]], 2, 4, 1)
+    expect(ending.bars[1].slots.map((s) => [s.label, s.beat, s.span])).toEqual([
+      ['C', 0, 4],
+      ['N', 4, 1],
+    ])
+    expect(strikes(chordPiano(ending.bars, ending.measures).rh)).toEqual([
+      [0, 16, [67, 71, 74]],
+      [16, 32, [60, 64, 67]],
+    ])
+  })
+
+  it("spells the chord by thirds from its written root, like the diagram's staff (Gm: B♭, never A♯)", () => {
+    const { measures } = sheet([], 1)
+    const { rh, lh } = chordPiano([{ slots: [slot('Gm', 0, 1), slot('Fm', 1, 1), slot('G#', 2, 1), slot('Db/Ab', 3, 1)] }], measures)
+    const names = (n: ScoreNote) => n.spelling?.map((p) => `${p.step}${p.alter > 0 ? '#' : p.alter < 0 ? 'b' : ''}${p.octave}`)
+    expect(rh.map(names)).toEqual([
+      ['G4', 'Bb4', 'D5'],
+      ['F4', 'Ab4', 'C5'],
+      ['G#4', 'B#4', 'D#5'],
+      ['Db5', 'F5', 'Ab5'],
+    ])
+    expect(lh.map(names)).toEqual([['G3'], ['F3'], ['G#3'], ['Ab3']])
+    // the spelling sounds as the pitches
+    for (const n of [...rh, ...lh]) expect(n.spelling?.map(midiOf)).toEqual(n.pitches)
   })
 
   it('nothing for a sheet without chords', () => {

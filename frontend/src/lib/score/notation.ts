@@ -154,7 +154,7 @@ export function notate(events: readonly ScoreNote[], measures: readonly Measure[
         pieces.forEach((piece) => {
           const absStart = m0 + piece.start
           const note = span.note
-          written.push({
+          const w: WrittenNote = {
             start: piece.start,
             duration: piece.ticks,
             type: piece.type,
@@ -166,7 +166,9 @@ export function notate(events: readonly ScoreNote[], measures: readonly Measure[
             tieStart: !!note && absStart + piece.ticks < note.end,
             beams: [],
             harmony: harmonies?.get(absStart),
-          })
+          }
+          if (note?.spelling) w.spelling = note.spelling
+          written.push(w)
         })
       }
     }
