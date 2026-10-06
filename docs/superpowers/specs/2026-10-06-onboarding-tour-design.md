@@ -116,6 +116,10 @@ fine, amber = loud, red = overload) · `listen.controls` *centre* («Пауза�
 *(added)* Before a recording the live elements do not exist, so steps 3–6 are centred cards; when the
 tour is re-opened during a recording they spotlight the real elements.
 
+*(added 2026-10-06)* The microphone is only recorded (no live chords: its chords come from the analysis
+of the recording). With «Мікрофон» selected the page reports `listenMic`: `live.chord` and
+`live.key` / `live.tempo` are left out (4 steps), and «Почати» / the controls use their `.mic` texts.
+
 ### 1.6 YouTube in a tab — route `capture`
 
 *(added)* Approved as «guests»; in fact guests and cloud users both reach this page (YouTube links are
