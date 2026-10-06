@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { demoSong, steadyBars } from './__fixtures__/song'
-import { arrangePiano, capChord, PIANO, splitPoints } from './piano'
+import { arrangePiano, capChord, chordPiano, PIANO, splitPoints } from './piano'
 import { buildTimeMap, DIV } from './timeMap'
 import type { ScoreNote } from './types'
 import type { NoteRow } from './vocal'
@@ -110,7 +110,7 @@ describe('arrangePiano', () => {
     expect(lh[0].pitches).toEqual([37])
   })
 
-  it('simplified: eighth grid, thinner hands, repeated chords held', () => {
+  it('simplified (the medium level): eighth grid, thinner hands, repeated chords held', () => {
     const rows = [
       ...at(0, 0.5, [43, 50, 55]),
       ...at(0.5, 0.5, [43, 50, 55]),
@@ -137,5 +137,109 @@ describe('arrangePiano', () => {
     expect(lh.map((n) => n.pitches)).toEqual([[45], [41], [48], [43]])
     expect(rh.every((n) => n.pitches.length >= 3 && n.pitches.length <= 4)).toBe(true)
     expect(rh[0].pitches).toEqual([57, 60, 64])
+  })
+})
+
+describe('chordPiano (the simple level)', () => {
+  /** bars of a steady song with these chords ([label, start beat, beats]) and their measures */
+  const sheet = (chords: [string, number, number][], bars: number, ts = 4) => {
+    const song = steadyBars({ bpm: 120, bars, ts, chords })
+    return { bars: song.bars, measures: buildTimeMap(song.bars, ts).measures }
+  }
+  const strikes = (ns: ScoreNote[]) => ns.map((n) => [n.start, n.end, n.pitches])
+  const slot = (label: string, beat: number, span: number) => ({ label, isNone: label === 'N', beat, span })
+
+  it('a chord over a 4/4 bar is one whole note: the diagram voicing in the right hand, the root below middle C in the left', () => {
+    const { bars, measures } = sheet([['C', 0, 4]], 1)
+    const { rh, lh } = chordPiano(bars, measures)
+    expect(strikes(rh)).toEqual([[0, 16, [60, 64, 67]]])
+    expect(strikes(lh)).toEqual([[0, 16, [48]]])
+    expect(rh[0].velocity).toBe(PIANO.chordVelocity)
+  })
+
+  it('two chords in a bar are two halves', () => {
+    const { bars, measures } = sheet([['C', 0, 2], ['G', 2, 2]], 1)
+    const { rh, lh } = chordPiano(bars, measures)
+    expect(strikes(rh)).toEqual([
+      [0, 8, [60, 64, 67]],
+      [8, 16, [67, 71, 74]],
+    ])
+    expect(strikes(lh)).toEqual([
+      [0, 8, [48]],
+      [8, 16, [55]],
+    ])
+  })
+
+  it('a chord over two bars is struck again at the second barline (no tie)', () => {
+    const { bars, measures } = sheet([['Am', 0, 8]], 2)
+    const { rh, lh } = chordPiano(bars, measures)
+    expect(strikes(rh)).toEqual([
+      [0, 16, [69, 72, 76]],
+      [16, 32, [69, 72, 76]],
+    ])
+    expect(strikes(lh)).toEqual([
+      [0, 16, [57]],
+      [16, 32, [57]],
+    ])
+  })
+
+  it('no chord (N) and unknown labels are rests', () => {
+    const { bars, measures } = sheet([['C', 4, 4]], 2)
+    expect(bars[0].slots.map((s) => s.isNone)).toEqual([true])
+    expect(strikes(chordPiano(bars, measures).rh)).toEqual([[16, 32, [60, 64, 67]]])
+    const odd = [{ slots: [slot('C', 0, 1), slot('N', 1, 1), slot('???', 2, 1), slot('F', 3, 1)] }]
+    const { rh, lh } = chordPiano(odd, measures)
+    expect(strikes(rh)).toEqual([
+      [0, 4, [60, 64, 67]],
+      [12, 16, [65, 69, 72]],
+    ])
+    expect(strikes(lh)).toEqual([
+      [0, 4, [48]],
+      [12, 16, [53]],
+    ])
+  })
+
+  it('merges the same chord repeated inside a bar', () => {
+    const { measures } = sheet([], 1)
+    const { rh } = chordPiano([{ slots: [slot('D', 0, 2), slot('D', 2, 2)] }], measures)
+    expect(strikes(rh)).toEqual([[0, 16, [62, 66, 69]]])
+  })
+
+  it('a slash chord: the bass in the left hand, the chord above it without the bass key', () => {
+    const { bars, measures } = sheet([['C/G', 0, 4]], 1)
+    const { rh, lh } = chordPiano(bars, measures)
+    expect(strikes(rh)).toEqual([[0, 16, [72, 76, 79]]])
+    expect(strikes(lh)).toEqual([[0, 16, [55]]])
+  })
+
+  it('flat and sharp roots', () => {
+    const { measures } = sheet([], 1)
+    const bb = chordPiano([{ slots: [slot('Bb', 0, 2), slot('F#m', 2, 2)] }], measures)
+    expect(strikes(bb.rh)).toEqual([
+      [0, 8, [70, 74, 77]],
+      [8, 16, [66, 69, 73]],
+    ])
+    expect(strikes(bb.lh)).toEqual([
+      [0, 8, [58]],
+      [8, 16, [54]],
+    ])
+  })
+
+  it('a 3/4 bar is a dotted half', () => {
+    const { bars, measures } = sheet([['D', 0, 3], ['Em', 3, 3]], 2, 3)
+    const { rh, lh } = chordPiano(bars, measures)
+    expect(strikes(rh)).toEqual([
+      [0, 12, [62, 66, 69]],
+      [12, 24, [64, 67, 71]],
+    ])
+    expect(strikes(lh)).toEqual([
+      [0, 12, [50]],
+      [12, 24, [52]],
+    ])
+  })
+
+  it('nothing for a sheet without chords', () => {
+    const { bars, measures } = sheet([], 2)
+    expect(chordPiano(bars, measures)).toEqual({ rh: [], lh: [] })
   })
 })

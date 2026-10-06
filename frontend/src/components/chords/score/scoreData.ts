@@ -1,6 +1,7 @@
 // Everything the score needs for the loaded track: the instrument notes (transcribed in the page, from
-// the instruments stem when the server separated one, else from the full mix), the sung notes
-// (lib/vocals), and the chord model (bars, displayed chords, key, tempo) → Score → MusicXML.
+// the instruments stem when the server separated one, else from the full mix — not at the simple
+// level, whose piano part is the chord sheet's chords), the sung notes (lib/vocals), and the chord
+// model (bars, displayed chords, key, tempo) → Score → MusicXML.
 
 import { useMemo } from 'react'
 import { translate } from '../../../i18n'
@@ -64,9 +65,15 @@ export function scoreInput(
   }
 }
 
+/** The piano part needs no transcription: it is built from the chord sheet. */
+function fromChords(options: ScoreOptions): boolean {
+  return options.piano && options.level === 'simple'
+}
+
 export interface ScoreData {
+  /** the instruments' transcription (idle at the simple level: nothing is transcribed for the score) */
   piano: NotesState
-  pianoSource: NotesSource
+  pianoSource: NotesSource | 'chords'
   vocals: VocalsState
   score: Score | null
   xml: string | null
@@ -76,24 +83,26 @@ export interface ScoreData {
 /** The score of the loaded track, rebuilt when the notes, the chords or the options change. */
 export function useScoreData(model: ChordModel): ScoreData {
   const { track } = model
-  const { notes: piano, source } = usePianoNotes(track)
-  const vocals = useVocals(track)
   const settings = useScoreSettings()
   const options = useMemo(() => scoreOptions(settings), [settings])
+  const simple = options.level === 'simple'
+  const { notes: piano, source } = usePianoNotes(simple ? null : track)
+  const vocals = useVocals(track)
   const lang = useApp((s) => s.lang)
   const accidentals = useApp((s) => s.accidentals)
   const offset = track.startOffset ?? 0
 
+  // idle at the simple level (no track → nothing transcribed)
   const pianoRows = useMemo(() => (piano.status === 'ready' ? toTrackTime(rowsFromArrays(piano.index.notes), offset) : null), [piano, offset])
   const vocalRows = useMemo(() => (vocals.status === 'ready' ? (vocals.notes.notes as NoteRow[]) : null), [vocals])
 
   const score = useMemo(() => {
-    if (!pianoRows && !vocalRows) return null
+    if (!pianoRows && !vocalRows && !fromChords(options)) return null
     const s = buildScore(scoreInput(model, { piano: pianoRows, pianoSource: pianoRows ? source : null, vocals: vocalRows }, options, { lang, accidentals }))
     return s.parts.length ? s : null
   }, [model, pianoRows, vocalRows, source, options, lang, accidentals])
   const xml = useMemo(() => (score ? toMusicXml(score) : null), [score])
-  return { piano, pianoSource: source, vocals, score, xml, options }
+  return { piano, pianoSource: simple ? 'chords' : source, vocals, score, xml, options }
 }
 
 function waitForNotes(key: string, timeoutMs: number): Promise<NotesState> {
@@ -138,7 +147,8 @@ function waitForVocals(id: string, timeoutMs: number): Promise<VocalsState> {
 
 /**
  * The score for an export started outside the score view: loads (or transcribes) the instrument
- * notes and loads the vocal notes if the server has them (never starts a vocal job).
+ * notes — not at the simple level, its piano part is the chord sheet — and loads the vocal notes if
+ * the server has them (never starts a vocal job).
  */
 export async function prepareScore(model: ChordModel, onWaiting?: () => void): Promise<Score | null> {
   const { track } = model
@@ -148,7 +158,7 @@ export async function prepareScore(model: ChordModel, onWaiting?: () => void): P
   const key = notesKey(track.id, source)
 
   let piano: NotesState | null = null
-  if (options.piano) {
+  if (options.piano && !fromChords(options)) {
     piano = getNotesState(track.id, source)
     if (piano.status !== 'ready') {
       onWaiting?.()
@@ -174,7 +184,7 @@ export async function prepareScore(model: ChordModel, onWaiting?: () => void): P
   }
   const pianoRows = piano?.status === 'ready' ? toTrackTime(rowsFromArrays(piano.index.notes), track.startOffset ?? 0) : null
   const vocalRows = vocals?.status === 'ready' ? (vocals.notes.notes as NoteRow[]) : null
-  if (!pianoRows && !vocalRows) return null
+  if (!pianoRows && !vocalRows && !fromChords(options)) return null
   const score = buildScore(
     scoreInput(model, { piano: pianoRows, pianoSource: pianoRows ? source : null, vocals: vocalRows }, options, {
       lang: app.lang,

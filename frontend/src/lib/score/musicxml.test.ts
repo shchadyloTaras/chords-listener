@@ -22,7 +22,7 @@ function demoInput(over: Partial<ScoreInput> = {}): ScoreInput {
     piano: song.piano,
     pianoSource: 'instruments',
     vocals: song.vocals,
-    options: { vocals: true, piano: true, chords: true, simplified: false },
+    options: { vocals: true, piano: true, chords: true, level: 'full' },
     labels: LABELS,
     ...over,
   }
@@ -208,13 +208,34 @@ describe('toMusicXml', () => {
   })
 
   it('only the requested parts; chord symbols move to the piano without vocals', () => {
-    const d = parse(toMusicXml(buildScore(demoInput({ options: { vocals: false, piano: true, chords: true, simplified: true } })), { date: '2026-10-04' }))
+    const d = parse(toMusicXml(buildScore(demoInput({ options: { vocals: false, piano: true, chords: true, level: 'medium' } })), { date: '2026-10-04' }))
     const parts = Array.from(d.getElementsByTagName('score-part'))
     expect(parts.map((p) => textOf(p, 'part-name'))).toEqual(['Фортепіано'])
     const harmony = d.getElementsByTagName('harmony')[0]
     expect(textOf(harmony, 'staff')).toBe('1')
-    // simplified: no sixteenths
+    // the medium level: no sixteenths
     expect(Array.from(d.getElementsByTagName('type')).some((t) => t.textContent === '16th')).toBe(false)
+  })
+
+  it('the simple level writes the chord sheet as whole notes on the piano staves', () => {
+    const s = buildScore(demoInput({ piano: null, pianoSource: null, options: { vocals: false, piano: true, chords: true, level: 'simple' } }))
+    const d = parse(toMusicXml(s, { date: '2026-10-04' }))
+    expect(Array.from(d.getElementsByTagName('score-part')).map((p) => textOf(p, 'part-name'))).toEqual(['Фортепіано'])
+    const notes = Array.from(d.getElementsByTagName('note'))
+    expect(notes.length).toBeGreaterThan(0)
+    expect(new Set(notes.map((n) => textOf(n, 'type')))).toEqual(new Set(['whole']))
+    expect(notes.some((n) => kid(n, 'rest') || kid(n, 'tie'))).toBe(false)
+    // bar 1, Am: A4 C5 E5 in the right hand, A3 in the left
+    const m1 = kids(d.getElementsByTagName('part')[0], 'measure')[0]
+    const pitch = (n: Element) => [textOf(kid(n, 'pitch'), 'step'), textOf(kid(n, 'pitch'), 'octave'), textOf(n, 'staff')]
+    expect(kids(m1, 'note').map(pitch)).toEqual([
+      ['A', '4', '1'],
+      ['C', '5', '1'],
+      ['E', '5', '1'],
+      ['A', '3', '2'],
+    ])
+    expect(Array.from(d.getElementsByTagName('harmony')).map((h) => textOf(kid(h, 'root'), 'root-step'))).toEqual(['A', 'F', 'C', 'G'])
+    checkDurations(d, s.map.measures.map((m) => m.ticks))
   })
 
   it('matches the stored fixture', async () => {

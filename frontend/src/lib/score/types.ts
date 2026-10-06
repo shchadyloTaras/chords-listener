@@ -88,9 +88,19 @@ export interface Score {
   chords: ChordSymbol[]
   /** the part whose first staff carries the chord symbols */
   chordsOn: PartId | null
-  /** which audio the piano part was transcribed from */
-  pianoSource: 'instruments' | 'mix' | null
+  /** which audio the piano part was transcribed from, or 'chords' (the simple level: built from the chord sheet) */
+  pianoSource: 'instruments' | 'mix' | 'chords' | null
 }
+
+/**
+ * How much of the transcription the piano part writes: 'full' = every transcribed note (sixteenths, up
+ * to 4 notes per hand), 'medium' = an eighth grid and a thinner texture, 'simple' = only the chord
+ * sheet's chords (the piano diagram's voicing + bass), no transcription needed. The vocals are on the
+ * sixteenth grid at 'full', on the eighth grid otherwise.
+ */
+export type ScoreLevel = 'full' | 'medium' | 'simple'
+
+export const SCORE_LEVELS: readonly ScoreLevel[] = ['full', 'medium', 'simple']
 
 export interface ScoreOptions {
   /** show the vocal part (when vocal notes exist) */
@@ -99,8 +109,8 @@ export interface ScoreOptions {
   piano: boolean
   /** chord symbols */
   chords: boolean
-  /** eighth-note grid and a thinner piano texture */
-  simplified: boolean
+  /** notation level */
+  level: ScoreLevel
 }
 
-export const DEFAULT_SCORE_OPTIONS: ScoreOptions = { vocals: true, piano: true, chords: true, simplified: false }
+export const DEFAULT_SCORE_OPTIONS: ScoreOptions = { vocals: true, piano: true, chords: true, level: 'full' }

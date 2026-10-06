@@ -1,18 +1,19 @@
 // "Ноти": the song as sheet music — the sung melody ("Вокал", when the server transcribed it) above a
-// piano grand staff with the instruments' notes, chord symbols on top — drawn by OpenSheetMusicDisplay
-// from the MusicXML that is also exported. A cursor follows the playback (auto-scroll with "follow"),
-// clicking a note plays from there. Lazy-loaded (OSMD is a big library).
+// piano grand staff with the instruments' notes (or, at the simple level, the chord sheet's chords),
+// chord symbols on top — drawn by OpenSheetMusicDisplay from the MusicXML that is also exported. A
+// cursor follows the playback (auto-scroll with "follow"), clicking a note plays from there.
+// Lazy-loaded (OSMD is a big library).
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import clsx from 'clsx'
-import { AudioLines, CloudUpload, Download, FileMusic, FileText, Hash, LoaderCircle, Mic, Music2, Piano, RotateCcw, Wand2 } from 'lucide-react'
+import { AudioLines, CloudUpload, Download, FileMusic, FileText, Hash, LoaderCircle, Mic, Music2, Piano, RotateCcw } from 'lucide-react'
 import { useT } from '../../../i18n'
 import { navigate, paths } from '../../../hooks/useRoute'
 import { moveToCloud, onTransferDone, transferLabel, useTransfers } from '../../../lib/cloud/transfer'
 import { isLocalId } from '../../../lib/local/tracks'
 import { FALLBACK_FONT, registerScoreFont, SCORE_FONT } from '../../../lib/score/fonts'
 import { baseOptions, configureRules, fracAt, measureLayout, OpenSheetMusicDisplay, xAt, type ScoreColors, type ScoreLayout } from '../../../lib/score/osmd'
-import type { Score } from '../../../lib/score/types'
+import { SCORE_LEVELS, type Score, type ScoreLevel } from '../../../lib/score/types'
 import { useConnection } from '../../../lib/serverMode'
 import { requestNotes, type NotesState } from '../../../lib/transcription'
 import { loadVocals, startVocals, vocalsSupport, type VocalsState } from '../../../lib/vocals'
@@ -25,7 +26,7 @@ import { isTypingTarget } from '../hotkeys'
 import { useChordModel } from '../model'
 import { useChordUi } from '../uiStore'
 import { Floating } from '../ui/Floating'
-import { ToggleChip } from '../ui/controls'
+import { Divider, Segmented, ToggleChip } from '../ui/controls'
 import { EXPORT_KINDS, exportScore, useScoreExport, type ExportKind } from './exportScore'
 import { useScoreData } from './scoreData'
 import { useScoreSettings } from './scoreSettings'
@@ -79,6 +80,8 @@ export default function ScoreView() {
   const settings = useScoreSettings()
   const set = settings.setScoreSetting
   const vocalsReady = data.vocals.status === 'ready'
+  // the simple level's piano part is the chord sheet: nothing is transcribed for it
+  const simple = settings.level === 'simple'
 
   return (
     <section aria-label={t('score.label')} className="overflow-hidden rounded-[22px] border border-border bg-surface">
@@ -103,28 +106,34 @@ export default function ScoreView() {
           <ToggleChip pressed={settings.chords} onClick={() => set('chords', !settings.chords)} title={t('score.toggle.chords.title')} icon={<Hash size={15} />}>
             {t('score.toggle.chords')}
           </ToggleChip>
-          <ToggleChip
-            pressed={settings.simplified}
-            onClick={() => set('simplified', !settings.simplified)}
-            title={t('score.toggle.simple.title')}
-            icon={<Wand2 size={15} />}
-          >
-            {t('score.toggle.simple')}
-          </ToggleChip>
+          <Divider />
+          <Segmented<ScoreLevel>
+            label={t('score.level')}
+            value={settings.level}
+            onChange={(v) => set('level', v)}
+            options={SCORE_LEVELS.map((v) => ({ value: v, label: t(`score.level.${v}`), title: t(`score.level.${v}.title`) }))}
+          />
         </div>
         <div className="shrink-0">
           <ExportMenu score={data.score} />
         </div>
       </div>
 
-      <StatusLine piano={data.piano} vocals={data.vocals} showPiano={settings.piano} showVocals={settings.vocals} />
+      <StatusLine piano={data.piano} vocals={data.vocals} showPiano={settings.piano && !simple} showVocals={settings.vocals} />
       {settings.vocals && <VocalsCard state={data.vocals} />}
 
       {data.score && data.xml ? (
         <ScoreCanvas xml={data.xml} score={data.score} />
       ) : (
         <Placeholder>
-          {!settings.vocals && !settings.piano ? t('score.empty') : <PianoProgress state={data.piano} />}
+          {!settings.vocals && !settings.piano ? (
+            t('score.empty')
+          ) : simple ? (
+            // a chord part is there at once: without one the sheet has no chords (the vocals card says the rest)
+            settings.piano && <p>{t('score.piano.noChords')}</p>
+          ) : (
+            <PianoProgress state={data.piano} />
+          )}
         </Placeholder>
       )}
     </section>

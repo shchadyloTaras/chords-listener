@@ -1,9 +1,13 @@
 // Piano arrangement of the transcribed instrument notes (Basic Pitch): ghost notes dropped, onsets and
 // offsets on the grid, the two hands split around middle C by a smooth adaptive split point, notes
 // with the same onset in a hand written as a chord (one voice per hand, at most 4 notes, outer voices
-// kept), each chord lasting until its notes end or the hand's next onset.
+// kept), each chord lasting until its notes end or the hand's next onset. The simple level needs no
+// transcription: the chord sheet's chords as the piano diagram writes them (chordPiano).
 
-import { DIV, quantizeSpan, type TimeMap } from './timeMap'
+import { pianoVoicing } from '../diagrams/piano'
+import type { BarSlot } from '../music/bars'
+import { parseChord } from '../music/chord'
+import { DIV, quantizeSpan, type Measure, type TimeMap } from './timeMap'
 import type { ScoreNote } from './types'
 import type { NoteRow } from './vocal'
 
@@ -48,6 +52,8 @@ export const PIANO = {
   /** candidate split points (MIDI) */
   splitLow: 48,
   splitHigh: 72,
+  /** the simple level: velocity of the chords from the chord sheet */
+  chordVelocity: 0.7,
 }
 
 /** Notes whose onsets are this close (s) were struck together (the transcription jitters a little). */
@@ -324,4 +330,57 @@ function mergeRepeats(notes: ScoreNote[]): ScoreNote[] {
     out.push({ ...n, pitches: [...n.pitches] })
   }
   return out
+}
+
+type ChordSlot = Pick<BarSlot, 'label' | 'isNone' | 'beat' | 'span'>
+
+/** The two hands of a displayed chord, as on the piano diagram's staff (lib/diagrams/staff); null = rest. */
+function chordHands(label: string): { rh: number[]; lh: number } | null {
+  const chord = parseChord(label)
+  if (!chord) return null
+  const voicing = pianoVoicing(chord)
+  const slash = chord.bassPc != null
+  const keys = slash ? voicing.notes.filter((k) => k !== voicing.bass) : voicing.notes
+  return { rh: keys.map((k) => 60 + k), lh: 48 + (chord.bassPc ?? chord.rootPc) }
+}
+
+/**
+ * The simple level: the chord sheet's displayed chords (bar i = measure i) — the keyboard voicing from
+ * middle C in the right hand, the bass (slash bass, else root) in the octave below in the left. A
+ * chord is struck where it changes and again at every barline (no ties), lasting until the next
+ * change or the end of its slot; no chord ("N") and unknown labels are rests.
+ */
+export function chordPiano(bars: readonly { slots: readonly ChordSlot[] }[], measures: readonly Measure[]): { rh: ScoreNote[]; lh: ScoreNote[] } {
+  const rh: ScoreNote[] = []
+  const lh: ScoreNote[] = []
+  bars.forEach((bar, i) => {
+    const m = measures[i]
+    if (!m) return
+    // chord changes in the bar, on the beat grid of chordSymbolsFromBars (so the symbols sit on these notes)
+    const spans: { label: string; start: number; end: number }[] = []
+    for (const slot of bar.slots) {
+      const label = slot.isNone ? 'N' : slot.label
+      const start = Math.min(m.beats - 1, Math.max(0, slot.beat))
+      const end = Math.min(m.beats, Math.max(start + 1, slot.beat + slot.span))
+      const prev = spans[spans.length - 1]
+      if (prev && prev.label === label) prev.end = Math.max(prev.end, end)
+      else if (prev && prev.start === start) {
+        // clamped onto the same beat (a bar longer than its measure): the later chord wins
+        prev.label = label
+        prev.end = end
+      } else {
+        if (prev) prev.end = start
+        spans.push({ label, start, end })
+      }
+    }
+    for (const span of spans) {
+      const hands = chordHands(span.label)
+      if (!hands) continue
+      const start = m.offset + span.start * DIV
+      const end = m.offset + span.end * DIV
+      rh.push({ start, end, pitches: hands.rh, velocity: PIANO.chordVelocity })
+      lh.push({ start, end, pitches: [hands.lh], velocity: PIANO.chordVelocity })
+    }
+  })
+  return { rh, lh }
 }

@@ -20,7 +20,7 @@ function input(over: Partial<ScoreInput> = {}): ScoreInput {
     piano: song.piano,
     pianoSource: 'instruments',
     vocals: song.vocals,
-    options: { vocals: true, piano: true, chords: true, simplified: false },
+    options: { vocals: true, piano: true, chords: true, level: 'full' },
     labels: LABELS,
     ...over,
   }
