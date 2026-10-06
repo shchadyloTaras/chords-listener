@@ -145,7 +145,10 @@ included) and «Пропустити». Centred cards use the same bubble withou
 clamped to the viewport; it never overlaps the player bar (its bottom edge stays ≥ 8 px above
 `var(--player-h)` and clear of the floating video). Phones: the bubble docks at the bottom above the
 player bar, and the page is scrolled so the spotlight sits between the sticky header / toolbar and the
-bubble's top edge. When a spotlight is taller than that free area (e.g. `score.canvas`), the page
+bubble's top edge. *(added)* Short screens (under 500 px tall, e.g. a phone in landscape) dock the
+bubble the same way whatever their width, centred and at most 640 px wide: a spotlight centred in so
+little height leaves room neither below nor above it. Only the placement changes; the steps stay the
+desktop ones. When a spotlight is taller than that free area (e.g. `score.canvas`), the page
 scrolls its top to just below the header, the cut-out is clipped to the visible part, and the bubble
 docks at the bottom of the free area (on desktop too).
 

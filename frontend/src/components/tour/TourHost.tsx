@@ -17,7 +17,7 @@ import { useCloudInvite } from '../account/cloudInvite'
 import { Button } from '../ui/IconButton'
 import { Kbd } from '../ui/Kbd'
 import { ChordMarks } from './ChordMarks'
-import { GONE_MS, measureStep, PHONE_QUERY, removeScrollRoom, sameGeo, scrollToStep, stepElements, type Geo } from './geometry'
+import { GONE_MS, measureStep, PHONE_QUERY, removeScrollRoom, sameGeo, scrollToStep, SHORT_QUERY, stepElements, type Geo } from './geometry'
 import { useTourFlags } from './hooks'
 import { closeIfRouteChanged, closeTour, nextStep, prevStep, reportAnchorsGone, tourEnv, useTourStore, type ActiveTour } from './tourStore'
 
@@ -26,6 +26,8 @@ const REDUCED_MOTION = '(prefers-reduced-motion: reduce)'
 export function TourHost() {
   const route = useRoute()
   const phone = useMediaQuery(PHONE_QUERY)
+  // the bubble docks on phones and on short screens (a phone in landscape); `phone` alone picks the content
+  const short = useMediaQuery(SHORT_QUERY)
   const touch = !useIsDesktopPointer()
   const cloudInvite = useCloudInvite()
   const canListenInTab = useCanListenInTab()
@@ -39,10 +41,10 @@ export function TourHost() {
 
   const active = useTourStore((s) => s.active)
   if (!active) return null
-  return createPortal(<TourLayer key={active.tourId} active={active} phone={phone} />, document.body)
+  return createPortal(<TourLayer key={active.tourId} active={active} dock={phone || short} />, document.body)
 }
 
-function TourLayer({ active, phone }: { active: ActiveTour; phone: boolean }) {
+function TourLayer({ active, dock }: { active: ActiveTour; dock: boolean }) {
   const t = useT()
   const flags = useTourStore((s) => s.flags)
   const reduce = useMediaQuery(REDUCED_MOTION)
@@ -72,10 +74,10 @@ function TourLayer({ active, phone }: { active: ActiveTour; phone: boolean }) {
 
   // each step: its anchors into view, then focus on «Далі»
   useEffect(() => {
-    scrollToStep(step, { phone, reduce, bubbleHeight: bubble.current?.offsetHeight ?? 0 })
+    scrollToStep(step, { dock, reduce, bubbleHeight: bubble.current?.offsetHeight ?? 0 })
     next.current?.focus({ preventScroll: true })
-  }, [step, phone, reduce])
-  // the room a phone step added below the page goes with the tour
+  }, [step, dock, reduce])
+  // the room a docked step added below the page goes with the tour
   useEffect(() => removeScrollRoom, [])
 
   // the spotlight follows scrolling (inner scrollers too), resizing and the anchors, at most once a frame;
@@ -86,7 +88,7 @@ function TourLayer({ active, phone }: { active: ActiveTour; phone: boolean }) {
     const anchored = step.anchors.length > 0 && !step.centre
     const update = () => {
       raf = 0
-      const g = measureStep(step, bubble.current, phone)
+      const g = measureStep(step, bubble.current, dock)
       setGeo((prev) => (prev && sameGeo(prev.geo, g) ? prev : { geo: g, moved: prev !== null }))
       if (!anchored || g.present) {
         window.clearTimeout(gone)
@@ -94,7 +96,7 @@ function TourLayer({ active, phone }: { active: ActiveTour; phone: boolean }) {
       } else if (gone === undefined) {
         gone = window.setTimeout(() => {
           gone = undefined
-          if (!measureStep(step, bubble.current, phone).present) reportAnchorsGone()
+          if (!measureStep(step, bubble.current, dock).present) reportAnchorsGone()
         }, GONE_MS)
       }
     }
@@ -120,7 +122,7 @@ function TourLayer({ active, phone }: { active: ActiveTour; phone: boolean }) {
       window.removeEventListener('resize', schedule)
       window.removeEventListener('orientationchange', schedule)
     }
-  }, [step, phone])
+  }, [step, dock])
 
   // → next, ← back, Enter / Space press the focused button, Esc closes, Tab stays in the bubble; held keys
   // (auto-repeat) are swallowed so a long press cannot race through the tour; modified combos (Alt+← is the
@@ -205,7 +207,7 @@ function TourLayer({ active, phone }: { active: ActiveTour; phone: boolean }) {
           'absolute flex w-[22rem] max-w-[calc(100vw-16px)] flex-col overflow-y-auto rounded-2xl border border-border-strong bg-surface p-4 text-text shadow-2xl shadow-black/40',
           geo?.moved && moving,
         )}
-        style={place ? { left: place.left, top: place.top, width: phone ? place.width : undefined, maxHeight: place.maxHeight } : { left: -9999, top: 0 }}
+        style={place ? { left: place.left, top: place.top, width: dock ? place.width : undefined, maxHeight: place.maxHeight } : { left: -9999, top: 0 }}
       >
         <div aria-live="polite">
           <h2 id={titleId} className="font-display text-[17px] leading-snug font-semibold tracking-tight">

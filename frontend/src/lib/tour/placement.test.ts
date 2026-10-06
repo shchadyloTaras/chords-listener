@@ -1,13 +1,14 @@
-// Where the bubble goes: below or above the spotlight on a desktop, docked at the bottom on phones and for
-// spotlights taller than the free area, never over the player bar or the floating video, always on screen.
+// Where the bubble goes: below or above the spotlight on a desktop, docked at the bottom on phones, on short
+// screens (a phone in landscape) and for spotlights taller than the free area, never over the player bar or the
+// floating video, always on screen.
 import { describe, expect, it } from 'vitest'
-import { freeBand, intersectRect, MARGIN, missingRoom, nearestDelta, placeBubble, scrollDelta, unionRect, type Rect, type View } from './placement'
+import { freeBand, intersectRect, MARGIN, missingRoom, nearestDelta, PAD, placeBubble, scrollDelta, unionRect, type Rect, type View } from './placement'
 
 const DESK: View = { width: 1280, height: 800, top: 56, bottom: 704 } // 96 px player bar
 const PHONE: View = { width: 375, height: 812, top: 56, bottom: 702 } // 110 px player bar
 const SIZE = { width: 352, height: 180 }
 const rect = (left: number, top: number, right: number, bottom: number): Rect => ({ left, top, right, bottom })
-const place = (spot: Rect | null, view = DESK, phone = false, avoid: Rect[] = [], size = SIZE) => placeBubble({ spot, size, view, phone, avoid })
+const place = (spot: Rect | null, view = DESK, dock = false, avoid: Rect[] = [], size = SIZE) => placeBubble({ spot, size, view, dock, avoid })
 
 describe('desktop', () => {
   it('goes below the spotlight when it fits, centred on it and clamped to the viewport', () => {
@@ -55,9 +56,38 @@ describe('phones', () => {
     expect(p.top).toBe(MARGIN)
     expect(p.maxHeight).toBe(285 - 2 * MARGIN)
     expect(p.top + Math.min(400, p.maxHeight)).toBeLessThanOrEqual(285 - MARGIN)
-    // 667 px is wider than PHONE_QUERY (max-width: 639px): in the app this screen takes the desktop branch
+    // the desktop arithmetic keeps a long bubble on screen too (in the app a screen this short docks: DOCK below)
     expect(place(null, landscape, false, [], { width: 352, height: 400 })).toEqual({ left: 157.5, top: MARGIN, width: 352, maxHeight: 285 - 2 * MARGIN })
     expect(place(rect(16, 100, 300, 140), landscape, false, [], { width: 352, height: 400 }).top).toBe(MARGIN)
+  })
+})
+
+describe('short screens wider than a phone (a phone in landscape): docked like a phone', () => {
+  // 844 × 390 with the 56 px header and a 64 px player bar. Centred in the whole free area, as on a desktop, a
+  // 36 px spotlight sits at 173–209 and neither below nor above leaves room for the bubble: the dock fallback
+  // put a 200 px bubble at 118, right over it
+  const LAND: View = { width: 844, height: 390, top: 56, bottom: 326 }
+
+  it('the spotlight is scrolled above the docked bubble, which stays clear of the cut-out', () => {
+    for (const height of [160, 200]) {
+      const size = { width: 352, height }
+      for (const top of [-400, 40, 70, 173, 300, 900]) {
+        const spot = rect(300, top, 336, top + 36)
+        const dy = scrollDelta(spot, freeBand(LAND, true, height))
+        const moved = rect(spot.left, spot.top - dy, spot.right, spot.bottom - dy)
+        const p = placeBubble({ spot: moved, size, view: LAND, dock: true, avoid: [] })
+        expect(p.top, `${height} px bubble, spot at ${top}`).toBe(326 - MARGIN - height)
+        expect(moved.bottom + PAD, `${height} px bubble, spot at ${top}`).toBeLessThanOrEqual(p.top)
+        expect(moved.top - PAD, `${height} px bubble, spot at ${top}`).toBeGreaterThanOrEqual(LAND.top)
+      }
+    }
+  })
+
+  it('the docked bubble is centred and at most 640 px wide; phones keep the full width', () => {
+    expect(place(rect(300, 80, 336, 116), LAND, true)).toEqual({ left: 102, top: 326 - MARGIN - 180, width: 640, maxHeight: 326 - 2 * MARGIN })
+    const window: View = { width: 1280, height: 450, top: 56, bottom: 354 }
+    expect(place(null, window, true)).toEqual({ left: 320, top: 354 - MARGIN - 180, width: 640, maxHeight: 354 - 2 * MARGIN })
+    expect(place(null, { ...PHONE, width: 639 }, true).width).toBe(639 - 32)
   })
 })
 
@@ -73,7 +103,7 @@ describe('scrolling', () => {
     expect(scrollDelta(rect(0, 400, 10, 1400), { top: 64, bottom: 696 })).toBe(400 - 64)
   })
 
-  it('the free band ends above the docked bubble on phones', () => {
+  it('the free band ends above the docked bubble on phones and short screens', () => {
     expect(freeBand(DESK, false, 180)).toEqual({ top: 64, bottom: 696 })
     expect(freeBand(PHONE, true, 180)).toEqual({ top: 64, bottom: 702 - 8 - 180 - 8 })
   })

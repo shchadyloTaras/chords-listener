@@ -5,8 +5,11 @@ import { freeBand, intersectRect, missingRoom, nearestDelta, placeBubble, scroll
 import type { TourStep } from '../../lib/tour/tours'
 import { anchorElement } from './dom'
 
-/** below Tailwind's `sm`: the bubble docks at the bottom */
+/** below Tailwind's `sm`: phone content (the ⋯ step, Song step 4 split) and a docked bubble */
 export const PHONE_QUERY = '(max-width: 639px)'
+/** a short screen wider than a phone (a phone in landscape): the bubble docks as on phones, so the spotlight is
+ *  scrolled above it instead of being centred where neither side has room; the content stays the desktop one */
+export const SHORT_QUERY = '(max-height: 499px)'
 /** an anchor counts as gone only if it is still missing this long after it vanished */
 export const GONE_MS = 300
 /** the bubble's size before it has been measured */
@@ -100,21 +103,22 @@ function avoidRects(): Rect[] {
     .map((el) => box(el.getBoundingClientRect()))
 }
 
-export function measureStep(step: TourStep, bubble: HTMLElement | null, phone: boolean): Geo {
+export function measureStep(step: TourStep, bubble: HTMLElement | null, dock: boolean): Geo {
   const view = currentView()
   const els = stepElements(step)
   const spot = unionRect(els.map((el) => visibleRect(el, view)).filter((r): r is Rect => r !== null))
   const size = bubble && bubble.offsetWidth ? { width: bubble.offsetWidth, height: bubble.offsetHeight } : FALLBACK
-  return { present: els.length > 0, spot, place: placeBubble({ spot, size, view, phone, avoid: avoidRects() }) }
+  return { present: els.length > 0, spot, place: placeBubble({ spot, size, view, dock, avoid: avoidRects() }) }
 }
 
 export function sameGeo(a: Geo, b: Geo): boolean {
   return JSON.stringify(a) === JSON.stringify(b)
 }
 
-/** Phones: an empty block past the end of the page while a tour runs, so an anchor near the end of a short page
- *  can still scroll above the docked bubble. Placed on the initial containing block, it lengthens the page
- *  whatever the app's own layout; it only grows, and goes when the tour closes (removeScrollRoom). */
+/** A docked bubble (phones, short screens): an empty block past the end of the page while a tour runs, so an
+ *  anchor near the end of a short page can still scroll above it. Placed on the initial containing block, it
+ *  lengthens the page whatever the app's own layout; it only grows, and goes when the tour closes
+ *  (removeScrollRoom). */
 let room: HTMLDivElement | null = null
 
 function addScrollRoom(px: number): void {
@@ -135,7 +139,7 @@ export function removeScrollRoom(): void {
 
 /** Before a step: its anchors into view — sideways inside their own scrollers, then the page (if not pinned):
  *  centred in the free band, except `scrollTop` steps, which move only as far as needed. */
-export function scrollToStep(step: TourStep, opts: { phone: boolean; reduce: boolean; bubbleHeight: number }): void {
+export function scrollToStep(step: TourStep, opts: { dock: boolean; reduce: boolean; bubbleHeight: number }): void {
   const behavior: ScrollBehavior = opts.reduce ? 'auto' : 'smooth'
   // the hero's key and BPM badges exist only while the hero is on screen
   if (step.scrollTop && window.scrollY > 0) window.scrollTo({ top: 0, behavior: 'auto' })
@@ -153,10 +157,10 @@ export function scrollToStep(step: TourStep, opts: { phone: boolean; reduce: boo
   }
   const target = unionRect(els.filter((el) => !inStickyOrFixed(el)).map(anchorRect))
   if (!target) return
-  const band = freeBand(currentView(), opts.phone, opts.bubbleHeight)
+  const band = freeBand(currentView(), opts.dock, opts.bubbleHeight)
   // Song steps 1–4 scroll as little as possible: centring the toolbar under the live-piano panel would scroll
   // the hero away, and the toolbar then swaps the key badge (song.key) for the mini "now → next"
   const dy = step.scrollTop ? nearestDelta(target.top, target.bottom, band.top, band.bottom) : scrollDelta(target, band)
-  if (opts.phone) addScrollRoom(missingRoom(dy, window.scrollY, document.documentElement.scrollHeight - window.innerHeight))
+  if (opts.dock) addScrollRoom(missingRoom(dy, window.scrollY, document.documentElement.scrollHeight - window.innerHeight))
   if (Math.abs(dy) > 1) window.scrollBy({ top: dy, behavior })
 }

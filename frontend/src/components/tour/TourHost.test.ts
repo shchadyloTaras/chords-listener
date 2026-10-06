@@ -332,6 +332,33 @@ describe('anchors and motion', () => {
     }
   })
 
+  it('a short window wider than a phone (a phone in landscape) docks the bubble and gets the room too, but keeps the desktop steps', () => {
+    act(() => root.unmount())
+    window.matchMedia = ((query: string) => ({
+      matches: query === '(max-height: 499px)',
+      media: query,
+      addEventListener() {},
+      removeEventListener() {},
+    })) as unknown as typeof window.matchMedia
+    root = createRoot(host)
+    act(() => root.render(createElement(TourHost)))
+    Object.defineProperty(document.documentElement, 'scrollHeight', { configurable: true, value: 900 })
+    try {
+      made[0].getBoundingClientRect = () => ({ ...RECT, top: 1000, bottom: 1040, y: 1000 })
+      begin()
+      press('ArrowRight')
+      // the content stays the desktop one (header.settings, not ⋯)
+      expect(useTourStore.getState().flags.phone).toBe(false)
+      expect(window.scrollBy).toHaveBeenLastCalledWith(expect.objectContaining({ top: 640 }))
+      expect(document.querySelector('[data-tour-room]')).not.toBeNull()
+      // docked at the bottom, centred, 640 px wide (jsdom: a 1024 × 768 window, no header or player bar)
+      const bubble = dialog()!.querySelector('h2')!.closest<HTMLElement>('div.absolute')!
+      expect([bubble.style.left, bubble.style.top, bubble.style.width]).toEqual(['192px', `${768 - 8 - 180}px`, '640px'])
+    } finally {
+      delete (document.documentElement as { scrollHeight?: number }).scrollHeight
+    }
+  })
+
   it('a desktop page gets no such room', () => {
     Object.defineProperty(document.documentElement, 'scrollHeight', { configurable: true, value: 900 })
     try {

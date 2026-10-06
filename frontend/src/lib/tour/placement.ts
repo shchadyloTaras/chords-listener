@@ -1,7 +1,9 @@
 // Where the tour's bubble goes and how far to scroll (spec §2 "Placement"), in viewport pixels. Desktop: below
 // or above the spotlight, whichever fits, clamped to the viewport, never over the player bar or the floating
-// video; a spotlight taller than the free area docks the bubble at its bottom. Phones: the bubble always docks
-// at the bottom, above the player bar. Pure; components/tour/geometry.ts measures the page.
+// video; a spotlight taller than the free area docks the bubble at its bottom. Docked (`dock`: phones, and short
+// screens such as a phone in landscape, where neither side has room): the bubble always docks at the bottom,
+// above the player bar, and the spotlight is scrolled above it. Pure; components/tour/geometry.ts measures the
+// page and decides `dock`.
 
 export interface Rect {
   left: number
@@ -37,6 +39,8 @@ export const GAP = 12
 /** cut-out padding around the spotlight */
 export const PAD = 6
 export const PHONE_GUTTER = 16
+/** a docked bubble on a wide short screen stays readable */
+export const DOCK_MAX_WIDTH = 640
 
 export function unionRect(rects: readonly Rect[]): Rect | null {
   if (!rects.length) return null
@@ -77,10 +81,10 @@ export function missingRoom(dy: number, scrollY: number, maxScrollY: number): nu
   return Math.max(0, Math.ceil(scrollY + dy - maxScrollY))
 }
 
-/** Where a spotlight may sit: below the header, above the player bar (and above the docked bubble on phones). */
-export function freeBand(view: View, phone: boolean, bubbleHeight: number): { top: number; bottom: number } {
+/** Where a spotlight may sit: below the header, above the player bar (and above the bubble when it docks). */
+export function freeBand(view: View, dock: boolean, bubbleHeight: number): { top: number; bottom: number } {
   const top = view.top + MARGIN
-  const bottom = view.bottom - MARGIN - (phone ? bubbleHeight + MARGIN : 0)
+  const bottom = view.bottom - MARGIN - (dock ? bubbleHeight + MARGIN : 0)
   return { top, bottom: Math.max(top, bottom) }
 }
 
@@ -88,20 +92,24 @@ export function placeBubble({
   spot,
   size,
   view,
-  phone,
+  dock,
   avoid,
 }: {
   spot: Rect | null
   size: Size
   view: View
-  phone: boolean
+  /** phones and short screens: always docked at the bottom, full width with gutters (at most DOCK_MAX_WIDTH) */
+  dock: boolean
   avoid: readonly Rect[]
 }): Placement {
   const floor = view.bottom - MARGIN
   const maxHeight = Math.max(0, floor - MARGIN)
   const height = Math.min(size.height, maxHeight)
   const dockTop = Math.max(MARGIN, floor - height)
-  if (phone) return { left: PHONE_GUTTER, top: dockTop, width: Math.max(0, view.width - 2 * PHONE_GUTTER), maxHeight }
+  if (dock) {
+    const width = Math.min(DOCK_MAX_WIDTH, Math.max(0, view.width - 2 * PHONE_GUTTER))
+    return { left: (view.width - width) / 2, top: dockTop, width, maxHeight }
+  }
 
   const width = Math.min(size.width, view.width - 2 * MARGIN)
   const clampX = (x: number) => Math.max(MARGIN, Math.min(x, view.width - width - MARGIN))
