@@ -94,6 +94,15 @@
   --cw-key-black: #26252b;
 }
 
+/* The harmonium diagram keeps the real instrument's wood / ivory / felt / bellows colours in both
+   themes; only its outline follows the theme, so the dark bellows stay visible on a dark page. */
+.cw-harmonium {
+  --hm-outline: rgb(255 255 255 / 0.3);
+}
+[data-theme='light'] .cw-harmonium {
+  --hm-outline: rgb(48 32 16 / 0.45);
+}
+
 /* Progress fills are driven with transform: scaleX(). */
 .cw-fill {
   transform-origin: 0 50%;

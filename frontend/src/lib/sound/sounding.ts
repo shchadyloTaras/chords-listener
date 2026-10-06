@@ -1,6 +1,6 @@
 // What the chord sound is playing right now, per chord diagram: the engine records every played
 // note (the same timings it emits as live notes) and diagrams of that chord light the matching
-// piano keys / strings / handpan fields while each one sounds. Timer-driven only while something
+// piano / harmonium keys / strings / handpan fields while each one sounds. Timer-driven only while something
 // sounds; nothing runs when idle.
 
 import { useEffect, useMemo, useState } from 'react'
@@ -8,7 +8,7 @@ import type { Instrument } from '../../store'
 import type { LiveNote } from '../liveNotes'
 
 export interface SoundingNote extends LiveNote {
-  /** piano key index (0 = C4 of the diagram), guitar / ukulele string, handpan note index (0 = ding) */
+  /** piano key index (0 = C4 of the diagram), harmonium key (0 = C3), guitar / ukulele string, handpan note index (0 = ding) */
   target: number
 }
 
