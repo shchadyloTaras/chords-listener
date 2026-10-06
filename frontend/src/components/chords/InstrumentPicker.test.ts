@@ -42,21 +42,45 @@ it('shows the six instruments as buttons on a wide screen', () => {
   expect(useApp.getState().instrument).toBe('harmonium')
 })
 
-it("uses the phone's own picker on a narrow screen (never clipped by the hero)", () => {
+it('opens its own menu on a narrow screen: the six instruments, the current one checked', () => {
   wide = false
   render()
-  expect(host.querySelector('[role="radio"]')).toBeNull()
-  expect(host.querySelector('[role="menu"], [aria-haspopup="menu"]')).toBeNull()
-  const select = host.querySelector('select')!
-  expect(select.getAttribute('aria-label')).toBe('Інструмент')
-  expect([...select.options].map((o) => o.textContent)).toEqual(['Гітара', 'Бас', 'Укулеле', 'Фортепіано', 'Фісгармонія', 'Хендпан'])
-  expect(select.value).toBe('guitar')
-  act(() => {
-    select.value = 'bass'
-    select.dispatchEvent(new Event('change', { bubbles: true }))
-  })
+  expect(host.querySelector('select')).toBeNull()
+  const trigger = host.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!
+  expect(trigger.getAttribute('aria-label')).toBe('Інструмент: Гітара')
+  expect(trigger.getAttribute('aria-expanded')).toBe('false')
+  click(trigger)
+  expect(trigger.getAttribute('aria-expanded')).toBe('true')
+  // in a portal: the hero's overflow-hidden never clips it
+  const menu = document.body.querySelector('[role="menu"]')!
+  expect(host.contains(menu)).toBe(false)
+  expect(menu.getAttribute('aria-label')).toBe('Інструмент')
+  const items = [...menu.querySelectorAll('[role="menuitemradio"]')]
+  expect(items.map((i) => i.textContent)).toEqual(['Гітара', 'Бас', 'Укулеле', 'Фортепіано', 'Фісгармонія', 'Хендпан'])
+  expect(items.map((i) => i.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false', 'false', 'false', 'false'])
+  click(items[1])
   expect(useApp.getState().instrument).toBe('bass')
-  expect(host.querySelector('select')!.value).toBe('bass')
+  expect(document.body.querySelector('[role="menu"]')).toBeNull()
+  expect(trigger.getAttribute('aria-label')).toBe('Інструмент: Бас')
+})
+
+it('moves through the menu with the arrow keys', () => {
+  wide = false
+  render()
+  click(host.querySelector('button[aria-haspopup="menu"]'))
+  const menu = document.body.querySelector<HTMLElement>('[role="menu"]')!
+  const items = [...menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')]
+  items[0].focus()
+  const key = (k: string) => act(() => void document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true })))
+  key('ArrowDown')
+  expect(document.activeElement).toBe(items[1])
+  key('ArrowUp')
+  key('ArrowUp')
+  expect(document.activeElement).toBe(items[5])
+  key('Home')
+  expect(document.activeElement).toBe(items[0])
+  key('End')
+  expect(document.activeElement).toBe(items[5])
 })
 
 it('carries its tour anchor on a wide and on a narrow screen', () => {
@@ -65,4 +89,25 @@ it('carries its tour anchor on a wide and on a narrow screen', () => {
     act(() => root!.render(createElement(InstrumentPicker, { tour: 'song.instrument' })))
     expect(host.querySelector('[data-tour="song.instrument"]'), `wide=${isWide}`).not.toBeNull()
   }
+})
+
+it('looks like a control on a narrow screen: a visible «Інструмент» label and the instrument’s icon', () => {
+  wide = false
+  render()
+  expect(host.textContent).toContain('Інструмент')
+  expect(host.querySelector('svg.lucide-guitar')).not.toBeNull()
+  act(() => useApp.setState({ instrument: 'harmonium' }))
+  expect(host.querySelector('svg.lucide-harmonium')).not.toBeNull()
+  act(() => useApp.setState({ instrument: 'handpan' }))
+  expect(host.querySelector('svg.lucide-handpan')).not.toBeNull()
+})
+
+it('gives every instrument an icon of its own in the menu', () => {
+  wide = false
+  render()
+  click(host.querySelector('button[aria-haspopup="menu"]'))
+  const icons = [...document.body.querySelectorAll('[role="menuitemradio"] > span[aria-hidden] > svg')].map((svg) =>
+    [...svg.classList].find((c) => c.startsWith('lucide-')),
+  )
+  expect(icons).toEqual(['lucide-guitar', 'lucide-bass-guitar', 'lucide-ukulele', 'lucide-piano', 'lucide-harmonium', 'lucide-handpan'])
 })
