@@ -1,10 +1,12 @@
 // Floating helpers above the player bar: the bar-selection action bar and the
-// "back to playback" pill shown when the user scrolled away while following.
+// "back to playback" pill shown when the user scrolled away while following
+// (not during a guided tour, which suspends following itself while nothing plays).
 
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { Crosshair, Copy, Check, Repeat, X } from 'lucide-react'
 import { useT } from '../../i18n'
 import { useApp } from '../../store'
+import { useTourStore } from '../tour/tourStore'
 import { toggleLoop } from './hotkeys'
 import { useChordModel } from './model'
 import { selectionRange, useChordUi } from './uiStore'
@@ -17,10 +19,11 @@ export function Overlays() {
   const clear = useChordUi((s) => s.clearSelection)
   const paused = useChordUi((s) => s.followPaused)
   const follow = useApp((s) => s.follow)
+  const touring = useTourStore((s) => s.active !== null)
   const reduce = useReducedMotion()
   const { done, run } = useCopyFeedback()
   const range = selectionRange(selection)
-  const showPill = follow && paused
+  const showPill = follow && paused && !touring
 
   const anim = reduce
     ? { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 } }
