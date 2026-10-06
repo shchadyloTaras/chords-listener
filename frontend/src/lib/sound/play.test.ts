@@ -24,7 +24,7 @@ it('still sounds a chord the bass cannot fully hold', () => {
   expect(midis(chordSoundNotes('Cmaj7/D', 'bass')).length).toBeGreaterThan(0)
 })
 
-it('plays the harmonium from the piano diagram', () => {
+it('plays the harmonium from its diagram', () => {
   expect(chordSoundNotes('C', 'harmonium')).toEqual(harmoniumChordNotes('C'))
   expect(chordSoundNotes('N', 'harmonium')).toEqual([])
 })

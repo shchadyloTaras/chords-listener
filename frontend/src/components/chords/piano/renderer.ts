@@ -14,11 +14,13 @@
 // distinct from the instruments' pitch colours — and a dot on the key the singer is on.
 //
 // A key that is down shows its note's name ("E♭") near its front edge, when the key is wide enough.
+//
+// On the harmonium the keyboard is the instrument's own 37 keys (C3–C6) behind its blue felt.
 import { useApp } from '../../../store'
 import type { LiveNote } from '../../../lib/liveNotes'
 import type { NoteIndex } from '../../../lib/transcription'
 import type { Spelling } from '../../../lib/music/notes'
-import { fitRange, foldNote, layoutKeyboard, maxOctavesFor, pitchName, type KeyboardLayout, type KeyRange, type KeyRect } from './keyboard'
+import { foldNote, layoutKeyboard, liveRange, maxOctavesFor, pitchName, type KeyboardLayout, type KeyRange, type KeyRect, type LiveKeyboard } from './keyboard'
 import { FrameLead, LiveClock } from './liveClock'
 import { chordRgb, inkOn, mix, pitchColor, rgba, type Palette, type Rgb } from './palette'
 
@@ -94,6 +96,7 @@ export class PianoRenderer {
   private vocals: NoteIndex | null = null
   private transpose = 0
   private spelling: Spelling = 'sharp'
+  private keyboard: LiveKeyboard = 'piano'
   private chords: RollChord[] = []
   private downbeats: number[] = []
   private reduced = false
@@ -161,6 +164,13 @@ export class PianoRenderer {
   setTranspose(n: number): void {
     if (this.transpose === n) return
     this.transpose = n
+    this.refit()
+  }
+
+  /** The piano (keys fitted to the song) or the harmonium (its own 37 keys). */
+  setKeyboard(keyboard: LiveKeyboard): void {
+    if (this.keyboard === keyboard) return
+    this.keyboard = keyboard
     this.refit()
   }
 
@@ -257,7 +267,7 @@ export class PianoRenderer {
         if (t >= 0 && t < 128) weights[t] += raw[m]
       }
     }
-    this.range = fitRange(weights, { minOctaves: 4, maxOctaves: maxOctavesFor(this.cssW) })
+    this.range = liveRange(this.keyboard, weights, this.cssW)
     this.relayout()
   }
 
@@ -564,9 +574,12 @@ export class PianoRenderer {
 
   private drawFelt(W: number, y: number): void {
     const { ctx, palette: p } = this
-    // the strip of felt behind the keys (a dark red, like on a real piano)
+    // the strip of felt behind the keys (a dark red, like on a real piano; the harmonium's is blue)
     const g = ctx.createLinearGradient(0, y, 0, y + FELT)
-    if (p.dark) {
+    if (this.keyboard === 'harmonium') {
+      g.addColorStop(0, p.dark ? 'rgb(40,52,138)' : 'rgb(50,67,166)')
+      g.addColorStop(1, p.dark ? 'rgb(22,28,84)' : 'rgb(30,40,114)')
+    } else if (p.dark) {
       g.addColorStop(0, 'rgb(74,24,27)')
       g.addColorStop(1, 'rgb(38,12,14)')
     } else {
