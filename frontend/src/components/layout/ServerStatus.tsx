@@ -119,6 +119,9 @@ function AdvancedServer({ onConnected }: { onConnected(): void }) {
   const direct = normalizeServerUrl(serverUrl)
   const [open, setOpen] = useState(kind === 'server')
 
+  // in the cloud the own server is unused: shown only to someone who has connected one, to explain where it went
+  if (kind === 'cloud' && !localServer) return null
+
   return (
     <div className="mt-4 border-t border-border pt-3">
       <button
