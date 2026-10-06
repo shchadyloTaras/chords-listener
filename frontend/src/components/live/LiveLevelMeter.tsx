@@ -2,6 +2,9 @@ import { memo } from 'react'
 import clsx from 'clsx'
 import { useT } from '../../i18n'
 
+const METER_HEIGHT = { sm: 'h-3.5', md: 'h-5', lg: 'h-9' } as const
+const SEGMENT_WIDTH = { sm: 'w-[3px]', md: 'w-1', lg: 'w-1.5' } as const
+
 /**
  * Small segmented input-level meter (studio style): `level` 0..1 as from LiveUpdate.level
  * (-60..0 dBFS). Low segments use the success colour, then the accent, the top one warns of
@@ -19,7 +22,7 @@ export const LiveLevelMeter = memo(function LiveLevelMeter({
   active?: boolean
   segments?: number
   className?: string
-  size?: 'sm' | 'md'
+  size?: 'sm' | 'md' | 'lg'
 }) {
   const t = useT()
   const v = active && Number.isFinite(level) ? Math.min(1, Math.max(0, level)) : 0
@@ -32,7 +35,7 @@ export const LiveLevelMeter = memo(function LiveLevelMeter({
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={Math.round(v * 100)}
-      className={clsx('flex shrink-0 items-end gap-[3px]', size === 'sm' ? 'h-3.5' : 'h-5', !active && 'opacity-50', className)}
+      className={clsx('flex shrink-0 items-end gap-[3px]', METER_HEIGHT[size], !active && 'opacity-50', className)}
     >
       {Array.from({ length: segments }, (_, i) => {
         const at = (i + 1) / segments
@@ -41,7 +44,7 @@ export const LiveLevelMeter = memo(function LiveLevelMeter({
           <span
             key={i}
             aria-hidden
-            className={clsx('rounded-[2px] transition-[opacity,background-color] duration-100 ease-out', size === 'sm' ? 'w-[3px]' : 'w-1')}
+            className={clsx('rounded-[2px] transition-[opacity,background-color] duration-100 ease-out', SEGMENT_WIDTH[size])}
             style={{
               height: `${40 + 60 * (i / Math.max(1, segments - 1))}%`,
               backgroundColor: i < lit ? color : 'var(--border-strong)',

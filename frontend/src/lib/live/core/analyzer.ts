@@ -14,6 +14,7 @@ import { FPS, SR, estimateTuning } from '../../engine/core/spectrum.ts'
 import { median, nearestDistance, percentile } from '../../engine/core/util.ts'
 import { OnlineChordDecoder, type DecodedRun } from './decoder.ts'
 import { StreamingChroma, type ChromaFrame } from './features.ts'
+import { InputLevel } from './meter.ts'
 import { StreamingResampler } from './resampler.ts'
 import { frameScores } from './scores.ts'
 
@@ -73,8 +74,6 @@ export const DEFAULT_HOLD = 3
  */
 export const LIVE_PARAMS: Partial<AnalyzeParams> = { changePenalty: 10.5 }
 const EXTENDED_CONFIDENCE = 0.85
-/** quieter than this (dBFS) reads as 0 on the meter */
-const METER_FLOOR_DB = -60
 /** history kept for the tuning / tempo estimates (s) */
 const HISTORY_SEC = 15
 /** silence threshold window (s) */
@@ -143,9 +142,8 @@ export class LiveAnalyzer {
   private beatMids: number[] = []
   /** input samples received */
   private inputSamples = 0
-  // level since the last state() call
-  private levelSum = 0
-  private levelN = 0
+  /** level since the last state() call */
+  private readonly level = new InputLevel()
   // loudness of recent frames for the silence threshold
   private readonly loud: Float64Array
   private loudN = 0
@@ -204,13 +202,7 @@ export class LiveAnalyzer {
   /** Feed mono input samples (at `inputRate`). */
   push(x: Float32Array): void {
     if (this.ended) return
-    let s = 0
-    for (let i = 0; i < x.length; i++) {
-      const v = x[i]
-      s += Number.isFinite(v) ? v * v : 0
-    }
-    this.levelSum += s
-    this.levelN += x.length
+    this.level.add(x)
     this.inputSamples += x.length
     const clean = x.every(Number.isFinite) ? x : x.map((v) => (Number.isFinite(v) ? v : 0))
     this.process(this.resampler.push(clean), false)
@@ -218,11 +210,6 @@ export class LiveAnalyzer {
 
   /** Current state; `finalized` holds only what became final since the previous call. */
   state(): LiveAnalysisState {
-    const ms = this.levelN ? this.levelSum / this.levelN : 0
-    this.levelSum = 0
-    this.levelN = 0
-    const db = 10 * Math.log10(ms + 1e-12)
-    const level = Math.min(1, Math.max(0, (db - METER_FLOOR_DB) / -METER_FLOOR_DB))
     const time = this.time
     const open = this.decoder.open().map((r) => this.toChord(r))
     const cur = open[open.length - 1]
@@ -231,7 +218,7 @@ export class LiveAnalyzer {
       time,
       finalized: this.takeFinal(),
       open,
-      level: round(level, 3),
+      level: this.level.take(),
       key: this.keyShown,
       tempo: this.tempoValue,
       tuning: this.chroma.tuning,

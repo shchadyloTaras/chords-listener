@@ -6,7 +6,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import clsx from 'clsx'
-import { CircleAlert, Pause, Square } from 'lucide-react'
+import { CircleAlert } from 'lucide-react'
 import { useT } from '../../i18n'
 import type { LiveChord, LiveSession } from '../../lib/live'
 import { chordTone } from '../../lib/music/color'
@@ -20,7 +20,9 @@ import { ChordDiagram } from '../chords/diagrams/ChordDiagram'
 import { InstrumentPicker } from '../chords/InstrumentPicker'
 import { formatTime } from '../ui/format'
 import { LiveLevelMeter } from './LiveLevelMeter'
-import { useLiveSession, type LiveView } from './useLiveSession'
+import { QUIET_LEVEL, useQuiet } from './quiet'
+import { StatusPill } from './status'
+import { useLiveSession } from './useLiveSession'
 import '../chords/chords.css'
 import './live.css'
 
@@ -28,10 +30,6 @@ import './live.css'
 const RIBBON_MAX = 48
 /** a no-chord stretch at least this long shows as a gap in the ribbon (s) */
 const GAP_MIN_SEC = 1.5
-/** below this meter level (-50 dBFS, the analysis' silence floor) the input counts as silent / too quiet */
-const QUIET_LEVEL = 0.17
-/** seconds of continuous quiet before the "turn it up" hint */
-const QUIET_HINT_SEC = 4
 /** minimum time between screen-reader announcements (ms) */
 const ANNOUNCE_EVERY_MS = 2500
 
@@ -280,34 +278,6 @@ const Hero = memo(function Hero({
   )
 })
 
-function StatusPill({ state, ended }: { state: LiveView['state']; ended: boolean }) {
-  const t = useT()
-  if (state === 'running' && !ended) {
-    return (
-      <span className="inline-flex h-7 shrink-0 items-center gap-2 rounded-full bg-danger/12 px-2.5 text-xs font-semibold tracking-wider text-danger uppercase">
-        <span className="relative flex size-2" aria-hidden>
-          <span className="absolute inline-flex size-full animate-ping rounded-full bg-danger/60 motion-reduce:animate-none" />
-          <span className="relative inline-flex size-2 rounded-full bg-danger" />
-        </span>
-        {t('live.status.running')}
-      </span>
-    )
-  }
-  const label = ended && state !== 'stopped' ? t('live.status.ended') : t(`live.status.${state}`)
-  return (
-    <span className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-surface-2 px-2.5 text-xs font-semibold tracking-wider text-muted uppercase">
-      {state === 'paused' ? (
-        <Pause aria-hidden className="size-3" fill="currentColor" />
-      ) : state === 'stopped' ? (
-        <Square aria-hidden className="size-2.5" fill="currentColor" />
-      ) : (
-        <span aria-hidden className="size-2 rounded-full bg-border-strong" />
-      )}
-      <span className="max-w-[14rem] truncate normal-case tracking-normal sm:uppercase sm:tracking-wider">{label}</span>
-    </span>
-  )
-}
-
 function KeyBadge({ info, spelling, compact }: { info: KeyInfo; spelling: Spelling; compact: boolean }) {
   const t = useT()
   const { label: name, parsed } = displayLabel(info.name, { transpose: 0, simplify: false, spelling })
@@ -467,16 +437,6 @@ function RibbonList({ items, compact, reduce }: RibbonProps) {
       )}
     </div>
   )
-}
-
-/** True after QUIET_HINT_SEC of session time below QUIET_LEVEL while listening. */
-function useQuiet(view: LiveView): boolean {
-  const [since, setSince] = useState<number | null>(null)
-  const quietNow = view.state === 'running' && !view.ended && view.level < QUIET_LEVEL
-  // derived from the previous renders (React's "adjusting state while rendering" pattern)
-  if (quietNow && since === null) setSince(view.time)
-  else if (!quietNow && since !== null) setSince(null)
-  return quietNow && since !== null && view.time - since >= QUIET_HINT_SEC
 }
 
 /** Polite screen-reader text for confirmed chord changes, at most every ANNOUNCE_EVERY_MS. */

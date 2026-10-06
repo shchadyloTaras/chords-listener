@@ -24,6 +24,8 @@ export type ToWorker =
       port?: MessagePort
       options?: AnalyzerTuning
       interval?: number
+      /** false: time and level only, no chords (a microphone recording); default true */
+      analyze?: boolean
     }
   | { type: 'pcm'; samples: Float32Array }
   | { type: 'pause' }

@@ -5,6 +5,7 @@
 // main thread, so analysis keeps up while the tab is hidden.
 
 import { LiveAnalyzer, type AnalyzerChord } from './core/analyzer.ts'
+import { LevelMeter } from './core/meter.ts'
 import { UPDATE_INTERVAL_MS, type FromWorker, type FromWorklet, type ToWorker } from './protocol.ts'
 
 /** The bits of DedicatedWorkerGlobalScope used here (the app's tsconfig has no WebWorker lib). */
@@ -17,7 +18,8 @@ interface WorkerScope {
 
 const scope = self as unknown as WorkerScope
 
-let analyzer: LiveAnalyzer | null = null
+/** the chord analyzer, or only a level meter when the session does not analyze */
+let analyzer: LiveAnalyzer | LevelMeter | null = null
 let port: MessagePort | null = null
 let interval = UPDATE_INTERVAL_MS
 let lastPost = -Infinity
@@ -108,7 +110,10 @@ scope.onmessage = (event) => {
     case 'init':
       if (analyzer) return
       try {
-        analyzer = new LiveAnalyzer({ ...msg.options, inputRate: msg.sampleRate })
+        analyzer =
+          msg.analyze === false
+            ? new LevelMeter({ inputRate: msg.sampleRate })
+            : new LiveAnalyzer({ ...msg.options, inputRate: msg.sampleRate })
       } catch (err) {
         fail(err)
         return

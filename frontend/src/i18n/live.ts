@@ -29,6 +29,11 @@ export const live: Dict = {
     'live.tempo.title': 'Темп за останні секунди: приблизно {n} ударів за хвилину',
     'live.level': 'Рівень звуку',
 
+    // a microphone recording (no live chords)
+    'live.rec.region': 'Запис із мікрофона',
+    'live.rec.status': 'Запис',
+    'live.rec.hint': 'Записую. Акорди розпізнаємо, коли зупиниш.',
+
     'live.history': 'Попередні акорди',
     'live.history.empty': 'Тут зʼявляться попередні акорди',
     'live.history.latest': 'До останнього',
@@ -71,6 +76,10 @@ export const live: Dict = {
     'live.tempo': '≈{n} BPM',
     'live.tempo.title': 'Tempo over the last seconds: about {n} beats per minute',
     'live.level': 'Sound level',
+
+    'live.rec.region': 'Microphone recording',
+    'live.rec.status': 'Recording',
+    'live.rec.hint': 'Recording. The chords are found when you stop.',
 
     'live.history': 'Previous chords',
     'live.history.empty': 'Previous chords will show up here',

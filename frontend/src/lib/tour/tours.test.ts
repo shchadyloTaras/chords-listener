@@ -38,11 +38,13 @@ describe('tour definitions', () => {
     expect(shown('song', { ...all, phone: true })).toEqual(expect.arrayContaining(['keyTranspose', 'keyShape']))
   })
 
-  it('Score 5, Live keys 4 either way, Listen 6, YouTube 4 with a tab and 2 without', () => {
+  it('Score 5, Live keys 4 either way, Listen 6 for a tab and 4 for the microphone, YouTube 4 with a tab and 2 without', () => {
     expect(shown('score', { scoreRendered: true })).toHaveLength(5)
     expect(shown('keys', { keysReady: true })).toEqual(['canvas', 'edges', 'sync', 'voice'])
     expect(shown('keys', {})).toEqual(['intro', 'sync', 'voice'])
     expect(shown('listen', {})).toHaveLength(6)
+    // the microphone is only recorded: no live chord, key or tempo to point at
+    expect(shown('listen', { listenMic: true })).toEqual(['sources', 'start', 'level', 'controls'])
     expect(shown('capture', { canListenInTab: true })).toEqual(['video', 'start', 'howto', 'controls'])
     expect(shown('capture', {})).toEqual(['videoNoTab', 'alt'])
   })
@@ -69,6 +71,11 @@ describe('tour definitions', () => {
     const sources = TOURS.listen.steps.find((s) => s.id === 'sources')!
     expect(textKey('listen', sources, { canListenInTab: true })).toBe('tour.listen.sources.text')
     expect(textKey('listen', sources, {})).toBe('tour.listen.sources.text.noTab')
+    for (const id of ['start', 'controls']) {
+      const step = TOURS.listen.steps.find((s) => s.id === id)!
+      expect(textKey('listen', step, {})).toBe(`tour.listen.${id}.text`)
+      expect(textKey('listen', step, { listenMic: true })).toBe(`tour.listen.${id}.text.mic`)
+    }
   })
 
   it('Song steps 1–4 scroll to the top first; step 7 is a centred card with the chord-marks body', () => {

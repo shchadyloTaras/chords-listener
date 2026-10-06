@@ -14,9 +14,9 @@ import { useCloudInvite } from '../account/cloudInvite'
 import { errorText } from '../jobs/errorText'
 import { startFiles } from '../input/startFiles'
 import { FILE_ACCEPT } from '../input/url'
-import { useTourTrigger } from '../tour/hooks'
+import { useTourFlags, useTourTrigger } from '../tour/hooks'
 import { Button } from '../ui/IconButton'
-import { LiveChordsView } from '../live'
+import { LiveChordsView, LiveRecordingView } from '../live'
 import { CaptureErrorAlert } from './CaptureErrorAlert'
 import { isCapturing, isRetryable, type CaptureFailure } from './machine'
 import { recordingFilename, recordingTitle, saveRecording } from './saveRecording'
@@ -93,8 +93,8 @@ function SavingLine() {
 }
 
 /**
- * "Слухати" (#/listen): live chords from the microphone or a browser tab; Stop saves the recording as a
- * track (analyzed in the cloud when signed in, in this browser otherwise). `title` names the recording
+ * "Слухати" (#/listen): records the microphone, or a browser tab with live chords; Stop saves the
+ * recording as a track (analyzed in the cloud when signed in, in this browser otherwise). `title` names the recording
  * (the capture page passes a video's title when the song plays on another device).
  */
 export function ListenPage({ initialSource, title }: { initialSource: CaptureSource | null; title: string | null }) {
@@ -122,6 +122,8 @@ export function ListenPage({ initialSource, title }: { initialSource: CaptureSou
   const busy = phase === 'stopping' || phase === 'saving' || phase === 'done'
   // the Listen tour: at the start button; a recording keeps running if the tour is opened during it
   useTourTrigger('listen', listenReady(phase), capturing)
+  // the microphone is only recorded: the tour leaves out the live chord, key and tempo
+  useTourFlags({ listenMic: source === 'mic' })
 
   const download = () => {
     const rec = capture.recording
@@ -156,25 +158,31 @@ export function ListenPage({ initialSource, title }: { initialSource: CaptureSou
       </Button>
 
       <h1 className="mt-3 font-display text-3xl font-semibold tracking-tight sm:text-4xl">{t('cloud.listen.title')}</h1>
-      <p className="mt-2 max-w-[60ch] text-[15px] leading-relaxed text-muted sm:text-base">{t('cloud.listen.subtitle')}</p>
+      <p className="mt-2 max-w-[60ch] text-[15px] leading-relaxed text-muted sm:text-base">
+        {t(source === 'mic' ? 'cloud.listen.subtitle.mic' : 'cloud.listen.subtitle')}
+      </p>
 
       {capturing || busy ? (
         <div className="mt-6">
-          <LiveChordsView session={capture.session} title={title ?? undefined} />
+          {attempted === 'mic' ? (
+            <LiveRecordingView session={capture.session} title={title ?? undefined} />
+          ) : (
+            <LiveChordsView session={capture.session} title={title ?? undefined} />
+          )}
           {capturing && (
             <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm text-muted">
                 {phase === 'paused' ? t('cloud.capture.paused') : t('cloud.listen.listening')} · {t('cloud.listen.limit')}
               </p>
-              <div data-tour="listen.controls" className="flex gap-2">
-                <Button size="sm" variant="ghost" icon={<X className="size-4" />} onClick={capture.cancel} className="flex-1 sm:flex-none">
+              {/* phones: «Зупинити й зберегти» on a row of its own (the three labels do not fit in one) */}
+              <div data-tour="listen.controls" className="grid grid-cols-2 gap-2 sm:flex">
+                <Button size="sm" variant="ghost" icon={<X className="size-4" />} onClick={capture.cancel}>
                   {t('cloud.listen.discard')}
                 </Button>
                 <Button
                   size="sm"
                   icon={phase === 'paused' ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}
                   onClick={() => dispatch(phase === 'paused' ? { type: 'playing' } : { type: 'paused' })}
-                  className="flex-1 sm:flex-none"
                 >
                   {phase === 'paused' ? t('cloud.capture.resume') : t('cloud.capture.pause')}
                 </Button>
@@ -183,7 +191,7 @@ export function ListenPage({ initialSource, title }: { initialSource: CaptureSou
                   variant="primary"
                   icon={<Square className="size-3.5" fill="currentColor" />}
                   onClick={() => dispatch({ type: 'stop' })}
-                  className="flex-[2] sm:flex-none"
+                  className="order-first col-span-2 sm:order-none"
                 >
                   {t('cloud.listen.stop')}
                 </Button>

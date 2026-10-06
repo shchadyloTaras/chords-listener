@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
-import { CaptureError, captureMicrophone, captureTabAudio, startLiveSession, type LiveSession } from '../../lib/live'
+import { CaptureError, captureMicrophone, captureTabAudio, startLiveSession, type LiveOptions, type LiveSession } from '../../lib/live'
 import {
   captureReducer,
   initialCapture,
@@ -33,6 +33,15 @@ export function failureOf(err: unknown): { code: CaptureFailure; detail: string 
   if (err instanceof CaptureError) return { code: err.code, detail: err.message === err.code ? null : err.message }
   const message = (err as { message?: unknown } | null | undefined)?.message
   return { code: 'failed', detail: String(message ?? err) }
+}
+
+/**
+ * How a source is listened to. The microphone is only recorded: its chords come from the full analysis
+ * of the recording (live ones from a room's sound would differ from those), and a phone's processor is
+ * spared. A tab's clean sound shows live chords next to the video.
+ */
+export function liveOptionsFor(source: CaptureSource): Pick<LiveOptions, 'record' | 'analyze'> {
+  return { record: true, analyze: source !== 'mic' }
 }
 
 /**
@@ -162,7 +171,7 @@ export function useCapture({ save, onAutoStop }: UseCaptureOptions) {
       streamRef.current = stream
       let s: LiveSession
       try {
-        s = await startLiveSession(stream, { record: true })
+        s = await startLiveSession(stream, liveOptionsFor(source))
       } catch (err) {
         releaseStream()
         if (alive.current) failed(err)
