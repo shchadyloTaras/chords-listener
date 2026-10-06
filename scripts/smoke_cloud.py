@@ -2,6 +2,7 @@
 """End-to-end smoke test of the deployed cloud API (docs/CLOUD.md), as the ``smoke-test`` user.
 
     python3 scripts/smoke_cloud.py [--url URL] [--youtube URL | --skip-youtube] [--keep]
+                                   [--firestore-token-file PATH]
     python3 scripts/smoke_cloud.py --cold          only: first-request latency + one short analysis
 
 Checks: health, 401 without credentials, CORS preflight from the GitHub Pages origin, multipart upload
@@ -10,6 +11,12 @@ POST /api/jobs/storage linked to a YouTube video with startOffset), live-piano n
 YouTube link (reports honestly whether YouTube blocks the server: download_blocked), quotas (running-jobs
 limit -> 429, /api/me counters), delete, and timings (first request, analysis of a 4-minute song).
 Everything it creates is removed at the end (tracks via the API, then users/smoke-test/ in the bucket).
+
+The published library (Firestore index + track.json) is checked only with --firestore-token-file PATH, a file
+holding an OAuth access token that may read Firestore and the bucket (`gcloud auth print-access-token > PATH`,
+or the token minted by scripts/gcloud_token.cjs): after the upload analysis the index document
+users/smoke-test/tracks/<id> must exist with version >= 1 and `gcloud storage cat` must show a matching
+track.json; after the delete the index documents must be gone.
 
 Needs: ffmpeg, uv (synthetic songs from backend/scripts/make_synthetic.py), gcloud, node with the
 firebase-tools login (bucket access with a token minted by scripts/gcloud_token.cjs when gcloud has no
@@ -38,6 +45,7 @@ PAGES = "https://shchadylotaras.github.io"
 DEFAULT_URL = "https://chords-api-84488579848.europe-west1.run.app"
 DEFAULT_YOUTUBE = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"  # Rick Astley - Never Gonna Give You Up (3:33)
 LINKED_VIDEO = "dQw4w9WgXcQ"
+FIRESTORE = f"https://firestore.googleapis.com/v1/projects/{PROJECT}/databases/(default)/documents"
 
 RESULTS: list[tuple[str, bool, str]] = []
 TIMINGS: dict[str, float] = {}
@@ -127,6 +135,19 @@ def read_env_file() -> dict[str, str]:
     return env
 
 
+def index_doc(api: Api, token_file: Path, track_id: str, *, present: bool = True, timeout: float = 20.0) -> Resp:
+    """users/smoke-test/tracks/<id> read with the deploy credentials. Publishing is not part of the job's own
+    result, so it polls until the document is there (200) or, with present=False, gone (404), or ``timeout``
+    passes; any other status (no permission, ...) is returned as it is."""
+    headers = {"Authorization": f"Bearer {token_file.read_text().strip()}", "x-goog-user-project": PROJECT}
+    deadline = time.monotonic() + timeout
+    while True:
+        res = api.request("GET", f"{FIRESTORE}/users/smoke-test/tracks/{track_id}", auth=False, headers=headers)
+        if res.status == (200 if present else 404) or time.monotonic() >= deadline:
+            return res
+        time.sleep(1.0)
+
+
 def gcloud_bin() -> str:
     return os.environ.get("GCLOUD") or shutil.which("gcloud") or "/opt/homebrew/share/google-cloud-sdk/bin/gcloud"
 
@@ -184,7 +205,7 @@ def run_cold(api: Api, songs: dict[str, Path]) -> None:
             api.request("DELETE", f"/api/tracks/{job['trackId']}")
 
 
-def run_all(api: Api, songs: dict[str, Path], tmp: Path, youtube: Optional[str]) -> None:
+def run_all(api: Api, songs: dict[str, Path], tmp: Path, youtube: Optional[str], firestore_token: Optional[Path]) -> None:
     created: set[str] = set()
 
     # -- health, first-request latency
@@ -227,6 +248,23 @@ def run_all(api: Api, songs: dict[str, Path], tmp: Path, youtube: Optional[str])
             labels = [c["label"] for c in track.get("chords", [])]
             check("track has chords", len(labels) >= 4,
                   f"key {track.get('key', {}).get('name')}, tempo {track.get('tempo')}, chords {labels[:10]}")
+    if track and firestore_token:
+        # -- the published library: index document + track.json at the same version (the notes PUT below leaves it as it is)
+        res = index_doc(api, firestore_token, track["id"])
+        fields = res.json().get("fields", {}) if res.status == 200 else {}
+        version = int(fields.get("version", {}).get("integerValue", 0))
+        check("Firestore index document users/smoke-test/tracks/<id>", res.status == 200 and version >= 1,
+              f"{res.status}, version {version}, fields {sorted(fields)[:6]}...")
+        env = gcloud_env(tmp)
+        cat = subprocess.run([gcloud_bin(), "storage", "cat", f"gs://{BUCKET}/users/smoke-test/tracks/{track['id']}/track.json"],
+                             env=env, capture_output=True, text=True)
+        published: dict = json.loads(cat.stdout) if cat.returncode == 0 else {}
+        audio = published.get("media", {}).get("audio", {})
+        check("track.json published next to the track",
+              cat.returncode == 0 and published.get("id") == track["id"] and published.get("version") == version
+              and audio.get("path") == f"users/smoke-test/tracks/{track['id']}/audio.mp3" and bool(audio.get("token"))
+              and "audioUrl" not in published,
+              cat.stderr.strip()[-200:] if cat.returncode else f"version {published.get('version')}, media {sorted(published.get('media', {}))}")
     if track:
         audio_url = track["audioUrl"]
         check("audioUrl is signed", "sig=" in audio_url and "u=smoke-test" in audio_url, audio_url.split("?")[0])
@@ -323,6 +361,9 @@ def run_all(api: Api, songs: dict[str, Path], tmp: Path, youtube: Optional[str])
         ok &= api.request("GET", f"/api/tracks/{tid}").status == 404
     left = api.request("GET", "/api/tracks").json()
     check("delete tracks", ok and not left, f"{len(created)} deleted, {len(left)} left")
+    if firestore_token:
+        stale = [tid for tid in sorted(created) if index_doc(api, firestore_token, tid, present=False).status != 404]
+        check("index documents removed with the tracks", not stale, f"still indexed: {stale}" if stale else f"{len(created)} gone")
 
 
 def cleanup_bucket(tmp: Path) -> None:
@@ -339,10 +380,16 @@ def main() -> int:
     ap.add_argument("--skip-youtube", action="store_true")
     ap.add_argument("--keep", action="store_true", help="leave users/smoke-test/ in the bucket")
     ap.add_argument("--cold", action="store_true", help="only measure the first request + one short analysis")
+    ap.add_argument("--firestore-token-file", type=Path, metavar="PATH",
+                    help="file with an access token that reads Firestore and the bucket: also check the published "
+                         "library (index document, track.json)")
     args = ap.parse_args()
     key = os.environ.get("CHORDS_SMOKE_KEY") or read_env_file().get("CHORDS_SMOKE_KEY", "")
     if not key:
         print("CHORDS_SMOKE_KEY not found (.cloud.env)", file=sys.stderr)
+        return 2
+    if args.firestore_token_file and not args.firestore_token_file.is_file():
+        print(f"--firestore-token-file: {args.firestore_token_file} not found", file=sys.stderr)
         return 2
     api = Api(args.url, key)
     print(f"Smoke test of {api.base}", flush=True)
@@ -353,7 +400,7 @@ def main() -> int:
             if args.cold:
                 run_cold(api, songs)
             else:
-                run_all(api, songs, tmp, None if args.skip_youtube else args.youtube)
+                run_all(api, songs, tmp, None if args.skip_youtube else args.youtube, args.firestore_token_file)
         finally:
             if not args.keep:
                 cleanup_bucket(tmp)

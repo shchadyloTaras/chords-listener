@@ -27,12 +27,25 @@ rules_version = '2';
 //       - lang: string, one of 'uk' | 'en'
 //       - showVideo: bool
 //
-// Access patterns (frontend/src/lib/settingsSync.ts):
-//   - onSnapshot on users/{own uid} only; no collection queries
-//   - setDoc on first sign-in, updateDoc({ email, settings, updatedAt }) afterwards
+// Collection: users/{uid}/tracks - the published library index (docs/CLOUD.md → Library in Firestore)
+// Document ID: the track id (6-64 lowercase hex characters)
+// Fields (written only by the API's service account, which bypasses these rules; clients never write):
+//   - the TrackSummary fields of GET /api/tracks: id, title, artist, duration, thumbnail, source, key,
+//       tempo, chordCount, edited, vocals, stems, createdAt (ISO string)
+//   - version: int - grows with every change of the track; a copy kept on a device is valid while it and
+//       createdAt are equal (a track deleted and added again starts at version 1 again)
+//   - publishedAt: timestamp
+//   The fields are not validated here: nobody but the service account can write them.
 //
-// The document contains PII (email), so only its owner may read it.
-// Any other path is denied.
+// Access patterns:
+//   - frontend/src/lib/settingsSync.ts: onSnapshot on users/{own uid} only; no collection queries;
+//       setDoc on first sign-in, updateDoc({ email, settings, updatedAt }) afterwards
+//   - frontend/src/lib/cloud/library.ts: onSnapshot on the query collection(users/{own uid}/tracks)
+//       ordered by createdAt, newest first; read-only
+//
+// users/{uid} contains PII (email), so only its owner may read it; users/{uid}/tracks is the owner's
+// library, so only the owner may read it, and nobody can write it from a client.
+// Any other path (including collection-group queries over every user's tracks) is denied.
 //
 // ===============================================================
 
@@ -121,6 +134,18 @@ service cloud.firestore {
         areImmutableFieldsUnchanged(['createdAt']);
 
       allow delete: if isOwner(userId);
+    }
+
+    // ===============================================================
+    // users/{userId}/tracks/{trackId} - the published library index
+    // ===============================================================
+
+    match /users/{userId}/tracks/{trackId} {
+      // Written by the API's service account (it bypasses rules). The owner may get one document and
+      // list their own collection; the same isOwner(userId) holds for every document such a query can
+      // match, so it is allowed. Collection-group queries have no rule and stay denied.
+      allow read: if isOwner(userId);
+      allow write: if false;
     }
 
     // Everything else stays locked (default deny).

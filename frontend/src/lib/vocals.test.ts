@@ -186,7 +186,7 @@ describe('vocals client', () => {
     expect(api.apiFetch.mock.calls[0][0]).toBe(`/tracks/${track.id}/stems/instruments`)
     api.fetchMedia.mockResolvedValue(new Blob(['signed']))
     await fetchStem({ ...track, stemUrls: { instruments: '/api/tracks/x/stems/instruments?sig=1' } }, 'instruments')
-    expect(api.fetchMedia).toHaveBeenCalledWith('/api/tracks/x/stems/instruments?sig=1', undefined)
+    expect(api.fetchMedia).toHaveBeenCalledWith('/api/tracks/x/stems/instruments?sig=1', undefined, { trackId: track.id, stem: 'instruments' })
     // a stem is not the track's audio (the copy of that kept on this device must not stand in for it)
     expect(api.fetchTrackAudio).not.toHaveBeenCalled()
     api.apiFetch.mockResolvedValue(new Response(JSON.stringify({ detail: 'gone', code: 'not_found' }), { status: 404 }))

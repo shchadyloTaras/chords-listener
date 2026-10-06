@@ -1,7 +1,8 @@
 // Uploads for the cloud API (docs/CLOUD.md "Uploads"): Cloud Run caps request bodies at 32 MiB, so the
 // browser sends the file straight to Firebase Storage (resumable, with progress) under
 // users/{uid}/uploads/{uploadId}/{filename}; POST /api/jobs/storage then ingests it.
-// firebase/storage is loaded on demand: guests never download it.
+// firebase/storage is loaded on demand (`loadStorage`, also used to read the library: lib/cloud/files):
+// guests never download it.
 import type { FirebaseStorage, StorageError } from 'firebase/storage'
 
 /** `firebase emulators:start --only auth,storage` (see /firebase.json). */
@@ -96,8 +97,11 @@ type StorageSdk = typeof import('firebase/storage')
 
 let loading: Promise<{ storage: FirebaseStorage; sdk: StorageSdk }> | null = null
 
-/** Firebase app + Storage chunks, once (the emulator in `VITE_FIREBASE_EMULATORS=true` builds). */
-function loadStorage() {
+/**
+ * Firebase app + Storage chunks, once (the emulator in `VITE_FIREBASE_EMULATORS=true` builds). A failed load
+ * rejects with StorageUploadError 'network' and is tried again by the next call.
+ */
+export function loadStorage() {
   loading ??= Promise.all([import('../firebase'), import('firebase/storage')]).then(
     ([fb, sdk]) => {
       const storage = sdk.getStorage(fb.app)

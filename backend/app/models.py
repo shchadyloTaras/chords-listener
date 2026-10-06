@@ -53,6 +53,14 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_switch(name: str, default: bool) -> bool:
+    """An on/off switch: unset or empty -> ``default``; ``0`` / ``false`` / ``off`` (any case) -> off; else on."""
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw not in ("0", "false", "off")
+
+
 AuthMode = Literal["off", "firebase"]
 
 
@@ -121,6 +129,7 @@ class Settings:
     signing_key: str = field(default="", repr=False)  # CHORDS_SIGNING_KEY (media URL signatures)
     smoke_key: str = field(default="", repr=False)  # CHORDS_SMOKE_KEY (X-Smoke-Key -> uid "smoke-test")
     upload_bucket: str = ""  # CHORDS_UPLOAD_BUCKET (client uploads for POST /api/jobs/storage)
+    publish: bool = True  # CHORDS_PUBLISH (cloud): publish track changes to Firestore + Storage; 0|false|off disables
     scratch_dir: Optional[Path] = None  # CHORDS_WORK_DIR: job scratch space (default <data>/.work)
     quota_analyses: int = 40  # CHORDS_QUOTA_ANALYSES: analyses per user per UTC day
     quota_vocals: int = 15  # CHORDS_QUOTA_VOCALS: vocal transcriptions per user per UTC day
@@ -193,6 +202,7 @@ class Settings:
             signing_key=os.environ.get("CHORDS_SIGNING_KEY", "").strip(),
             smoke_key=os.environ.get("CHORDS_SMOKE_KEY", "").strip(),
             upload_bucket=os.environ.get("CHORDS_UPLOAD_BUCKET", "").strip(),
+            publish=_env_switch("CHORDS_PUBLISH", defaults.publish),
             scratch_dir=Path(scratch).expanduser().resolve() if scratch else None,
             quota_analyses=max(0, _env_int("CHORDS_QUOTA_ANALYSES", defaults.quota_analyses)),
             quota_vocals=max(0, _env_int("CHORDS_QUOTA_VOCALS", defaults.quota_vocals)),

@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import * as api from '../../lib/api'
 import { toApiError, type ClientErrorCode } from '../../lib/api'
 import { useAuth } from '../../lib/auth'
+import { useLibrary } from '../../lib/cloud/library'
 import { t } from '../../i18n'
 import { useApp } from '../../store'
 import type { TrackSummary } from '../../types'
@@ -33,8 +34,9 @@ async function load(force: boolean, gen: number): Promise<void> {
 }
 
 /**
- * Loads the library: cache-first (the cloud is asked only when the list kept here is stale), or from the
- * server with `force` — a job finished, a track was moved to the cloud, «Оновити».
+ * Loads the library: the live library's list while it answers (lib/api listTracks); else cache-first (the
+ * cloud is asked only when the list kept here is stale), or from the server with `force` — a job finished, a
+ * track was moved to the cloud, «Оновити».
  */
 export function refreshTracks(force = false): Promise<void> {
   if (inflight && (inflight.force || !force)) return inflight.promise
@@ -69,6 +71,15 @@ useJobs.subscribe((s, prev) => {
       return
     }
   }
+})
+
+// The live library (lib/cloud/library) has a new list: its first answer, or a change made on another device.
+// It failed: the API path takes over (the list kept here is trusted for its TTL only, then the cloud is asked).
+// Emptied (sign-out, another account, the API is no longer the cloud) it asks nothing: the session handler below
+// and the page's own reload on a change of API take care of that, and nothing loaded for the old account shows.
+useLibrary.subscribe((s, prev) => {
+  if (s.tracks !== prev.tracks && s.tracks !== null) void refreshTracks()
+  else if (s.error && !prev.error && s.uid !== null) void refreshTracks()
 })
 
 // Signed in, out, or as someone else: a list on its way was asked for the previous session. After a sign-out

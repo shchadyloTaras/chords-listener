@@ -356,7 +356,15 @@ class JobManager:
             kind, {}, keys=set(), source=meta.get("source"), title=meta.get("title"), thumbnail=meta.get("thumbnail")
         )
         self._update(rec, status="done", progress=1.0, message=message, track_id=track_id)
+        self._ensure_published(track_id)
         return rec.to_model()
+
+    def _ensure_published(self, track_id: str) -> None:
+        """A track that is "already analyzed" may predate publishing: publish it if the index lacks it. Cloud
+        mode only; call it outside ``self._lock`` (the publisher may take a while)."""
+        uid = current_uid()
+        if self.settings.cloud and uid:
+            self.store.publisher.ensure_published(uid, track_id)
 
     def _find_active(self, keys: set[str]) -> Optional[JobRecord]:
         for k in keys:
@@ -447,6 +455,7 @@ class JobManager:
         self._claim(rec, self._ukey(f"track:{track_id}", rec.uid))
         if self.store.exists(track_id):
             self._update(rec, status="done", progress=1.0, message="Already analyzed", track_id=track_id)
+            self._ensure_published(track_id)
             return
 
         work = self.store.new_work_dir(rec.id)
@@ -507,6 +516,7 @@ class JobManager:
             self._claim(rec, self._ukey(f"track:{track_id}", rec.uid))
             if self.store.exists(track_id):
                 self._update(rec, status="done", progress=1.0, message="Already analyzed", track_id=track_id)
+                self._ensure_published(track_id)
                 return
             probe = probe_media(src)
             if not probe.has_audio:

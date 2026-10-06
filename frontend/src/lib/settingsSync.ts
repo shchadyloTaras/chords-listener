@@ -1,22 +1,11 @@
 // Firestore profile + settings sync for the signed-in user (users/{uid}, see /firestore.rules).
 // Imported lazily from lib/auth.ts on sign-in, so signed-out visitors never download Firestore.
 import type { User } from 'firebase/auth'
-import {
-  connectFirestoreEmulator,
-  doc,
-  getFirestore,
-  onSnapshot,
-  serverTimestamp,
-  setDoc,
-  updateDoc,
-} from 'firebase/firestore'
+import { doc, onSnapshot, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore'
 import { t } from '../i18n'
 import { useApp } from '../store'
-import { app, EMULATOR_HOST, FIRESTORE_EMULATOR_PORT, useEmulators } from './firebase'
+import { db } from './firestore'
 import { parseSynced, pickSynced, syncedChanged, syncedKey, SYNCED_KEYS, type SyncedKey, type SyncedSettings } from './syncedSettings'
-
-export const db = getFirestore(app)
-if (useEmulators) connectFirestoreEmulator(db, EMULATOR_HOST, FIRESTORE_EMULATOR_PORT)
 
 /** Batches rapid toggles (e.g. cycling instruments) into one write. */
 const WRITE_DELAY_MS = 800

@@ -36,6 +36,7 @@ import { useJobs } from '../../hooks/useJobs'
 import { ApiError } from '../../lib/api'
 import { useAuth } from '../../lib/auth'
 import { isDeleted } from '../../lib/cloud/deleted'
+import { useLibrary } from '../../lib/cloud/library'
 import { useConnection } from '../../lib/serverMode'
 import { refreshTracks, scheduleDelete, useTracks } from './tracksStore'
 
@@ -61,6 +62,7 @@ beforeEach(() => {
 
 afterEach(() => {
   useJobs.setState({ jobs: {} })
+  useLibrary.setState({ uid: null, tracks: null, versions: {}, error: false })
   useConnection.setState({ status: 'checking', backend: null, apiBase: null, serverOrigin: null, remote: false })
 })
 
@@ -152,6 +154,58 @@ describe('refreshTracks', () => {
     useTracks.setState({ tracks: [song('local-1')] })
     useAuth.setState({ user: { uid: 'uid42', email: null } })
     expect(ids()).toEqual(['local-1'])
+  })
+})
+
+describe('the live library (lib/cloud/library)', () => {
+  it('its first list, and every change made on another device, shows', async () => {
+    useLibrary.setState({ uid: 'uid42', tracks: null, versions: {}, error: false })
+    expect(api.listTracks).not.toHaveBeenCalled()
+    api.listTracks.mockResolvedValueOnce([song('a')])
+    useLibrary.setState({ tracks: [song('a')], versions: { a: 1 } })
+    await vi.waitFor(() => expect(ids()).toEqual(['a']))
+    api.listTracks.mockResolvedValueOnce([song('b'), song('a')])
+    useLibrary.setState({ tracks: [song('b'), song('a')], versions: { a: 1, b: 1 } })
+    await vi.waitFor(() => expect(ids()).toEqual(['b', 'a']))
+    expect(api.listTracks).toHaveBeenCalledTimes(2)
+  })
+
+  it('it fails: the list is loaded again (the API path, with its TTL, takes over)', async () => {
+    api.listCachedTracks.mockResolvedValue([song('days old')])
+    api.listTracks.mockResolvedValue([song('fresh')])
+    useLibrary.setState({ uid: 'uid42', tracks: null, versions: {}, error: false })
+    useLibrary.setState({ error: true })
+    await vi.waitFor(() => expect(ids()).toEqual(['fresh']))
+    expect(api.listTracks).toHaveBeenCalledTimes(1)
+    // already failed: nothing more to do
+    useLibrary.setState({ error: true, versions: {} })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(api.listTracks).toHaveBeenCalledTimes(1)
+  })
+
+  it('anything but a new list or a failure asks nothing', async () => {
+    const tracks = [song('a')]
+    api.listTracks.mockResolvedValue(tracks)
+    useLibrary.setState({ uid: 'uid42', tracks, versions: { a: 1 }, error: false })
+    await vi.waitFor(() => expect(api.listTracks).toHaveBeenCalledTimes(1))
+    useLibrary.setState({ versions: { a: 1 } })
+    useLibrary.setState({ tracks })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(api.listTracks).toHaveBeenCalledTimes(1)
+  })
+
+  it('emptied by a sign-out or another account: nothing is loaded for it, the old list never comes back', async () => {
+    const old = deferred<TrackSummary[]>()
+    api.listTracks.mockReturnValueOnce(old.promise)
+    useLibrary.setState({ uid: 'uid42', tracks: [song('mine')], versions: { mine: 1 }, error: false })
+    await vi.waitFor(() => expect(api.listTracks).toHaveBeenCalledTimes(1))
+    // lib/auth.ts: the library stops first, then the session changes
+    useLibrary.setState({ uid: null, tracks: null, versions: {}, error: false })
+    useAuth.setState({ user: null })
+    old.resolve([song('mine')])
+    await new Promise((r) => setTimeout(r, 0))
+    expect(api.listTracks).toHaveBeenCalledTimes(1)
+    expect(useTracks.getState().tracks).toBeNull()
   })
 })
 
