@@ -1,10 +1,13 @@
-// Keyboard geometry for the live piano: which keys to show (fitted to the song), where every key and
-// falling-note lane is, and how notes outside the shown range fold onto it.
+// Keyboard geometry for the live piano: which keys to show (fitted to the song on the piano, the
+// instrument's own 37 keys on the harmonium), where every key and falling-note lane is, and how
+// notes outside the shown range fold onto it. A range may start and end on any key (A0…C8, C3…C6).
 //
 // Key proportions follow a real piano: an octave is 7 equal white keys, and at the back of the
 // keyboard all 12 keys share the octave equally (7/12 of a white key each), which places the black
 // keys off-centre like on the instrument (C♯/D♯ pushed apart, F♯ G♯ A♯ spread). Black keys are
 // 0.58 of a white key wide and 0.63 as long.
+
+import { HARMONIUM_HIGH, HARMONIUM_LOW } from '../../../lib/diagrams/harmonium'
 
 export const PIANO_LOW = 21 // A0
 export const PIANO_HIGH = 108 // C8
@@ -106,6 +109,20 @@ export function fitRange(weights: ArrayLike<number>, opts: FitOptions): KeyRange
     }
   }
   return best ?? range
+}
+
+/** The harmonium's own keys, C3–C6 (37: three octaves and the top C). */
+export const HARMONIUM_RANGE: KeyRange = { low: HARMONIUM_LOW, high: HARMONIUM_HIGH }
+
+export type LiveKeyboard = 'piano' | 'harmonium'
+
+/**
+ * The keys the live panel shows: on the harmonium always its 37 (notes outside fold onto them), on
+ * the piano the range fitted to the song's notes and the panel's width (`width` css px).
+ */
+export function liveRange(keyboard: LiveKeyboard, weights: ArrayLike<number>, width: number): KeyRange {
+  if (keyboard === 'harmonium') return HARMONIUM_RANGE
+  return fitRange(weights, { minOctaves: 4, maxOctaves: maxOctavesFor(width) })
 }
 
 function sum(w: ArrayLike<number>, a: number, b: number): number {

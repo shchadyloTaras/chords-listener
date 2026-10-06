@@ -5,6 +5,8 @@ export const keys: Dict = {
   uk: {
     'keys.title': 'Живе фортепіано',
     'keys.canvas': 'Клавіатура фортепіано: клавіші натискаються й світяться, коли в пісні звучать відповідні ноти',
+    'keys.canvas.harmonium':
+      'Клавіші фісгармонії, 37 від «до» малої октави до «до» третьої: клавіші натискаються й світяться, коли в пісні звучать відповідні ноти',
     'keys.sounding': 'Звучить: {notes}',
     'keys.silence': 'Ноти не звучать',
 
@@ -58,6 +60,7 @@ export const keys: Dict = {
   en: {
     'keys.title': 'Live piano',
     'keys.canvas': 'Piano keyboard: keys go down and light up as the matching notes sound in the song',
+    'keys.canvas.harmonium': 'Harmonium keyboard, 37 keys from C3 to C6: keys go down and light up as the matching notes sound in the song',
     'keys.sounding': 'Sounding: {notes}',
     'keys.silence': 'No notes sounding',
 

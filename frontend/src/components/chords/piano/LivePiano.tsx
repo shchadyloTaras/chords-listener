@@ -4,7 +4,8 @@
 // sung melody as an outlined overlay with its own toggle. Under the title: what the panel is doing,
 // then (notes ready) a legend for the two kinds of bars, or an offer to separate the voice when the
 // notes still come from the full mix.
-// Lazy-loaded by LivePianoSlot; rendered under the now-playing hero when the instrument is piano.
+// Lazy-loaded by LivePianoSlot; rendered under the now-playing hero when the instrument is a keyboard:
+// the piano's keys fitted to the song, the harmonium's own 37 keys (C3–C6).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
@@ -33,6 +34,7 @@ export default function LivePiano() {
   const model = useChordModel()
   const { track, chords, spelling, rhythm, transpose } = model
   const setSetting = useApp((s) => s.setSetting)
+  const keyboard = useApp((s) => (s.instrument === 'harmonium' ? 'harmonium' : 'piano'))
   const { notes, source } = usePianoNotes(track)
   // a track that says it has no vocals is "missing" without asking the server (the offer below); one that
   // does not say is not asked either — opening a song must not wake the cloud
@@ -93,6 +95,10 @@ export default function LivePiano() {
       renderer.current = null
     }
   }, [])
+
+  useEffect(() => {
+    renderer.current?.setKeyboard(keyboard)
+  }, [keyboard])
 
   useEffect(() => {
     renderer.current?.setNotes(notes.status === 'ready' ? notes.index : null)
@@ -182,7 +188,7 @@ export default function LivePiano() {
         )}
       </div>
       <div ref={wrap} className="relative border-t border-border">
-        <canvas ref={canvas} role="img" aria-label={t('keys.canvas')} className="block w-full" style={{ height: layout.height || undefined }} />
+        <canvas ref={canvas} role="img" aria-label={t(keyboard === 'harmonium' ? 'keys.canvas.harmonium' : 'keys.canvas')} className="block w-full" style={{ height: layout.height || undefined }} />
         {layout.roll > 0 && <RollMessage state={notes} height={layout.roll} />}
         <p className="sr-only" aria-live="polite">
           {announce}
