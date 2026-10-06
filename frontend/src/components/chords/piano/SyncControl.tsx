@@ -42,6 +42,7 @@ export function SyncControl() {
       <button
         ref={setBtn}
         type="button"
+        data-tour="keys.sync"
         onClick={toggle}
         aria-expanded={open}
         aria-haspopup="dialog"

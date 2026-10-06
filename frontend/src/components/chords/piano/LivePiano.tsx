@@ -14,10 +14,12 @@ import { useT } from '../../../i18n'
 import { useMediaQuery } from '../../../hooks/useMediaQuery'
 import { onLiveNotes } from '../../../lib/liveNotes'
 import { isMinorQuality } from '../../../lib/music/chord'
+import { keysNotesReady } from '../../../lib/tour/trigger'
 import { useConnection } from '../../../lib/serverMode'
 import { requestNotes, type NotesSource, type NotesState } from '../../../lib/transcription'
 import { fetchStem, startVocals, useVocals, vocalsSupport, type VocalsState } from '../../../lib/vocals'
 import { useApp } from '../../../store'
+import { useTourFlags, useTourTrigger } from '../../tour/hooks'
 import { useChordModel } from '../model'
 import { usePianoNotes } from '../score/pianoNotes'
 import { useScoreSettings } from '../score/scoreSettings'
@@ -36,6 +38,10 @@ export default function LivePiano() {
   const setSetting = useApp((s) => s.setSetting)
   const keyboard = useApp((s) => (s.instrument === 'harmonium' ? 'harmonium' : 'piano'))
   const { notes, source } = usePianoNotes(track)
+  // the Live keys tour: the panel is shown with its notes ready (never the demo: it has no audio)
+  const notesReady = keysNotesReady(notes)
+  useTourFlags({ keysPanel: true, keysReady: notesReady })
+  useTourTrigger('keys', notesReady)
   // a track that says it has no vocals is "missing" without asking the server (the offer below); one that
   // does not say is not asked either — opening a song must not wake the cloud
   const vocals = useVocals(track, { knownOnly: track.vocals !== false })
@@ -164,6 +170,7 @@ export default function LivePiano() {
         {vocals.status === 'ready' && (
           <IconButton
             label={t('score.live.vocals.title')}
+            data-tour="keys.voice"
             size="sm"
             active={showVocals}
             aria-pressed={showVocals}
@@ -187,7 +194,7 @@ export default function LivePiano() {
           </div>
         )}
       </div>
-      <div ref={wrap} className="relative border-t border-border">
+      <div ref={wrap} className="relative border-t border-border" data-tour="keys.canvas">
         <canvas ref={canvas} role="img" aria-label={t(keyboard === 'harmonium' ? 'keys.canvas.harmonium' : 'keys.canvas')} className="block w-full" style={{ height: layout.height || undefined }} />
         {layout.roll > 0 && <RollMessage state={notes} height={layout.roll} />}
         <p className="sr-only" aria-live="polite">
@@ -280,6 +287,7 @@ function VocalsLine({ notes, source, vocals, showVocals }: { notes: NotesState; 
           <span className="truncate">{t('keys.vocals.hint')}</span>
           <button
             type="button"
+            data-tour="keys.voice"
             onClick={() => void startVocals(track)}
             title={t('keys.vocals.separate.title')}
             className="inline-flex shrink-0 items-center gap-1 rounded px-1 py-0.5 font-medium text-accent underline-offset-2 hover:underline"

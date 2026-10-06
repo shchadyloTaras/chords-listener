@@ -2,6 +2,7 @@
 // "Re-opening"). Pure; components/tour/hooks.ts feeds it the page's state.
 import type { Route } from '../../hooks/useRoute'
 import type { ChordView } from '../../store'
+import type { NotesState } from '../transcription'
 import type { TourId } from './tours'
 
 export const AUTO_START_DELAY_MS = 500
@@ -127,4 +128,9 @@ export function libraryState(
 /** Home: the connection settled, auth ready, the library loaded or failed (the link field: useTourBlock). */
 export function homeReady(i: { settled: boolean; authReady: boolean; library: LibraryState }): boolean {
   return i.settled && i.authReady && i.library !== 'loading'
+}
+
+/** Live keys: the panel's notes are ready with at least one note (the demo stays "unavailable"). */
+export function keysNotesReady(notes: NotesState): boolean {
+  return notes.status === 'ready' && notes.index.count > 0
 }

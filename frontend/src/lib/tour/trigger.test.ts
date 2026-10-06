@@ -2,7 +2,8 @@
 // condition clears, never once seen) and which tour the «Інструкція» entries open on each screen.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Route } from '../../hooks/useRoute'
-import { createAutoStart, gateOpen, guideAvailable, homeReady, libraryState, reopenTours, tourRouteKey, type GateInput } from './trigger'
+import type { NotesState } from '../transcription'
+import { createAutoStart, gateOpen, guideAvailable, homeReady, keysNotesReady, libraryState, reopenTours, tourRouteKey, type GateInput } from './trigger'
 
 const QUIET: GateInput = {
   seen: false,
@@ -157,5 +158,16 @@ describe('Home readiness', () => {
     expect(homeReady({ settled: true, authReady: true, library: 'loading' })).toBe(false)
     expect(homeReady({ settled: false, authReady: true, library: 'list' })).toBe(false)
     expect(homeReady({ settled: true, authReady: false, library: 'list' })).toBe(false)
+  })
+})
+
+describe('Live keys readiness', () => {
+  it('needs the notes ready with at least one note; never the demo (no audio → unavailable)', () => {
+    const ready = (count: number) => ({ status: 'ready', index: { count } }) as unknown as NotesState
+    expect(keysNotesReady(ready(3))).toBe(true)
+    expect(keysNotesReady(ready(0))).toBe(false)
+    expect(keysNotesReady({ status: 'unavailable' })).toBe(false)
+    expect(keysNotesReady({ status: 'loading' })).toBe(false)
+    expect(keysNotesReady({ status: 'idle' })).toBe(false)
   })
 })

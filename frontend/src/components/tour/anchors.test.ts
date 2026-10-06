@@ -13,7 +13,7 @@ for (const source of Object.values(sources))
   for (const m of source.matchAll(ANCHOR_ATTR)) anchorsInCode.add(m[1] ?? m[2])
 
 /** tours whose screens are wired so far (each wiring task adds its own) */
-const WIRED: TourId[] = ['home', 'song']
+const WIRED: TourId[] = ['home', 'song', 'score', 'keys']
 
 describe('tour anchors in the code', () => {
   it.each(WIRED)('%s: every anchor is set in a component', (id) => {

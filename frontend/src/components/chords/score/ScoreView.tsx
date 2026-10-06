@@ -25,6 +25,7 @@ import { useClockEffect } from '../clock'
 import { isTypingTarget } from '../hotkeys'
 import { useChordModel } from '../model'
 import { useChordUi } from '../uiStore'
+import { useTourFlags, useTourTrigger } from '../../tour/hooks'
 import { Floating } from '../ui/Floating'
 import { Divider, Segmented, ToggleChip } from '../ui/controls'
 import { EXPORT_KINDS, exportScore, useScoreExport, type ExportKind } from './exportScore'
@@ -78,6 +79,8 @@ export default function ScoreView() {
   const model = useChordModel()
   const data = useScoreData(model)
   const settings = useScoreSettings()
+  // the Score tour: the view's header is on screen (the notes need not be ready)
+  useTourTrigger('score', true)
   const set = settings.setScoreSetting
   const vocalsReady = data.vocals.status === 'ready'
   // the simple level's piano part is the chord sheet: nothing is transcribed for it
@@ -91,23 +94,26 @@ export default function ScoreView() {
           <h2 className="sr-only font-display text-[15px] font-semibold tracking-tight sm:not-sr-only">{t('score.title')}</h2>
         </div>
         <div className="cw-no-scrollbar cw-fade-end relative -my-1 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-1 pr-5" role="group" aria-label={t('score.title')}>
-          <ToggleChip
-            pressed={settings.vocals}
-            onClick={() => set('vocals', !settings.vocals)}
-            title={t('score.toggle.vocals.title')}
-            icon={<Mic size={15} />}
-            className={clsx(!vocalsReady && settings.vocals && 'opacity-80')}
-          >
-            {t('score.toggle.vocals')}
-          </ToggleChip>
-          <ToggleChip pressed={settings.piano} onClick={() => set('piano', !settings.piano)} title={t('score.toggle.piano.title')} icon={<Piano size={15} />}>
-            {t('score.toggle.piano')}
-          </ToggleChip>
-          <ToggleChip pressed={settings.chords} onClick={() => set('chords', !settings.chords)} title={t('score.toggle.chords.title')} icon={<Hash size={15} />}>
+          <span className="flex shrink-0 items-center gap-1" data-tour="score.parts">
+            <ToggleChip
+              pressed={settings.vocals}
+              onClick={() => set('vocals', !settings.vocals)}
+              title={t('score.toggle.vocals.title')}
+              icon={<Mic size={15} />}
+              className={clsx(!vocalsReady && settings.vocals && 'opacity-80')}
+            >
+              {t('score.toggle.vocals')}
+            </ToggleChip>
+            <ToggleChip pressed={settings.piano} onClick={() => set('piano', !settings.piano)} title={t('score.toggle.piano.title')} icon={<Piano size={15} />}>
+              {t('score.toggle.piano')}
+            </ToggleChip>
+          </span>
+          <ToggleChip pressed={settings.chords} data-tour="score.chords" onClick={() => set('chords', !settings.chords)} title={t('score.toggle.chords.title')} icon={<Hash size={15} />}>
             {t('score.toggle.chords')}
           </ToggleChip>
           <Divider />
           <Segmented<ScoreLevel>
+            tour="score.level"
             label={t('score.level')}
             value={settings.level}
             onChange={(v) => set('level', v)}
@@ -400,6 +406,7 @@ function ExportMenu({ score }: { score: Score | null }) {
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
+        data-tour="score.export"
         onClick={() => setOpen((v) => !v)}
         disabled={!score && !busy}
         className="inline-flex h-9 items-center gap-2 rounded-lg bg-accent px-3 text-sm font-semibold text-accent-fg shadow-[0_1px_0_rgb(255_255_255/0.2)_inset] hover:brightness-105 disabled:opacity-40"
@@ -461,6 +468,8 @@ function ScoreCanvas({ xml, score }: { xml: string; score: Score }) {
   const loaded = useRef<string | null>(null)
   const loadedTheme = useRef<string | null>(null)
   const [phase, setPhase] = useState<Phase>('lib')
+  // the Score tour's canvas step only once the notes are drawn
+  useTourFlags({ scoreRendered: phase === 'ready' })
   const [version, setVersion] = useState(0)
   const theme = useTheme()
   const width = useWidth(wrap)
@@ -636,6 +645,7 @@ function ScoreCanvas({ xml, score }: { xml: string; score: Score }) {
       <div
         ref={wrap}
         role="img"
+        data-tour="score.canvas"
         aria-label={`${t('score.label')}: ${parts}. ${t('score.seekHint')}`}
         title={phase === 'ready' ? t('score.seekHint') : undefined}
         onClick={onClick}
