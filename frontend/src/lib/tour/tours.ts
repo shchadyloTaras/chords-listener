@@ -17,6 +17,8 @@ export type TourFlag =
   | 'cloudInvite'
   /** useCanListenInTab(): this browser can hear another tab */
   | 'canListenInTab'
+  /** the Listen page records the microphone (no live chords: they come from the analysis afterwards) */
+  | 'listenMic'
   /** the library has loaded and is empty / has songs (both false while loading or after a failure) */
   | 'libraryEmpty'
   | 'libraryList'
@@ -33,8 +35,13 @@ export type TourFlags = Partial<Record<TourFlag, boolean>>
 export type Condition = TourFlag | `!${TourFlag}`
 
 /** Text variants: `tour.<tour>.<step>.text` + `.<variant>` for each that holds, in the step's order. */
-export type TextVariant = 'demo' | 'touch' | 'noTab'
-export const VARIANT_CONDITION: Record<TextVariant, Condition> = { demo: 'demo', touch: 'touch', noTab: '!canListenInTab' }
+export type TextVariant = 'demo' | 'touch' | 'noTab' | 'mic'
+export const VARIANT_CONDITION: Record<TextVariant, Condition> = {
+  demo: 'demo',
+  touch: 'touch',
+  noTab: '!canListenInTab',
+  mic: 'listenMic',
+}
 
 export interface TourStep {
   /** unique inside its tour; the i18n stem `tour.<tourId>.<id>` */
@@ -153,16 +160,17 @@ export const TOURS: Record<TourId, Tour> = {
       { id: 'voice', anchors: ['keys.voice'] },
     ],
   },
-  // §1.5 — route `listen`; the live elements exist only during a recording
+  // §1.5 — route `listen`; the live elements exist only during a recording, and the microphone has
+  // no live chord, key or tempo (it is only recorded)
   listen: {
     id: 'listen',
     steps: [
       { id: 'sources', anchors: ['listen.sources'], variants: ['noTab'] },
-      { id: 'start', anchors: ['listen.start'] },
-      { id: 'chord', anchors: ['live.chord'], centre: true },
-      { id: 'keyTempo', anchors: ['live.key', 'live.tempo'], centre: true },
+      { id: 'start', anchors: ['listen.start'], variants: ['mic'] },
+      { id: 'chord', anchors: ['live.chord'], when: ['!listenMic'], centre: true },
+      { id: 'keyTempo', anchors: ['live.key', 'live.tempo'], when: ['!listenMic'], centre: true },
       { id: 'level', anchors: ['live.level'], centre: true },
-      { id: 'controls', anchors: ['listen.controls'], centre: true },
+      { id: 'controls', anchors: ['listen.controls'], variants: ['mic'], centre: true },
     ],
   },
   // §1.6 — route `capture`: the tab can be heard (desktop Chrome / Edge) or it cannot

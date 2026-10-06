@@ -40,18 +40,8 @@ export const core: Dict = {
     'core.upload.progress': 'Прогрес надсилання',
     'core.upload.cancelled': 'Надсилання скасовано',
 
-    // recorder
-    'core.rec.requesting': 'Дозволь доступ до мікрофона у вікні браузера…',
-    'core.rec.recording': 'Іде запис',
-    'core.rec.stop': 'Зупинити й розпізнати',
-    'core.rec.hint': 'Постав мікрофон ближче до джерела звуку. Запис до 30 хвилин.',
-    'core.rec.endsSoon': 'Запис зупиниться автоматично через {time}',
+    // recordings («Запис 2026-10-04 21-37»)
     'core.rec.fileTitle': 'Запис',
-    'core.rec.error.denied': 'Браузер не дав доступу до мікрофона. Дозволь його в налаштуваннях сайту й спробуй ще раз.',
-    'core.rec.error.no-device': 'Мікрофон не знайдено. Підключи його й спробуй ще раз.',
-    'core.rec.error.insecure': 'Запис працює лише через localhost або HTTPS. Відкрий застосунок на цьому компʼютері за адресою localhost.',
-    'core.rec.error.unsupported': 'Цей браузер не вміє записувати звук. Спробуй Chrome, Safari або Firefox.',
-    'core.rec.error.failed': 'Не вдалося почати запис. Перевір мікрофон і спробуй ще раз.',
 
     // drop overlay
     'core.drop.title': 'Відпусти, щоб розпізнати акорди',
@@ -254,17 +244,7 @@ export const core: Dict = {
     'core.upload.progress': 'Upload progress',
     'core.upload.cancelled': 'Upload cancelled',
 
-    'core.rec.requesting': 'Allow microphone access in the browser prompt…',
-    'core.rec.recording': 'Recording',
-    'core.rec.stop': 'Stop and detect',
-    'core.rec.hint': 'Keep the microphone close to the sound source. Up to 30 minutes.',
-    'core.rec.endsSoon': 'Recording stops automatically in {time}',
     'core.rec.fileTitle': 'Recording',
-    'core.rec.error.denied': 'The browser blocked the microphone. Allow it in the site settings and try again.',
-    'core.rec.error.no-device': 'No microphone found. Connect one and try again.',
-    'core.rec.error.insecure': 'Recording only works on localhost or HTTPS. Open the app on this computer via localhost.',
-    'core.rec.error.unsupported': 'This browser cannot record audio. Try Chrome, Safari or Firefox.',
-    'core.rec.error.failed': 'Could not start recording. Check the microphone and try again.',
 
     'core.drop.title': 'Drop to detect chords',
     'core.drop.subtitle': 'Audio or video: MP3, WAV, M4A, FLAC, OGG, MP4, MOV…',

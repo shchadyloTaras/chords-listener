@@ -2,7 +2,7 @@
 // audio) plus recording of what was heard.
 //
 //   const stream = await captureTabAudio()          // or captureMicrophone()
-//   const session = await startLiveSession(stream)  // { record: true } by default
+//   const session = await startLiveSession(stream)  // { record: true, analyze: true } by default
 //   const off = session.onUpdate((u) => render(u.current, u.history, u.level, u.key, u.tempo))
 //   session.pause(); session.resume()               // e.g. with the YouTube player
 //   const { audio, mimeType, duration, chords } = await session.stop()
@@ -11,7 +11,8 @@
 // the offline engine's chroma features computed incrementally, online HMM with forward
 // filtering + fixed-lag smoothing over the engine's chord vocabulary) -> updates to the main
 // thread at <= 10 Hz. A new chord shows ~0.7 s after it starts (provisional), and its label is
-// final ~1.2 s after it starts. Everything is cleaned up on stop() or a failed start.
+// final ~1.2 s after it starts. With `analyze: false` (the microphone) the worker only measures
+// time and level: no chords. Everything is cleaned up on stop() or a failed start.
 
 export type {
   CaptureErrorCode, LiveChord, LiveOptions, LiveResult, LiveSession, LiveSessionState, LiveStats, LiveUpdate,

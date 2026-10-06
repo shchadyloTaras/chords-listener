@@ -35,7 +35,7 @@ export const cloud: Dict = {
     'cloud.ways.file.title': 'Файл',
     'cloud.ways.file.hint': 'MP3, WAV, M4A, відео — або перетягни у вікно',
     'cloud.ways.listen.title': 'Слухати',
-    'cloud.ways.listen.hint': 'Мікрофон або звук вкладки — акорди наживо',
+    'cloud.ways.listen.hint': 'Мікрофон або звук вкладки — розпізнаємо акорди',
     'cloud.input.hintGuest': 'Відео з YouTube послухаємо прямо тут. Посилання з інших сайтів — після входу.',
     'cloud.input.hintYoutubeGuest': 'Відео з YouTube — натисни Enter, і послухаємо його на сторінці',
     'cloud.input.accountTitle': 'Посилання з інших сайтів розпізнає хмара',
@@ -123,6 +123,7 @@ export const cloud: Dict = {
     'cloud.listen.title': 'Слухати',
     'cloud.listen.subtitle':
       'Акорди зʼявляються наживо, поки грає музика. Коли зупиниш — збережемо запис і розпізнаємо його точно.',
+    'cloud.listen.subtitle.mic': 'Запиши, як грає музика. Коли зупиниш — збережемо запис і розпізнаємо в ньому акорди.',
     'cloud.listen.mic.title': 'Мікрофон',
     'cloud.listen.mic.hint': 'Пісня грає поруч: колонка, інструмент, інший пристрій',
     'cloud.listen.tab.title': 'Вкладка браузера',
@@ -184,7 +185,7 @@ export const cloud: Dict = {
     'cloud.ways.file.title': 'File',
     'cloud.ways.file.hint': 'MP3, WAV, M4A, video — or drop it on the window',
     'cloud.ways.listen.title': 'Listen',
-    'cloud.ways.listen.hint': 'Microphone or tab audio — live chords',
+    'cloud.ways.listen.hint': 'Microphone or tab audio — we find the chords',
     'cloud.input.hintGuest': 'YouTube videos are played and listened to right here. Links to other sites need an account.',
     'cloud.input.hintYoutubeGuest': 'YouTube video — press Enter and we will listen to it on the page',
     'cloud.input.accountTitle': 'Links to other sites are analyzed in the cloud',
@@ -263,6 +264,7 @@ export const cloud: Dict = {
 
     'cloud.listen.title': 'Listen',
     'cloud.listen.subtitle': 'Chords show up live while the music plays. When you stop, we save the recording and analyze it accurately.',
+    'cloud.listen.subtitle.mic': 'Record the music as it plays. When you stop, we save the recording and find its chords.',
     'cloud.listen.mic.title': 'Microphone',
     'cloud.listen.mic.hint': 'The song plays nearby: a speaker, an instrument, another device',
     'cloud.listen.tab.title': 'Browser tab',

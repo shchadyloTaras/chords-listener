@@ -70,6 +70,11 @@ export interface LiveOptions {
   /** keep a recording of the stream (default true) */
   record?: boolean
   /**
+   * recognize chords while listening (default true). false: time and the level meter only, the
+   * updates and the result have no chords (a microphone recording, analyzed in full afterwards)
+   */
+  analyze?: boolean
+  /**
    * leave the stream's tracks running after stop() / a failed start (default false: the
    * session owns the stream and stops it, which also ends tab sharing)
    */

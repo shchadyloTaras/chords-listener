@@ -318,7 +318,7 @@ class Session implements LiveSession {
   }
 }
 
-async function buildGraph(ctx: AudioContext, stream: MediaStream, worker: Worker, paused: boolean): Promise<Graph> {
+async function buildGraph(ctx: AudioContext, stream: MediaStream, worker: Worker, paused: boolean, analyze: boolean): Promise<Graph> {
   const source = ctx.createMediaStreamSource(stream)
   const gate = { paused }
   if (ctx.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
@@ -328,7 +328,7 @@ async function buildGraph(ctx: AudioContext, stream: MediaStream, worker: Worker
       const channel = new MessageChannel()
       if (paused) node.port.postMessage({ type: 'pause' } satisfies ToWorklet)
       node.port.postMessage({ type: 'port', port: channel.port1 } satisfies ToWorklet, [channel.port1])
-      worker.postMessage({ type: 'init', sampleRate: ctx.sampleRate, port: channel.port2 } satisfies ToWorker, [channel.port2])
+      worker.postMessage({ type: 'init', sampleRate: ctx.sampleRate, port: channel.port2, analyze } satisfies ToWorker, [channel.port2])
       source.connect(node)
       // a silent output keeps the node pulled by the graph in every browser
       node.connect(ctx.destination)
@@ -340,7 +340,7 @@ async function buildGraph(ctx: AudioContext, stream: MediaStream, worker: Worker
   // fallback (no AudioWorklet, e.g. an insecure context or an old browser): the main thread forwards PCM
   const channels = Math.max(1, Math.min(2, stream.getAudioTracks()[0]?.getSettings?.().channelCount ?? 2))
   const node = ctx.createScriptProcessor(WORKLET_BATCH * 2, channels, 1)
-  worker.postMessage({ type: 'init', sampleRate: ctx.sampleRate } satisfies ToWorker)
+  worker.postMessage({ type: 'init', sampleRate: ctx.sampleRate, analyze } satisfies ToWorker)
   node.onaudioprocess = (e: AudioProcessingEvent) => {
     if (gate.paused) return
     const input = e.inputBuffer
@@ -360,7 +360,7 @@ async function buildGraph(ctx: AudioContext, stream: MediaStream, worker: Worker
 
 /**
  * Starts listening to `stream` (from captureMicrophone / captureTabAudio): live chords while it
- * plays, and (by default) a recording of it. Rejects with a CaptureError; the stream's tracks
+ * plays (unless `analyze: false`), and (by default) a recording of it. Rejects with a CaptureError; the stream's tracks
  * are stopped then unless `keepTracks`.
  */
 export async function startLiveSession(stream: MediaStream, options: LiveOptions = {}): Promise<LiveSession> {
@@ -385,7 +385,7 @@ export async function startLiveSession(stream: MediaStream, options: LiveOptions
     // until the next gesture, which resume() on the session retries)
     if (ctx.state !== 'running') await withTimeout(ctx.resume(), 800, undefined)
     worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module', name: 'chords-live' })
-    const graph = await buildGraph(ctx, stream, worker, !!options.paused)
+    const graph = await buildGraph(ctx, stream, worker, !!options.paused, options.analyze ?? true)
     const recording = record ? createRecording(stream, options.audioBitsPerSecond, !!options.paused) : null
     return new Session(stream, graph, worker, recording, options)
   } catch (err) {
