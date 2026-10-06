@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // The tour on screen: a modal dialog with the step's title, text and counter; → ← Enter Space Esc (also with a
 // Floating panel open), Tab kept inside the bubble, focus start and restore, the layer swallowing presses,
-// key auto-repeat ignored, the chord-marks card and key chips, an anchor gone only after 300 ms, smooth vs
-// reduced motion, and a route change closing it unseen.
+// key auto-repeat and modified combos ignored, Space keyup cancelled, the chord-marks card and key chips, an anchor
+// gone only after 300 ms, smooth vs reduced motion (the bubble never slides in), and a route change closing it unseen.
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -53,6 +53,8 @@ beforeEach(() => {
 afterEach(() => {
   act(() => useTourStore.setState({ active: null, queue: [] }))
   act(() => root.unmount())
+  // a Space that was pressed and never released leaves a one-shot keyup guard behind: spend it
+  window.dispatchEvent(new KeyboardEvent('keyup', { key: ' ' }))
   host.remove()
   made.splice(0).forEach((el) => el.remove())
 })
@@ -61,10 +63,15 @@ const dialog = () => document.querySelector<HTMLElement>('[role="dialog"][aria-m
 const title = () => dialog()?.querySelector('h2')?.textContent ?? null
 const buttons = () => [...(dialog()?.querySelectorAll('button') ?? [])].map((b) => b.textContent)
 const counterText = () => [...(dialog()?.querySelectorAll('span') ?? [])].map((s) => s.textContent).find((s) => /^\d+ \/ \d+$/.test(s ?? ''))
-const press = (key: string, init: KeyboardEventInit = {}) =>
+const keyEvent = (type: 'keydown' | 'keyup', key: string, init: KeyboardEventInit = {}) => {
+  const e = new KeyboardEvent(type, { key, bubbles: true, cancelable: true, ...init })
   act(() => {
-    ;(document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init }))
+    ;(document.activeElement ?? document.body).dispatchEvent(e)
   })
+  return e
+}
+const press = (key: string, init: KeyboardEventInit = {}) => keyEvent('keydown', key, init)
+const release = (key: string, init: KeyboardEventInit = {}) => keyEvent('keyup', key, init)
 const begin = (id: Parameters<typeof startTour>[0] = 'home') =>
   act(() => {
     startTour(id)
@@ -166,6 +173,56 @@ describe('the bubble', () => {
     press('Enter', { repeat: true })
     expect(counterText()).toBe('1 / 4')
   })
+
+  it('leaves browser shortcuts alone: Alt+← (Back), Cmd+←, Alt+→, Ctrl+Enter and Cmd+Space do nothing and are not cancelled', () => {
+    begin()
+    press('ArrowRight')
+    expect(title()).toBe('Посилання або файл')
+    const combos: [string, KeyboardEventInit][] = [
+      ['ArrowLeft', { altKey: true }],
+      ['ArrowLeft', { metaKey: true }],
+      ['ArrowRight', { altKey: true }],
+      ['Enter', { ctrlKey: true }],
+      [' ', { metaKey: true }],
+      ['Escape', { ctrlKey: true }],
+    ]
+    for (const [key, init] of combos) {
+      const e = press(key, init)
+      expect(e.defaultPrevented, `${key} ${JSON.stringify(init)}`).toBe(false)
+      expect(title(), `${key} ${JSON.stringify(init)}`).toBe('Посилання або файл')
+    }
+    expect(dialog()).not.toBeNull()
+    // Shift alone still counts: Shift+Tab walks backwards in the bubble
+    press('Tab', { shiftKey: true })
+    expect(document.activeElement?.textContent).toBe('Назад')
+  })
+
+  it('cancels the Space keyup too, so Firefox does not click the focused button a second time', () => {
+    begin()
+    press(' ')
+    expect(title()).toBe('Посилання або файл')
+    expect(release(' ').defaultPrevented).toBe(true)
+    expect(release('ArrowRight').defaultPrevented).toBe(false)
+  })
+
+  it('...and when the Space press closes the tour on «Готово», its keyup does not click the restored element', () => {
+    begin()
+    press('ArrowRight')
+    press('ArrowRight')
+    press('ArrowRight')
+    expect(buttons().at(-1)).toBe('Готово')
+    press(' ')
+    expect(dialog()).toBeNull()
+    expect(release(' ').defaultPrevented).toBe(true)
+    // only that one release: later Space presses on the page are the page's
+    expect(release(' ').defaultPrevented).toBe(false)
+  })
+
+  it('a keyup of Space after the tour closed some other way is left alone', () => {
+    begin()
+    press('Escape')
+    expect(release(' ').defaultPrevented).toBe(false)
+  })
 })
 
 describe('content', () => {
@@ -216,6 +273,33 @@ describe('anchors and motion', () => {
     begin()
     press('ArrowRight')
     expect(window.scrollBy).toHaveBeenLastCalledWith(expect.objectContaining({ behavior: 'smooth' }))
+    expect(dialog()!.querySelector('h2')!.closest('div.absolute')!.className).toContain('transition-[')
+  })
+
+  it('the bubble is placed without a transition: it never slides in from where it was parked', () => {
+    // React sets style.left on the bubble when the first geometry arrives; a transition class that is already on
+    // the element at that moment (or arrives with it) would animate it from the parked -9999 to its place
+    let owner: object | null = document.body.style
+    while (owner && !Object.getOwnPropertyDescriptor(owner, 'left')) owner = Object.getPrototypeOf(owner)
+    const left = Object.getOwnPropertyDescriptor(owner!, 'left')!
+    const classAtLeft: { left: string; className: string }[] = []
+    Object.defineProperty(owner!, 'left', {
+      ...left,
+      set(this: CSSStyleDeclaration, v: string) {
+        left.set!.call(this, v)
+        classAtLeft.push({ left: String(v), className: document.querySelector('[role="dialog"] h2')?.closest('div.absolute')?.className ?? '' })
+      },
+    })
+    try {
+      begin()
+      press('ArrowRight')
+    } finally {
+      Object.defineProperty(owner!, 'left', left)
+    }
+    const placing = classAtLeft.filter((c) => c.className && !c.left.startsWith('-9999'))
+    expect(placing.length).toBeGreaterThan(0)
+    expect(placing[0].className).not.toContain('transition-[')
+    // after that it animates between steps as before
     expect(dialog()!.querySelector('h2')!.closest('div.absolute')!.className).toContain('transition-[')
   })
 

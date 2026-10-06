@@ -50,7 +50,9 @@ function TourLayer({ active, phone }: { active: ActiveTour; phone: boolean }) {
   const textId = useId()
   const bubble = useRef<HTMLDivElement>(null)
   const next = useRef<HTMLButtonElement>(null)
-  const [geo, setGeo] = useState<Geo | null>(null)
+  // `moved` is false for the first geometry only: the bubble is parked off-screen until then, and a transition
+  // class on it at that moment would slide it in from there
+  const [geo, setGeo] = useState<{ geo: Geo; moved: boolean } | null>(null)
 
   const tour = TOURS[active.tourId]
   const step = tour.steps[active.run.index]
@@ -83,7 +85,7 @@ function TourLayer({ active, phone }: { active: ActiveTour; phone: boolean }) {
     const update = () => {
       raf = 0
       const g = measureStep(step, bubble.current, phone)
-      setGeo((prev) => (prev && sameGeo(prev, g) ? prev : g))
+      setGeo((prev) => (prev && sameGeo(prev.geo, g) ? prev : { geo: g, moved: prev !== null }))
       if (!anchored || g.present) {
         window.clearTimeout(gone)
         gone = undefined
@@ -119,13 +121,17 @@ function TourLayer({ active, phone }: { active: ActiveTour; phone: boolean }) {
   }, [step, phone])
 
   // → next, ← back, Enter / Space press the focused button, Esc closes, Tab stays in the bubble; held keys
-  // (auto-repeat) are swallowed so a long press cannot race through the tour
+  // (auto-repeat) are swallowed so a long press cannot race through the tour; modified combos (Alt+← is the
+  // browser's Back) are not the tour's, as in useHotkeys
   useEffect(() => {
+    let spaceHeld = false
     const onKey = (e: KeyboardEvent) => {
       const box = bubble.current
       if (!box || !['Escape', 'ArrowRight', 'ArrowLeft', 'Enter', ' ', 'Tab'].includes(e.key)) return
+      if (e.metaKey || e.ctrlKey || e.altKey) return
       e.preventDefault()
       e.stopPropagation()
+      if (e.key === ' ') spaceHeld = true
       if (e.repeat && e.key !== 'Tab') return
       if (e.key === 'Escape') closeTour('escape')
       else if (e.key === 'ArrowRight') nextStep()
@@ -141,12 +147,31 @@ function TourLayer({ active, phone }: { active: ActiveTour; phone: boolean }) {
         if (el instanceof HTMLButtonElement && box.contains(el)) el.click()
       }
     }
+    // Firefox clicks a focused button on the Space keyup even when the keydown was cancelled
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key !== ' ') return
+      spaceHeld = false
+      e.preventDefault()
+    }
     window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
+    window.addEventListener('keyup', onKeyUp, true)
+    return () => {
+      window.removeEventListener('keydown', onKey, true)
+      window.removeEventListener('keyup', onKeyUp, true)
+      // the Space that pressed «Готово»: its keyup lands on the element focus went back to
+      if (spaceHeld) {
+        const swallow = (e: KeyboardEvent) => {
+          if (e.key !== ' ') return
+          e.preventDefault()
+          window.removeEventListener('keyup', swallow, true)
+        }
+        window.addEventListener('keyup', swallow, true)
+      }
+    }
   }, [])
 
-  const spot = geo?.spot ?? null
-  const place = geo?.place
+  const spot = geo?.geo.spot ?? null
+  const place = geo?.geo.place
   const keys = !flags.touch && step.keys?.length ? step.keys : null
   const moving = !reduce && 'transition-[left,top,width,height] duration-200 ease-out'
 
@@ -176,7 +201,7 @@ function TourLayer({ active, phone }: { active: ActiveTour; phone: boolean }) {
         ref={bubble}
         className={clsx(
           'absolute flex w-[22rem] max-w-[calc(100vw-16px)] flex-col overflow-y-auto rounded-2xl border border-border-strong bg-surface p-4 text-text shadow-2xl shadow-black/40',
-          moving,
+          geo?.moved && moving,
         )}
         style={place ? { left: place.left, top: place.top, width: phone ? place.width : undefined, maxHeight: place.maxHeight } : { left: -9999, top: 0 }}
       >
