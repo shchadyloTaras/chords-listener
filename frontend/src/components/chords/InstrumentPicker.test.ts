@@ -58,3 +58,11 @@ it("uses the phone's own picker on a narrow screen (never clipped by the hero)",
   expect(useApp.getState().instrument).toBe('bass')
   expect(host.querySelector('select')!.value).toBe('bass')
 })
+
+it('carries its tour anchor on a wide and on a narrow screen', () => {
+  for (const isWide of [true, false]) {
+    wide = isWide
+    act(() => root!.render(createElement(InstrumentPicker, { tour: 'song.instrument' })))
+    expect(host.querySelector('[data-tour="song.instrument"]'), `wide=${isWide}`).not.toBeNull()
+  }
+})

@@ -24,7 +24,7 @@ export const ChordLegend = memo(function ChordLegend() {
   const showDiagrams = useApp((s) => s.showDiagrams)
   if (!unique.length) return null
   return (
-    <section aria-labelledby="cw-legend" className="flex flex-col gap-3">
+    <section aria-labelledby="cw-legend" data-tour="song.legend" data-tour-until="li" className="flex flex-col gap-3">
       <h2 id="cw-legend" className="flex items-baseline gap-2 text-sm font-medium text-muted">
         {t('chords.legend.title')}
         <span className="font-mono text-xs text-faint tabular-nums">{unique.length}</span>

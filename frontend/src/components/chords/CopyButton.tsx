@@ -27,7 +27,7 @@ export function CopyButton({ compact = false }: { compact?: boolean }) {
   const [caret, setCaret] = useState<HTMLButtonElement | null>(null)
 
   return (
-    <div className="inline-flex shrink-0 items-stretch rounded-lg bg-accent text-accent-fg shadow-[0_1px_0_rgb(255_255_255/0.2)_inset]">
+    <div data-tour="song.copy" className="inline-flex shrink-0 items-stretch rounded-lg bg-accent text-accent-fg shadow-[0_1px_0_rgb(255_255_255/0.2)_inset]">
       <button
         type="button"
         onClick={() => run(() => copyAll(model))}

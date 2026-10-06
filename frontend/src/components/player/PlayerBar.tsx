@@ -35,6 +35,7 @@ export function PlayerBar({ track }: { track: Track }) {
       ref={ref}
       role="region"
       aria-label={t('core.player.region')}
+      data-tour="song.player"
       className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-surface/90 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl"
     >
       <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-1 gap-y-0.5 px-3 pt-1.5 pb-2 sm:flex-nowrap sm:gap-x-2 sm:px-5 sm:py-2.5">

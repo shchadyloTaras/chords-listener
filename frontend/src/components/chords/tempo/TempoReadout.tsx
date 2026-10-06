@@ -38,6 +38,7 @@ export function TempoReadout() {
         ref={setBtn}
         type="button"
         aria-haspopup="dialog"
+        data-tour="song.tempo"
         aria-expanded={open}
         aria-label={bpm != null ? t('tempo.open', { n: bpm, ts: rhythm.timeSignature }) : t('tempo.openUnknown')}
         title={t('tempo.badge.title')}

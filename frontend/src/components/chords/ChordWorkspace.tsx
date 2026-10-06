@@ -7,6 +7,7 @@ import { AudioWaveform } from 'lucide-react'
 import { useT } from '../../i18n'
 import { useApp } from '../../store'
 import type { Track } from '../../types'
+import { useTourFlags, useTourTrigger } from '../tour/hooks'
 import './chords.css'
 import { ChordLegend } from './ChordLegend'
 import { ChordPopoverHost } from './ChordPopover'
@@ -58,6 +59,9 @@ function Workspace({ track }: { track: Track }) {
   const hero = useRef<HTMLElement>(null)
   const heroVisible = useMostlyVisible(hero)
   useChordHotkeys(model)
+  // the Song tour: the track has loaded with no error (this component exists only then)
+  useTourFlags({ hasChords: model.hasChords, sheetView: view === 'sheet' })
+  useTourTrigger('song', true)
 
   useEffect(() => {
     useChordUi.getState().reset()

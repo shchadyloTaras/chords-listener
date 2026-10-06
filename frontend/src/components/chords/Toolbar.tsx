@@ -48,6 +48,7 @@ export const Toolbar = memo(function Toolbar({ heroVisible }: { heroVisible: boo
             <div className="flex shrink-0 items-center gap-1 pr-1">
               {keyName && (
                 <span
+                  data-tour="song.key"
                   className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-surface-2 px-3 text-sm"
                   aria-label={`${t('chords.key')}: ${keyName}`}
                   title={
@@ -79,7 +80,7 @@ export const Toolbar = memo(function Toolbar({ heroVisible }: { heroVisible: boo
           <Divider />
 
           {/* transpose */}
-          <div className="flex shrink-0 items-center gap-0.5" role="group" aria-label={t('chords.transpose')}>
+          <div className="flex shrink-0 items-center gap-0.5" role="group" aria-label={t('chords.transpose')} data-tour="song.transpose">
             <IconButton label={t('chords.transpose.down')} onClick={() => setTranspose(transpose - 1)}>
               <Minus size={16} />
             </IconButton>
@@ -107,6 +108,7 @@ export const Toolbar = memo(function Toolbar({ heroVisible }: { heroVisible: boo
 
           <ToggleChip
             pressed={simplify}
+            data-tour="song.simplify"
             onClick={() => setSetting('simplify', !simplify)}
             title={t('chords.simplify.title')}
             icon={<Wand2 size={15} />}
@@ -115,6 +117,7 @@ export const Toolbar = memo(function Toolbar({ heroVisible }: { heroVisible: boo
           </ToggleChip>
 
           <Segmented<Accidentals>
+            tour="song.accidentals"
             label={t('chords.accidentals')}
             value={accidentals}
             onChange={(v) => setSetting('accidentals', v)}
@@ -163,6 +166,7 @@ function ViewControls() {
   return (
     <>
       <Segmented<ChordView>
+        tour="song.views"
         label={t('chords.view')}
         value={view}
         onChange={(v) => setSetting('view', v)}
@@ -200,6 +204,7 @@ function ViewControls() {
         ]}
       />
       <IconButton
+        data-tour="song.follow"
         label={t('chords.follow.title')}
         active={follow}
         aria-pressed={follow}
@@ -230,7 +235,7 @@ function SettingsMenu() {
 
   return (
     <>
-      <IconButton ref={setBtn} label={t('chords.settings')} active={open} aria-expanded={open} aria-haspopup="dialog" onClick={() => setOpen((v) => !v)}>
+      <IconButton ref={setBtn} data-tour="song.settings" label={t('chords.settings')} active={open} aria-expanded={open} aria-haspopup="dialog" onClick={() => setOpen((v) => !v)}>
         <SlidersHorizontal size={16} />
       </IconButton>
       <Floating anchor={btn} open={open} onClose={() => setOpen(false)} placement="bottom-start" ariaLabel={t('chords.settings')} className="w-76 max-w-[calc(100vw-16px)] p-3">

@@ -4,6 +4,7 @@ import clsx from 'clsx'
 import { useT } from '../../i18n'
 import { parseChord } from '../../lib/music/chord'
 import { chordTone } from '../../lib/music/color'
+import '../chords/chords.css'
 import { ChordName } from '../chords/ChordName'
 
 const ROWS: Array<{ labels: string[]; text: string; unsure?: boolean }> = [

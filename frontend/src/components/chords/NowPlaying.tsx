@@ -73,6 +73,7 @@ export const NowPlaying = memo(
       <section
         ref={ref}
         aria-live="off"
+        data-tour="song.now"
         className="cw-stage relative overflow-hidden rounded-[28px] border border-border"
         style={{ '--cw-glow': shown ? color : 'transparent' } as CSSProperties}
       >
@@ -86,7 +87,7 @@ export const NowPlaying = memo(
               </span>
             )}
           </div>
-          <InstrumentPicker />
+          <InstrumentPicker tour="song.instrument" />
           {instrument === 'handpan' && <HandpanHint className="order-last basis-full" />}
         </div>
 
