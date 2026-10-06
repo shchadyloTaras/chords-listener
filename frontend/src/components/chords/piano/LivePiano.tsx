@@ -1,4 +1,4 @@
-// "Живе піаніно": the song's notes falling onto a piano keyboard whose keys go down in sync with the
+// "Живе фортепіано": the song's notes falling onto a piano keyboard whose keys go down in sync with the
 // audio (notes transcribed once per track, see lib/transcription — from the instruments stem when the
 // server separated the vocals), plus chord-preview notes and, when the vocals were transcribed, the
 // sung melody as an outlined overlay with its own toggle. Under the title: what the panel is doing,

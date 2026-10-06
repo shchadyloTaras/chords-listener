@@ -72,7 +72,7 @@ export const score: Dict = {
     'score.export.musicxml.hint': 'Для MuseScore, Dorico, Finale, Sibelius',
     'score.export.midi': 'MIDI',
     'score.export.midi.hint': 'Для GarageBand, Logic, FL Studio та інших',
-    'score.export.menu': 'Ноти для піаніно',
+    'score.export.menu': 'Ноти для фортепіано',
     'score.export.preparing': 'Готую ноти…',
     'score.export.pdfWorking': 'Створюю PDF…',
     'score.export.done': 'Збережено {name}',
