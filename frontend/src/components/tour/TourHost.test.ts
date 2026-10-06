@@ -2,7 +2,8 @@
 // The tour on screen: a modal dialog with the step's title, text and counter; → ← Enter Space Esc (also with a
 // Floating panel open), Tab kept inside the bubble, focus start and restore, the layer swallowing presses,
 // key auto-repeat and modified combos ignored, Space keyup cancelled, the chord-marks card and key chips, an anchor
-// gone only after 300 ms, smooth vs reduced motion (the bubble never slides in), and a route change closing it unseen.
+// gone only after 300 ms, smooth vs reduced motion (the bubble never slides in), room below a short page on phones,
+// and a route change closing it unseen.
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -301,6 +302,47 @@ describe('anchors and motion', () => {
     expect(placing[0].className).not.toContain('transition-[')
     // after that it animates between steps as before
     expect(dialog()!.querySelector('h2')!.closest('div.absolute')!.className).toContain('transition-[')
+  })
+
+  it('phones: an anchor near the end of a short page gets room below the page to clear the docked bubble; it goes with the tour', () => {
+    act(() => root.unmount())
+    window.matchMedia = ((query: string) => ({
+      matches: query === '(max-width: 639px)',
+      media: query,
+      addEventListener() {},
+      removeEventListener() {},
+    })) as unknown as typeof window.matchMedia
+    root = createRoot(host)
+    act(() => root.render(createElement(TourHost)))
+    // the page is 900 px long in a 768 px window: it scrolls 132 px at most
+    Object.defineProperty(document.documentElement, 'scrollHeight', { configurable: true, value: 900 })
+    try {
+      made[0].getBoundingClientRect = () => ({ ...RECT, top: 1000, bottom: 1040, y: 1000 })
+      begin()
+      press('ArrowRight')
+      const room = document.querySelector<HTMLElement>('[data-tour-room]')
+      expect(window.scrollBy).toHaveBeenLastCalledWith(expect.objectContaining({ top: 640 }))
+      expect(room?.style.top).toBe('900px')
+      expect(room?.style.height).toBe(`${640 - 132}px`)
+      expect(room?.getAttribute('aria-hidden')).toBe('true')
+      press('Escape')
+      expect(document.querySelector('[data-tour-room]')).toBeNull()
+    } finally {
+      delete (document.documentElement as { scrollHeight?: number }).scrollHeight
+    }
+  })
+
+  it('a desktop page gets no such room', () => {
+    Object.defineProperty(document.documentElement, 'scrollHeight', { configurable: true, value: 900 })
+    try {
+      made[0].getBoundingClientRect = () => ({ ...RECT, top: 1000, bottom: 1040, y: 1000 })
+      begin()
+      press('ArrowRight')
+      expect(window.scrollBy).toHaveBeenCalled()
+      expect(document.querySelector('[data-tour-room]')).toBeNull()
+    } finally {
+      delete (document.documentElement as { scrollHeight?: number }).scrollHeight
+    }
   })
 
   it('with prefers-reduced-motion: no smooth scrolling, no transitions', () => {

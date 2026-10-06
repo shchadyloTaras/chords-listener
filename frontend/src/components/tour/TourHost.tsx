@@ -17,7 +17,7 @@ import { useCloudInvite } from '../account/cloudInvite'
 import { Button } from '../ui/IconButton'
 import { Kbd } from '../ui/Kbd'
 import { ChordMarks } from './ChordMarks'
-import { GONE_MS, measureStep, PHONE_QUERY, sameGeo, scrollToStep, stepElements, type Geo } from './geometry'
+import { GONE_MS, measureStep, PHONE_QUERY, removeScrollRoom, sameGeo, scrollToStep, stepElements, type Geo } from './geometry'
 import { useTourFlags } from './hooks'
 import { closeIfRouteChanged, closeTour, nextStep, prevStep, reportAnchorsGone, tourEnv, useTourStore, type ActiveTour } from './tourStore'
 
@@ -75,6 +75,8 @@ function TourLayer({ active, phone }: { active: ActiveTour; phone: boolean }) {
     scrollToStep(step, { phone, reduce, bubbleHeight: bubble.current?.offsetHeight ?? 0 })
     next.current?.focus({ preventScroll: true })
   }, [step, phone, reduce])
+  // the room a phone step added below the page goes with the tour
+  useEffect(() => removeScrollRoom, [])
 
   // the spotlight follows scrolling (inner scrollers too), resizing and the anchors, at most once a frame;
   // a step's anchors count as gone only after GONE_MS

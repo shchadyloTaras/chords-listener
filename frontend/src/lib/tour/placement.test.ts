@@ -1,7 +1,7 @@
 // Where the bubble goes: below or above the spotlight on a desktop, docked at the bottom on phones and for
 // spotlights taller than the free area, never over the player bar or the floating video, always on screen.
 import { describe, expect, it } from 'vitest'
-import { freeBand, intersectRect, MARGIN, nearestDelta, placeBubble, scrollDelta, unionRect, type Rect, type View } from './placement'
+import { freeBand, intersectRect, MARGIN, missingRoom, nearestDelta, placeBubble, scrollDelta, unionRect, type Rect, type View } from './placement'
 
 const DESK: View = { width: 1280, height: 800, top: 56, bottom: 704 } // 96 px player bar
 const PHONE: View = { width: 375, height: 812, top: 56, bottom: 702 } // 110 px player bar
@@ -76,6 +76,13 @@ describe('scrolling', () => {
   it('the free band ends above the docked bubble on phones', () => {
     expect(freeBand(DESK, false, 180)).toEqual({ top: 64, bottom: 696 })
     expect(freeBand(PHONE, true, 180)).toEqual({ top: 64, bottom: 702 - 8 - 180 - 8 })
+  })
+
+  it('the page a scroll lacks past its end (a short page on a phone), never negative', () => {
+    expect(missingRoom(300, 1000, 1200)).toBe(100)
+    expect(missingRoom(200, 1000, 1200)).toBe(0)
+    expect(missingRoom(-400, 300, 1200)).toBe(0)
+    expect(missingRoom(120.4, 0, 0)).toBe(121)
   })
 
   it('sideways: the nearest edge, the start when it does not fit', () => {

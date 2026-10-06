@@ -71,6 +71,12 @@ export function scrollDelta(spot: Rect, band: { top: number; bottom: number }): 
   return (spot.top + spot.bottom) / 2 - (band.top + band.bottom) / 2
 }
 
+/** How far a page scroll of `dy` would run past the end of the page (a short page on a phone, an anchor near its
+ *  end): the room to add below it, so the anchor can still clear the docked bubble. */
+export function missingRoom(dy: number, scrollY: number, maxScrollY: number): number {
+  return Math.max(0, Math.ceil(scrollY + dy - maxScrollY))
+}
+
 /** Where a spotlight may sit: below the header, above the player bar (and above the docked bubble on phones). */
 export function freeBand(view: View, phone: boolean, bubbleHeight: number): { top: number; bottom: number } {
   const top = view.top + MARGIN

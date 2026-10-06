@@ -1,7 +1,7 @@
 // Where the tour's spotlight and bubble go on the real page: anchor boxes clipped to their scroller, the
 // viewport and the header / player bar, and scrolling a step's anchors into view on both axes. The arithmetic
 // is in lib/tour/placement.ts.
-import { freeBand, intersectRect, nearestDelta, placeBubble, scrollDelta, unionRect, type Placement, type Rect, type View } from '../../lib/tour/placement'
+import { freeBand, intersectRect, missingRoom, nearestDelta, placeBubble, scrollDelta, unionRect, type Placement, type Rect, type View } from '../../lib/tour/placement'
 import type { TourStep } from '../../lib/tour/tours'
 import { anchorElement } from './dom'
 
@@ -112,6 +112,27 @@ export function sameGeo(a: Geo, b: Geo): boolean {
   return JSON.stringify(a) === JSON.stringify(b)
 }
 
+/** Phones: an empty block past the end of the page while a tour runs, so an anchor near the end of a short page
+ *  can still scroll above the docked bubble. Placed on the initial containing block, it lengthens the page
+ *  whatever the app's own layout; it only grows, and goes when the tour closes (removeScrollRoom). */
+let room: HTMLDivElement | null = null
+
+function addScrollRoom(px: number): void {
+  if (px <= 0) return
+  if (!room) {
+    room = document.createElement('div')
+    room.setAttribute('aria-hidden', 'true')
+    room.dataset.tourRoom = ''
+  }
+  room.style.cssText = `position:absolute;left:0;width:1px;pointer-events:none;top:${document.documentElement.scrollHeight}px;height:${px}px`
+  document.body.append(room)
+}
+
+export function removeScrollRoom(): void {
+  room?.remove()
+  room = null
+}
+
 /** Before a step: its anchors into view — sideways inside their own scrollers, then the page (if not pinned):
  *  centred in the free band, except `scrollTop` steps, which move only as far as needed. */
 export function scrollToStep(step: TourStep, opts: { phone: boolean; reduce: boolean; bubbleHeight: number }): void {
@@ -136,5 +157,6 @@ export function scrollToStep(step: TourStep, opts: { phone: boolean; reduce: boo
   // Song steps 1–4 scroll as little as possible: centring the toolbar under the live-piano panel would scroll
   // the hero away, and the toolbar then swaps the key badge (song.key) for the mini "now → next"
   const dy = step.scrollTop ? nearestDelta(target.top, target.bottom, band.top, band.bottom) : scrollDelta(target, band)
+  if (opts.phone) addScrollRoom(missingRoom(dy, window.scrollY, document.documentElement.scrollHeight - window.innerHeight))
   if (Math.abs(dy) > 1) window.scrollBy({ top: dy, behavior })
 }
