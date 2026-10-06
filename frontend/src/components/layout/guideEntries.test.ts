@@ -4,9 +4,11 @@
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useConnection } from '../../lib/serverMode'
 import { useApp } from '../../store'
 import type { Track } from '../../types'
 import { GuideButton } from './HeaderSettings'
+import { ServerStatus } from './ServerStatus'
 import { ShortcutsModal } from './ShortcutsModal'
 import { HeaderMenu } from './TrackActions'
 
@@ -81,4 +83,16 @@ it('the desktop header button is an icon button labelled «Інструкція�
   expect(button).not.toBeNull()
   click(button)
   expect(onGuide).toHaveBeenCalledTimes(1)
+})
+
+it('leaves the button room in a 640 px header: the mode chip on Home / Listen / YouTube shows its words only from 768 px', () => {
+  // at 640–655 px the chip's «Браузерний режим» plus the new button pushed «Увійти» past the edge of the page
+  useConnection.setState({ status: 'browser' })
+  render(createElement(ServerStatus))
+  const chip = document.querySelector<HTMLElement>('[data-tour="header.mode"]')!
+  const words = [...chip.querySelectorAll('span')].find((s) => s.textContent === 'Браузерний режим')!
+  expect(words.className).toContain('md:inline')
+  expect(words.className).not.toContain('sm:inline')
+  expect(chip.className).toContain('md:w-auto')
+  expect(chip.className).not.toContain('sm:w-auto')
 })
