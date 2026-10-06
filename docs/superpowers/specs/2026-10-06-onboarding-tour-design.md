@@ -191,7 +191,7 @@ tour closes.
   - Listen and YouTube: the capture phase is `idle` (not `requesting`, `error`, `stopping`, `saving`);
     YouTube also needs its player loaded;
 - *(added)* no `aria-modal` dialog, menu (`[role="menu"]`) or anchored panel is open (no
-  `[aria-expanded="true"]` control in the page), focus is not in a text field, the song is not playing,
+  `[aria-expanded="true"]` control in the page), no text is being typed (a focused but empty link field does not count — the home field autofocuses on desktop), the song is not playing,
   no recording or capture is running, and the page is visible.
 
 Only one tour runs at a time. A tour that becomes due while another runs waits; when that one ends, the
