@@ -197,49 +197,47 @@ class MetronomeEngine {
   }
 
   /**
-   * A short woodblock-like "tick": a bright pitched body plus a noise transient for the attack,
-   * so it stays audible over the music. Higher and louder on the downbeat.
+   * A short, pinpoint "tick": a steady-pitch triangle body (no pitch slide) that dies away within
+   * ~30 ms, plus a 4 ms band-passed noise edge that marks the exact onset. Higher on the downbeat.
    */
   private click(at: number, accent: boolean): void {
     const ctx = this.ctx
     const bus = this.bus
     if (!ctx || !bus) return
-    const len = accent ? 0.08 : 0.06
-    const peak = accent ? 1 : 0.75
+    const peak = accent ? 1 : 0.8
+    /** decay time constant: ~-40 dB after 4.6 τ (≈ 28 ms, 37 ms on the downbeat) */
+    const tau = accent ? 0.008 : 0.006
+    const end = at + tau * 6
 
     const osc = ctx.createOscillator()
-    const tone = ctx.createBiquadFilter()
     const env = ctx.createGain()
-    osc.type = 'square'
-    osc.frequency.setValueAtTime(accent ? 1760 : 1175, at)
-    osc.frequency.exponentialRampToValueAtTime(accent ? 1320 : 880, at + 0.04)
-    tone.type = 'lowpass'
-    tone.frequency.value = 6000
-    env.gain.setValueAtTime(0.0001, at)
-    env.gain.exponentialRampToValueAtTime(peak * 0.7, at + 0.0015)
-    env.gain.exponentialRampToValueAtTime(0.0001, at + len)
-    osc.connect(tone)
-    tone.connect(env)
+    osc.type = 'triangle'
+    osc.frequency.value = accent ? 2000 : 1500
+    env.gain.setValueAtTime(0, at)
+    env.gain.linearRampToValueAtTime(peak, at + 0.0005)
+    env.gain.setTargetAtTime(0, at + 0.0005, tau)
+    osc.connect(env)
     env.connect(bus)
     osc.start(at)
-    osc.stop(at + len + 0.01)
+    osc.stop(end)
 
-    const nodes: AudioNode[] = [osc, tone, env]
+    const nodes: AudioNode[] = [osc, env]
     if (this.noise) {
       const hiss = ctx.createBufferSource()
-      const hp = ctx.createBiquadFilter()
+      const bp = ctx.createBiquadFilter()
       const henv = ctx.createGain()
       hiss.buffer = this.noise
-      hp.type = 'highpass'
-      hp.frequency.value = 2500
-      henv.gain.setValueAtTime(peak * 0.9, at)
-      henv.gain.exponentialRampToValueAtTime(0.0001, at + 0.012)
-      hiss.connect(hp)
-      hp.connect(henv)
+      bp.type = 'bandpass'
+      bp.frequency.value = accent ? 5000 : 4000
+      bp.Q.value = 1.2
+      henv.gain.setValueAtTime(peak * 0.6, at)
+      henv.gain.setTargetAtTime(0, at, 0.0012)
+      hiss.connect(bp)
+      bp.connect(henv)
       henv.connect(bus)
       hiss.start(at)
-      hiss.stop(at + 0.015)
-      nodes.push(hiss, hp, henv)
+      hiss.stop(at + 0.006)
+      nodes.push(hiss, bp, henv)
     }
     osc.onended = () => {
       for (const n of nodes) n.disconnect()
