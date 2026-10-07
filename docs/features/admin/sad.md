@@ -402,10 +402,19 @@ sequenceDiagram
 
 | # | Title | Status | Section |
 |---|---|---|---|
-| <NNNN> | <imperative — e.g. "Use a sliding-window counter for rate limiting"> | Accepted | §<N> |
-| <NNNN> | <imperative — e.g. "Co-locate the worker in the API process"> | Accepted | §<N> |
+| [0001](adr/0001-build-admin-as-backend-service-and-web-frontend.md) | Build the admin as a backend-service plus a web-frontend, background work inside the backend | Accepted | §4 |
+| [0002](adr/0002-ship-admin-ui-as-separate-strict-csp-entry.md) | Ship the admin UI as a separate admin.html entry with a strict CSP | Accepted | §4 |
+| [0003](adr/0003-host-admin-api-in-existing-backend-service.md) | Host the admin API as a router inside the existing FastAPI service | Accepted | §4 |
+| [0004](adr/0004-precompute-admin-read-model-in-firestore.md) | Precompute the admin read model as Firestore projections written at event time | Accepted | §4 |
+| [0005](adr/0005-store-runtime-config-in-firestore-with-public-status-mirror.md) | Store runtime config in Firestore with a public status mirror read directly by the site | Accepted | §4 |
+| [0006](adr/0006-authorize-admins-via-firestore-allowlist-with-60s-cache.md) | Authorize admins via a Firestore allowlist checked on every request with a 60-second cache | Accepted | §4 |
+| [0007](adr/0007-write-audit-atomically-or-before-the-effect.md) | Write the audit record atomically with Firestore changes, and before any non-Firestore effect | Accepted | §4 |
+| [0008](adr/0008-gate-every-cloud-job-through-one-admission-check.md) | Gate every cloud job through one admission check before the quota is consumed | Accepted | §5 |
+| [0009](adr/0009-search-emails-in-memory-over-a-compact-firestore-index.md) | Search emails in memory over a compact sharded Firestore index, caught up incrementally from users | Accepted | §5 |
+| [0010](adr/0010-count-daily-stats-live-and-freeze-after-nightly-reconciliation.md) | Count daily stats live at event time and freeze each day after a nightly reconciliation | Accepted | §5 |
+| [0011](adr/0011-purge-accounts-tombstone-first-with-idempotent-steps.md) | Purge accounts tombstone-first, with idempotent steps and the auth record deleted last | Accepted | §6 |
 
-ADR files live under `docs/features/<slug>/adr/NNNN-<title>.md`.
+ADR files live under `docs/features/admin/adr/NNNN-<title>.md`.
 
 ## 10. Quality requirements
 
