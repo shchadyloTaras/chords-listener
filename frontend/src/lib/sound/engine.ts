@@ -15,7 +15,7 @@ import type { NoteEvent } from './chordNotes'
 import { clamp, mulberry32 } from './dsp'
 import { startHandpanNote } from './handpanTone'
 import { harmoniumParams, renderHarmonium } from './harmonium'
-import { startPianoNote } from './piano'
+import { pianoParams, renderPiano } from './piano'
 import { pluckParams, pluckRelease, renderPluck, type PluckInstrument } from './pluck'
 import { roomImpulse } from './reverb'
 import { addSounding, clearSounding, touchSounding, type SoundingNote } from './sounding'
@@ -64,6 +64,10 @@ const BUS: Record<Instrument, { level: number; reverb: number }> = {
 const PLUCK_LEVEL = 0.55
 /** Per-key level of the cached harmonium notes (rendered at HARMONIUM_RMS); touch barely matters. */
 const HARMONIUM_LEVEL = 0.44
+/** Per-key level of the cached piano notes (rendered at PIANO_RMS; the touch's loudness is in the buffer). */
+const PIANO_LEVEL = 0.75
+/** Piano notes are rendered at touches this far apart (≤ 0.1 dB off; the cache stays small). */
+const PIANO_TOUCH_STEP = 0.02
 const BUFFER_CACHE_MAX = 48
 
 /** Perceptual volume curve of the chordSoundVolume setting (0..1). */
@@ -87,7 +91,7 @@ interface Graph {
   noise: AudioBuffer | null
 }
 
-/** Master → limiter → destination, the room, and a shared noise buffer (hammer / hand attacks). */
+/** Master → limiter → destination, the room, and a shared noise buffer (hand attacks). */
 function buildGraph(ctx: BaseAudioContext, volume: number): Graph {
   const master = ctx.createGain()
   master.gain.value = volumeGain(volume)
@@ -143,8 +147,8 @@ function busFor(g: Graph, instrument: Instrument): GainNode {
   return bus
 }
 
-// Plucked strings (per instrument, pitch, sample rate) and harmonium keys (per pitch, hold, sample
-// rate) are rendered once; least recently used dropped.
+// Plucked strings (per instrument, pitch, sample rate), harmonium keys (per pitch, hold, sample rate)
+// and piano keys (per pitch, touch, hold, sample rate) are rendered once; least recently used dropped.
 const bufferCache = new Map<string, AudioBuffer>()
 
 function cachedBuffer(ctx: BaseAudioContext, key: string, render: () => Float32Array): AudioBuffer {
@@ -192,10 +196,25 @@ function startHarmoniumNote(ctx: BaseAudioContext, when: number, midi: number, v
   return { out, level, sources: [src], nodes: [src, out], end: when + buffer.duration, release: hold }
 }
 
+/** A piano key held `hold` seconds: its rendered note (the dampers and the key-up thud are in the buffer). */
+function startPianoNote(ctx: BaseAudioContext, when: number, midi: number, velocity: number, hold: number): VoiceParts {
+  const touch = Math.round(clamp(velocity, 0, 1) / PIANO_TOUCH_STEP) * PIANO_TOUCH_STEP
+  const params = pianoParams(midi, touch, hold, ctx.sampleRate)
+  const buffer = cachedBuffer(ctx, `piano:${midi}:${touch.toFixed(2)}:${hold}:${ctx.sampleRate}`, () => renderPiano(params))
+  const src = ctx.createBufferSource()
+  src.buffer = buffer
+  const level = PIANO_LEVEL
+  const out = ctx.createGain()
+  out.gain.value = level
+  src.connect(out)
+  src.start(when)
+  return { out, level, sources: [src], nodes: [src, out], end: when + buffer.duration, release: hold }
+}
+
 function startVoice(g: Graph, instrument: Instrument, kind: PlayKind, n: NoteEvent, when: number): VoiceParts {
   switch (instrument) {
     case 'piano':
-      return startPianoNote(g.ctx, when, n.midi, n.velocity, KEY_HOLD[kind], g.noise)
+      return startPianoNote(g.ctx, when, n.midi, n.velocity, KEY_HOLD[kind])
     case 'harmonium':
       return startHarmoniumNote(g.ctx, when, n.midi, n.velocity, KEY_HOLD[kind])
     case 'handpan':
