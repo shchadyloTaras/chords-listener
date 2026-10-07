@@ -87,30 +87,50 @@ target_surfaces: []  # filled in §4 — subset of: backend-service | web-fronte
      Trust boundary — the line past which you don't trust data without checking it.
      Never N/A — greenfield still draws the planned actors + external systems. -->
 
-<Business context in 2–3 sentences. What the system does for whom.>
+Chords Listener розпізнає акорди пісень у браузері (Гість) і на хмарному сервері (Користувач акаунта: серверний аналіз, хмарна бібліотека, денна квота). Адмінка додає третю роль — Адміністратора, який бачить і керує хмарною частиною: переглядає користувачів акаунтів, історію задач і денну статистику, змінює квоти, ліміти, хмарні обмеження, видалення та налаштування сервісу. Межа довіри (лінія, за якою дані не довіряють без перевірки) проходить по серверу: браузер — включно з кодом адмінки, який публічний на GitHub Pages — ненадійний, кожну адмінську дію й читання перевіряє сервер.
 
-<!-- brownfield: <one-line scan summary> (or «N/A — greenfield repo» if no source existed) -->
+<!-- brownfield: React 19 SPA на GitHub Pages + FastAPI на Cloud Run (max 1 instance, scale-to-zero) + Firestore/GCS + Firebase Auth; кастомних claims, ролей і runtime-налаштувань ще немає; задачі лише в пам'яті. -->
 
 **External systems (in / out):**
 
 | Actor or system | Type | Interaction |
 |---|---|---|
-| <author role> | Person | <what they do> |
-| <external service> | System (internal/external) | <interaction> |
-| <identity provider> | System (external) | <provides auth tokens> |
+| Адміністратор | Person | Відкриває адмінку, шукає користувачів, виконує дії, змінює налаштування сервісу |
+| Користувач акаунта | Person | Запускає хмарні аналізи й транскрипції; бачить пояснення хмарного обмеження / паузи; бачить банер |
+| Гість | Person | Користується сайтом без акаунта; бачить банер обслуговування й стан перемикачів |
+| Скрипт власника | Tool (out-of-band) | Видає й знімає позначку адміністратора; єдиний шлях видачі прав (spec §3) |
+| Firebase Authentication | System (external, Google) | Вхід email+пароль, ID-токени (зокрема час входу для повторної перевірки пароля), облікові записи; остаточне видалення акаунта |
+| Cloud Scheduler | System (external, Google) | Періодично будить сервер для остаточних видалень, закриття денної статистики й очищення історії — бо сервер спить і сам не прокидається |
+| GitHub Pages | System (external) | Віддає статичний код сайту й адмінки; без даних і секретів |
+| YouTube | System (external) | Джерело завантажень (існуюче); перемикач сервісу вимикає серверні завантаження |
 
-**C4 Context (L1):** <!-- syntax → references/c4-mermaid-syntax.md. Real names, no <placeholder> stubs. -->
+External notifications (email, алерти) — свідомо **немає** у v1 (spec §3 Non-goals, §8 OQ про листи).
+
+**C4 Context (L1):**
 
 ```mermaid
 C4Context
-    title <feature> — System Context
+    title admin — System Context
 
-    Person(actor, "<Actor role>", "<intent>")
-    System(app, "<Our system>", "<one-sentence description>")
-    System_Ext(ext, "<External system>", "<one-sentence description>")
+    Person(admin, "Адміністратор", "керує хмарою через адмінку")
+    Person(user, "Користувач акаунта", "хмарні аналізи, бібліотека, денна квота")
+    Person(guest, "Гість", "розпізнавання лише в браузері")
+    Person_Ext(owner, "Скрипт власника", "видає і знімає позначку адміністратора")
 
-    Rel(actor, app, "<interaction>", "<protocol>")
-    Rel(app, ext, "<interaction>", "<protocol>")
+    System(cl, "Chords Listener", "сайт + хмарний сервер + адмінка; дані у Firestore і GCS")
+    System_Ext(fbauth, "Firebase Authentication", "вхід, ID-токени, облікові записи")
+    System_Ext(sched, "Cloud Scheduler", "періодично будить сервер для фонових робіт")
+    System_Ext(pages, "GitHub Pages", "статичний код сайту й адмінки")
+    System_Ext(yt, "YouTube", "джерело завантажень")
+
+    Rel(admin, cl, "переглядає й змінює стан хмари", "HTTPS")
+    Rel(user, cl, "аналізи, бібліотека", "HTTPS")
+    Rel(guest, cl, "бачить банер і стан перемикачів", "HTTPS")
+    Rel(owner, cl, "записує позначку адміністратора", "service account")
+    Rel(cl, fbauth, "перевіряє токени, видаляє акаунти", "HTTPS")
+    Rel(sched, cl, "будить для видалень і статистики", "HTTPS + OIDC")
+    Rel(pages, cl, "віддає код сайту", "HTTPS")
+    Rel(cl, yt, "завантажує аудіо", "HTTPS")
 ```
 
 ## 4. Solution strategy
