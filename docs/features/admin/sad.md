@@ -52,23 +52,31 @@ target_surfaces: []  # filled in §4 — subset of: backend-service | web-fronte
      Never N/A — every feature inherits at least Conventions + Technical. -->
 
 **Technical.**
-- <Language + version>
-- <Framework(s) + version>
-- <Datastore(s) + version>
-- <Architecture convention — e.g. the layering style from the project convention file>
+- Frontend: React 19.2 + TypeScript 6.0, Vite 8.3, Tailwind CSS 4.3, zustand 5, Firebase JS SDK 12.19; власний hash-роутинг (`frontend/src/hooks/useRoute.ts`); i18n — `frontend/src/i18n/{uk,en}.ts` без бібліотеки.
+- Хостинг сайту: **GitHub Pages** (`.github/workflows/pages.yml`, base `/chords-listener/`) — статичний, HTTP-заголовки задати не можна, тому політика безпеки сторінки (CSP) можлива лише через `<meta http-equiv>`.
+- Backend: Python 3.11 (uv) + FastAPI на **Cloud Run** europe-west1, gen2, 4 vCPU / 16 GiB, CPU always allocated, concurrency 16, **min 0 / max 1 instance**, засинає після ~15 хв без запитів, холодний старт ~9 с (`docs/CLOUD.md`, `scripts/deploy_cloud.sh`). YouTube із сервера працює лише через Direct VPC egress + Cloud NAT.
+- Дані: Firestore (eur3, без кастомних індексів) через REST-клієнт сервісного акаунта (`backend/app/firestore.py`, без gRPC/Admin SDK); GCS-бакет, змонтований у `/data` (GCSFuse).
+- Денні лічильники квоти — файл `users/<uid>/quota.json` під потоковим замком у процесі (`backend/app/quotas.py`) — коректно лише завдяки max 1 instance. Задачі — лише в пам'яті (`backend/app/jobs.py`), зникають при рестарті.
+- Auth: Firebase Auth (email + пароль); сервер сам перевіряє ID-токен RS256 (`backend/app/auth.py`); кастомних claims і ролей немає.
+- Налаштування сервера — лише env-змінні (`CHORDS_QUOTA_*`, `CHORDS_PUBLISH`…): сьогодні зміна лімітів = повторне розгортання.
+- Архітектурна конвенція backend: API-шар (`main.py`) → бізнес (`jobs`, `storage`, `quotas`, `publish`) → інфраструктура (`auth`, `sources`, `firestore`, `gcs`).
 
 **Organisational.**
-- <Effort budget — e.g. 3 person-weeks>
-- <Deadline — e.g. 2026-Q3 hard>
-- <Team composition>
+- Один розробник-власник (він же Адміністратор).
+- Постачання трьома етапами (spec §1): перегляд → дії з користувачами → налаштування сервісу.
+- Дедлайн і бюджет зусиль: `<TBD by PM>` — див. §11.
 
 **Conventions.**
-- <Link to the project's convention file>
-- <Naming, ID strategy, error-handling pattern>
+- Відповідь з помилкою `{"detail": str, "code": ErrorCode}`, HTTP-статус з `STATUS_BY_CODE` (`backend/app/main.py`); коди — enum `ErrorCode` (`backend/app/models.py`).
+- Логування — модуль `logging`, логери `chords.*`, stdout → Cloud Logging.
+- Типи API — `frontend/src/types.ts` дзеркалить Pydantic-моделі `backend/app/models.py`.
+- Тести: pytest (`backend/tests`, емулятори Firebase Auth/Storage/Firestore), vitest (`frontend/src/**/*.test.ts`); CI — GitHub Actions (lint + test + build).
+- Правила доступу клієнтів — `firestore.rules`, `storage.rules`: «лише власник», сервісний акаунт їх обходить.
 
 **Regulatory / external.**
-- <e.g. data-retention / deletion behaviour per ADR-NNNN>
-- <e.g. applicable compliance controls, or N/A with a reason>
+- Особисті дані користувачів (зокрема з ЄС): запит на видалення виконується остаточно протягом 24 год після кінця 7-денного вікна; в журналі й історії задач лишаються лише знеособлені записи (spec §6, §6.1).
+- Журнал дій адміністратора зберігається ≥ 365 днів і незмінний; історія задач — ≥ 90 днів.
+- Security review обов'язковий (spec §6.1).
 
 ## 3. Context and scope
 
