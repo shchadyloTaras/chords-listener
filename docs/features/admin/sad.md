@@ -255,23 +255,90 @@ C4Container
      📌 e.g. «author → web: composes draft → web → content API: save». Seed the primary flow(s) here;
      the `sequences` stage then covers every §5 AC (no cap). Never N/A for M+; XS/S keeps ≥1 happy-path flow. -->
 
-**Critical flow 1: <flow name>**
+Seed-потоки нижче покривають три найризиковіші механізми: «без журналу — без дії» (ADR-0007), шлюз допуску (ADR-0008) і остаточне видалення. Етап `sequences` додає потоки для кожного AC (огляд, пошук і картка з журналом переглядів, скидання квоти, персональний ліміт, налаштування, банер, повторний вхід, ліміт спроб не-адміністраторів). Учасники — контейнери з §5.
+
+**Critical flow 1: дія адміністратора з журналом (хмарне обмеження — AC-16, AC-17, AC-31, AC-33)**
 
 ```mermaid
 sequenceDiagram
-    actor Actor
-    participant Web
-    participant Service
-    participant Store
-    Actor->>Web: <action>
-    Web->>Service: <call>
-    Service->>Store: <write>
-    Store-->>Service: ok
-    Service-->>Web: result
-    Web-->>Actor: confirmation
+    actor A as Адміністратор
+    participant UI as Адмінка admin.html
+    participant API as Хмарний сервер
+    participant FS as Firestore
+    A->>UI: накладає хмарне обмеження з причиною
+    UI->>API: адмінська дія з ID-токеном
+    API->>API: перевіряє токен і allowlist адміністраторів, кеш до 60 с
+    alt не адміністратор
+        API-->>UI: та сама відповідь, що й на неіснуючу адресу
+    else ціль - власний акаунт адміністратора
+        API->>FS: запис журналу - відхилена спроба з причиною
+        API-->>UI: відмова з поясненням
+    else адміністратор, інший користувач
+        API->>FS: один batched write - стан користувача і запис журналу
+        alt запис не вдався
+            FS-->>API: помилка
+            API-->>UI: зміну не застосовано, треба повторити
+        else успіх
+            FS-->>API: ok
+            API-->>UI: новий стан картки
+            UI-->>A: картка показує хмарне обмеження, причину і дату
+        end
+    end
 ```
 
-**Critical flow 2: <e.g. async event propagation>** — <if applicable, otherwise N/A>.
+**Critical flow 2: прийом хмарної задачі через шлюз допуску (AC-13, AC-18, AC-26, AC-27)**
+
+```mermaid
+sequenceDiagram
+    actor U as Користувач акаунта
+    participant Site as Сайт
+    participant FS as Firestore
+    participant API as Хмарний сервер
+    participant GCS as Бакет
+    Site->>FS: читає публічний стан сервісу, якщо він старший за 5 хв
+    FS-->>Site: банер і стан перемикачів
+    U->>Site: вставляє посилання на YouTube
+    alt завантаження з YouTube вимкнено за публічним станом
+        Site-->>U: пропонує Слухати у вкладці, сервер не викликається
+    else
+        Site->>API: хмарна задача з ID-токеном
+        API->>FS: стан користувача і налаштування, якщо кеш застарів
+        API->>API: шлюз допуску - обмеження, перемикачі, чинний ліміт
+        alt відмова
+            API-->>Site: код відмови, квота не змінюється
+            Site-->>U: пояснення і розпізнавання в браузері
+        else допущено
+            API->>GCS: зараховує в денну квоту під замком
+            API->>FS: запис історії задачі і лічильники дня
+            API-->>Site: задачу прийнято
+        end
+    end
+```
+
+**Critical flow 3: остаточне видалення після 7-денного вікна (AC-22)**
+
+Порядок кроків і ідемпотентність → [ADR-0011](adr/0011-purge-accounts-tombstone-first-with-idempotent-steps.md).
+
+```mermaid
+sequenceDiagram
+    participant Sch as Cloud Scheduler
+    participant API as Хмарний сервер
+    participant FS as Firestore
+    participant GCS as Бакет
+    participant Auth as Firebase Authentication
+    Sch->>API: щоденний виклик фонових робіт з OIDC-токеном
+    API->>API: перевіряє OIDC-токен планувальника
+    API->>FS: заплановані видалення, у яких вікно минуло
+    loop кожен такий користувач, кожен крок ідемпотентний
+        API->>FS: надгробок uid - пізні результати задач відкидаються
+        API->>GCS: стирає треки, аудіо, правки і квоти
+        API->>FS: стирає бібліотеку, users, довідник, ліміти і email з індексу пошуку
+        API->>FS: знеособлює записи журналу та історії задач
+        API->>Auth: видаляє обліковий запис
+        API->>FS: позначає видалення завершеним
+    end
+    API->>FS: звіряє і заморожує вчорашній день статистики
+```
 
 ## 7. Deployment view
 
