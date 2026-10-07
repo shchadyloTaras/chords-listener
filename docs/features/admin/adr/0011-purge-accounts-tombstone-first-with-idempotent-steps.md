@@ -7,7 +7,7 @@ feature_size: "L"
 ticket: "docs/features/admin/spec.md"
 ---
 
-# 0011 — Purge accounts tombstone-first, with idempotent steps and the auth record deleted last
+# 0011 — Purge accounts tombstone-first, with idempotent steps and the auth record deleted after all data
 
 - **Status:** Accepted
 - **Date:** 2026-10-07

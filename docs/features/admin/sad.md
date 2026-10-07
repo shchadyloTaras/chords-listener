@@ -100,11 +100,11 @@ Chords Listener розпізнає акорди пісень у браузері
 | Гість | Person | Користується сайтом без акаунта; бачить банер обслуговування й стан перемикачів |
 | Скрипт власника | Tool (out-of-band) | Видає й знімає позначку адміністратора; єдиний шлях видачі прав (spec §3) |
 | Firebase Authentication | System (external, Google) | Вхід email+пароль, ID-токени (зокрема час входу для повторної перевірки пароля), облікові записи; остаточне видалення акаунта |
-| Cloud Scheduler | System (external, Google) | Періодично будить сервер для остаточних видалень, закриття денної статистики й очищення історії — бо сервер спить і сам не прокидається |
+| Cloud Scheduler | System (external, Google) | Періодично будить сервер для остаточних видалень, закриття денної статистики й інших фонових робіт — бо сервер спить і сам не прокидається |
 | GitHub Pages | System (external) | Віддає статичний код сайту й адмінки; без даних і секретів |
 | YouTube | System (external) | Джерело завантажень (існуюче); перемикач сервісу вимикає серверні завантаження |
 
-External notifications (email, алерти) — свідомо **немає** у v1 (spec §3 Non-goals, §8 OQ про листи).
+Сповіщень користувачам (листів) і алертів в адмінці — свідомо **немає** у v1 (spec §3 Non-goals, §8 OQ про листи). Єдиний виняток — два операційні алерти Cloud Monitoring власнику за NFR (прострочене видалення, розбіжність статистики) у консолі хмари, як бюджетні сповіщення (§7).
 
 **C4 Context (L1):**
 
@@ -126,7 +126,7 @@ C4Context
     Rel(admin, cl, "переглядає й змінює стан хмари", "HTTPS")
     Rel(user, cl, "аналізи, бібліотека", "HTTPS")
     Rel(guest, cl, "бачить банер і стан перемикачів", "HTTPS")
-    Rel(owner, cl, "записує позначку адміністратора", "service account")
+    Rel(owner, cl, "записує позначку адміністратора", "ADC власника")
     Rel(cl, fbauth, "перевіряє токени, видаляє акаунти", "HTTPS")
     Rel(sched, cl, "будить для видалень і статистики", "HTTPS + OIDC")
     Rel(pages, cl, "віддає код сайту", "HTTPS")
@@ -143,7 +143,7 @@ C4Context
 
 **Top strategic choices (the seeds for ADRs):**
 
-1. **Дві поверхні: `backend-service` + `web-frontend`; фонові роботи — всередині сервера** ([ADR-0001](adr/0001-build-admin-as-backend-service-and-web-frontend.md)). Адмінський API й внутрішні фонові ендпоінти (остаточне видалення, закриття денної статистики, очищення історії) живуть в існуючому FastAPI-сервісі, а Cloud Scheduler будить їх. Так фонові роботи бачать ті самі замки, що й задачі (AC-22), і лишається один серверний деплой (§2).
+1. **Дві поверхні: `backend-service` + `web-frontend`; фонові роботи — всередині сервера** ([ADR-0001](adr/0001-build-admin-as-backend-service-and-web-frontend.md)). Адмінський API й внутрішні фонові ендпоінти (остаточне видалення, звірка й закриття денної статистики, закриття «завислих» задач, синхронізація індексу email; строки зберігання — TTL-політики Firestore, не фонова робота) живуть в існуючому FastAPI-сервісі, а Cloud Scheduler будить їх. Так фонові роботи бачать ті самі замки, що й задачі (AC-22), і лишається один серверний деплой (§2).
 2. **Адмінка — окрема точка входу `admin.html` із суворою CSP** ([ADR-0002](adr/0002-ship-admin-ui-as-separate-strict-csp-entry.md)). Та сама Vite-збірка й ті самі компоненти, Tailwind-токени, i18n і вхід Firebase, але без TF.js і плеєра та з `<meta>`-CSP, що забороняє inline-скрипти й eval. Друга лінія захисту від stored XSS (ціль якості №1) без ризику для основного сайту.
 3. **Адмінський API — роутер `/api/admin/*` в існуючому сервері** ([ADR-0003](adr/0003-host-admin-api-in-existing-backend-service.md)). Скидання квоти проходить через той самий об'єкт `Quotas` і той самий замок, що й прийом аналізу (AC-12b), а задачі, що виконуються зараз, читаються з пам'яті `JobManager` (AC-01). Ціна — залежність від max-instances=1 (§11).
 4. **Модель читання — заздалегідь пораховані проєкції у Firestore** ([ADR-0004](adr/0004-precompute-admin-read-model-in-firestore.md)). Сервер у момент подій пише довідник користувачів, запис кожної задачі, атомарні інкременти денної статистики й журнал у закриті для клієнтів колекції; кожен екран — кілька десятків читань (ціль якості №2: ≤ 200 читань на екран). Строки зберігання — TTL-політики Firestore.
@@ -173,7 +173,7 @@ Each tactical decision in later sections should trace to one of these seeds. Tac
 - **Єдиний шлюз допуску** ([ADR-0008](adr/0008-gate-every-cloud-job-through-one-admission-check.md)) — усі п'ять входів хмарних задач проходять `admission.py` до `Quotas.consume`: обмеження/видалення → перемикачі → чинний ліміт → consume; відмова нічого не рахує.
 - **Пошук email у пам'яті над компактним індексом** ([ADR-0009](adr/0009-search-emails-in-memory-over-a-compact-firestore-index.md)) — шарди uid → email у Firestore, підрядок шукається на сервері; нові реєстрації дотягуються з `users` перед пошуком.
 - **Денна статистика: живі лічильники + нічна звірка й заморожування** ([ADR-0010](adr/0010-count-daily-stats-live-and-freeze-after-nightly-reconciliation.md)).
-- **Історія задач** пишеться з `JobManager` при прийомі й при завершенні задачі (ADR-0004); задача, що «зависла» через рестарт інстансу, закривається щоденною фоновою роботою з причиною збою «Інше». `ErrorCode` відображається на фіксований список причин збою з підписами uk/en.
+- **Історія задач** пишеться з `JobManager` при прийомі й при завершенні задачі (ADR-0004); задача, що «зависла» через рестарт інстансу, закривається фоновою роботою (двічі на добу, §7) з причиною збою «Інше». `ErrorCode` відображається на фіксований список причин збою з підписами uk/en.
 
 **Internal decomposition:**
 
@@ -227,7 +227,7 @@ C4Container
     }
 
     System_Ext(fbauth, "Firebase Authentication", "вхід, ID-токени, облікові записи")
-    System_Ext(sched, "Cloud Scheduler", "щоденний виклик фонових робіт")
+    System_Ext(sched, "Cloud Scheduler", "будить фонові роботи двічі на добу")
     System_Ext(yt, "YouTube", "джерело завантажень")
 
     Rel(admin, adminui, "переглядає й змінює", "HTTPS")
@@ -242,7 +242,7 @@ C4Container
     Rel(api, fbauth, "перевіряє токени, читає й видаляє акаунти", "HTTPS")
     Rel(api, yt, "завантажує аудіо", "HTTPS")
     Rel(sched, api, "будить фонові роботи", "HTTPS + OIDC")
-    Rel(owner, fs, "пише allowlist адміністраторів", "service account")
+    Rel(owner, fs, "пише allowlist адміністраторів", "ADC власника")
 ```
 
 ## 6. Runtime view
@@ -326,7 +326,7 @@ sequenceDiagram
     participant FS as Firestore
     participant GCS as Бакет
     participant Auth as Firebase Authentication
-    Sch->>API: щоденний виклик фонових робіт з OIDC-токеном
+    Sch->>API: виклик фонових робіт двічі на добу з OIDC-токеном
     API->>API: перевіряє OIDC-токен планувальника
     API->>FS: заплановані видалення, у яких вікно минуло
     loop кожен такий користувач, кожен крок ідемпотентний
@@ -354,7 +354,7 @@ sequenceDiagram
 **Infrastructure additions:**
 - **Cloud Scheduler:** два завдання → внутрішній ендпоінт фонових робіт з OIDC-токеном окремого сервісного акаунта `chords-scheduler@…` (роль `run.invoker`); сервер перевіряє підпис, аудиторію й email цього акаунта.
 - **Firestore:** TTL-політики (історія задач — `expireAt` = +90 днів; журнал дій адміністратора — `expireAt` = +400 днів, щоб гарантувати ≥ 365); складені індекси для фільтрів історії задач (результат × причина × джерело × час) і журналу (адміністратор × користувач × тип × час); `firestore.rules` — публічний документ стану сервісу: `allow read: if true`, запис заборонено; усі адмінські колекції: доступ клієнтів заборонено (лише сервісний акаунт).
-- **Скрипт власника** `scripts/admin_grant.py` — видає/знімає позначку адміністратора через сервісний акаунт; запускається локально власником.
+- **Скрипт власника** `scripts/admin_grant.py` — видає/знімає позначку адміністратора з власними Google-правами власника (Application Default Credentials після `gcloud auth application-default login`), без файлу ключа й без сервісного акаунта сервера; запускається локально власником. Код сервера не має шляху запису в allowlist.
 - **Збірка й CI:** друга точка входу Vite `admin.html`; CI-перевірка, що бандл адмінки не містить TF.js / моделей і що в `admin.html` є CSP-`<meta>`.
 - **Конфіг сервера:** env-змінні `CHORDS_QUOTA_*` лишаються лише початковими значеннями для документа налаштувань (ADR-0005).
 
@@ -412,7 +412,7 @@ sequenceDiagram
 | [0008](adr/0008-gate-every-cloud-job-through-one-admission-check.md) | Gate every cloud job through one admission check before the quota is consumed | Accepted | §5 |
 | [0009](adr/0009-search-emails-in-memory-over-a-compact-firestore-index.md) | Search emails in memory over a compact sharded Firestore index, caught up incrementally from users | Accepted | §5 |
 | [0010](adr/0010-count-daily-stats-live-and-freeze-after-nightly-reconciliation.md) | Count daily stats live at event time and freeze each day after a nightly reconciliation | Accepted | §5 |
-| [0011](adr/0011-purge-accounts-tombstone-first-with-idempotent-steps.md) | Purge accounts tombstone-first, with idempotent steps and the auth record deleted last | Accepted | §6 |
+| [0011](adr/0011-purge-accounts-tombstone-first-with-idempotent-steps.md) | Purge accounts tombstone-first, with idempotent steps and the auth record deleted after all data | Accepted | §6 |
 
 ADR files live under `docs/features/admin/adr/NNNN-<title>.md`.
 
@@ -449,10 +449,10 @@ Each top-3 goal from §1 expanded into a full scenario (numbers verbatim from sp
 | Latency огляду, сервер працює | p95 ≤ 2 с | вимір у браузері для 20 відкриттів адмінки, сервер прогрітий |
 | Latency огляду, сервер спав | p95 ≤ 15 с | вимір від холодного старту, 5 спроб |
 | Latency пошуку користувача | p95 ≤ 1 с при 10 000 користувачів | тест із синтетичними 10 000 користувачами (індекс email ADR-0009) |
-| Повнота видалення | 100% запланованих видалень завершено протягом 24 год після кінця 7-денного вікна; 0 залишків особистих даних і вмісту | щоденна перевірка «заплановані vs стерті» + пошук об'єктів і email видалених користувачів, зокрема в індексі пошуку; алерт `deletion_overdue > 0` |
+| Повнота видалення | 100% запланованих видалень завершено протягом 24 год після кінця 7-денного вікна; 0 залишків особистих даних і вмісту (знеособлені записи журналу й історії задач без email і назв пісень — не залишки) | щоденна перевірка «заплановані vs стерті» + пошук об'єктів і email видалених користувачів, зокрема в індексі пошуку; алерт `deletion_overdue > 0` |
 | Зберігання журналу | ≥ 365 днів, записи незмінні | перевірка TTL-політики (`expireAt` = +400 днів) + тест «змінити чи видалити запис через адмінку чи клієнтський доступ неможливо» |
 | Зберігання історії задач | ≥ 90 днів | перевірка TTL-політики й найстарішого запису |
-| Точність денної статистики | розбіжність 0 з історією задач за ту ж добу UTC, зокрема знеособлених задач; підсумки завершеного дня не змінюються; відновлені дні не звіряються | нічна звірка (ADR-0010) + алерт `stats_mismatch > 0`; тест «видалення користувача не змінює заморожений день» |
+| Точність денної статистики | для кожного дня після запуску фічі, за який ще зберігається історія задач (90 днів): денні підсумки = кількості задач в історії за ту ж добу UTC, зокрема знеособлених задач видалених користувачів (розбіжність 0); підсумки завершеного дня після його кінця не змінюються; відновлені дні не звіряються | нічна звірка (ADR-0010) + алерт `stats_mismatch > 0`; тест «видалення користувача не змінює заморожений день» |
 | Availability адмінки | ≥ 99% адмінських запитів за місяць без помилки сервера (холодний старт — затримка, не помилка) | лог-метрика `admin_request` за статусом |
 
 ## 11. Risks and technical debt
@@ -473,7 +473,7 @@ Each top-3 goal from §1 expanded into a full scenario (numbers verbatim from sp
 | Публічний документ стану сервісу може випадково отримати зайві поля (ліміти, особисті дані) | Medium | Білий список полів у `admin/settings.py` + тест `firestore.rules` і вмісту документа | Security Lead |
 | Повторна публікація з `publish-pending.json` або пізня задача може відновити трек видаленого користувача | Medium | Надгробок uid (ADR-0011) перевіряється у publish-шляху й шлюзі допуску; інтеграційний тест | Backend |
 | Власний REST-клієнт Firestore (`backend/app/firestore.py`) ще не вміє batched write, транзакції, запити й count-агрегації | Medium | Розширити клієнт першою задачею етапу 1, тести на емуляторі Firestore | Backend |
-| Скрипт власника працює з правами сервісного акаунта — шлях до видачі прав адміністратора | Medium | Скрипт через `gcloud auth` власника (без файлу ключа на диску); зміни allowlist видно в Cloud Audit Logs | Власник |
+| Скрипт власника — єдиний шлях видачі прав адміністратора; будь-хто з IAM-доступом на запис у Firestore проєкту теж може змінити allowlist | Medium | Скрипт працює з ADC власника (без файлу ключа на диску); IAM-доступ до проєкту — лише власник; зміни allowlist видно в Cloud Audit Logs під іменем власника; код сервера не пише в allowlist | Власник |
 | Brownfield: задачі живуть лише в пам'яті — рестарт інстансу лишає записи історії в стані «виконується» | Low | Фонова робота закриває їх із причиною збою «Інше» (≤ 12 год) | Backend |
 | Open architectural decision: дедлайн і бюджет зусиль на три етапи | Open question | Resolve before `sdd:tasks`; §2 Organisational — `<TBD by PM>` | Власник |
 | Open question (spec §8): адреса чи канал підтримки в поясненні хмарного обмеження | Open question | Resolve before `sdd:tasks`; default — email власника з README | Власник |
