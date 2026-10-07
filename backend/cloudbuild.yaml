@@ -1,5 +1,6 @@
 # Cloud Build: backend/Dockerfile -> Artifact Registry. Run by scripts/deploy_cloud.sh:
-#   gcloud builds submit backend --config backend/cloudbuild.yaml --substitutions _IMAGE=<repo>/api,_TAG=<tag>
+#   gcloud builds submit backend --config backend/cloudbuild.yaml --region europe-west1 --substitutions _IMAGE=<repo>/api,_TAG=<tag>
+# The build runs in the repository's region, so pulling the cache image is not cross-region egress.
 # The previous :latest image seeds the layer cache, so code-only redeploys skip the dependency layers.
 steps:
   - id: pull-cache

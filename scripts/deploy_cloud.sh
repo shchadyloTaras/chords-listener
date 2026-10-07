@@ -181,11 +181,13 @@ SMOKE_KEY="$(secret CHORDS_SMOKE_KEY)"
 if [[ -z "${SKIP_BUILD:-}" ]]; then
   TAG="${IMAGE_TAG:-$(date -u +%Y%m%d-%H%M%S)}"
   log "Cloud Build: $IMAGE:$TAG"
-  BUILD_ID=$(gc builds submit "$ROOT/backend" --config "$ROOT/backend/cloudbuild.yaml" \
+  # the build runs in the image's region: the cache pull of the ~0.9 GB previous image stays inside
+  # it (from the global pool it was billed as intercontinental Artifact Registry egress)
+  BUILD_ID=$(gc builds submit "$ROOT/backend" --config "$ROOT/backend/cloudbuild.yaml" --region "$REGION" \
     --substitutions "_IMAGE=$IMAGE,_TAG=$TAG" --async --format='value(id)')
-  echo "build $BUILD_ID: https://console.cloud.google.com/cloud-build/builds/$BUILD_ID?project=$PROJECT"
+  echo "build $BUILD_ID: https://console.cloud.google.com/cloud-build/builds;region=$REGION/$BUILD_ID?project=$PROJECT"
   while true; do
-    STATUS=$(gc builds describe "$BUILD_ID" --format='value(status)')
+    STATUS=$(gc builds describe "$BUILD_ID" --region "$REGION" --format='value(status)')
     case "$STATUS" in
       SUCCESS) break ;;
       FAILURE|INTERNAL_ERROR|TIMEOUT|CANCELLED|EXPIRED)
@@ -200,7 +202,7 @@ if [[ -z "${SKIP_BUILD:-}" ]]; then
   done
   echo "build finished ($(elapsed))"
   # the uploaded source archive is no longer needed
-  SRC=$(gc builds describe "$BUILD_ID" --format='value(source.storageSource.bucket,source.storageSource.object)' | tr '\t' '/')
+  SRC=$(gc builds describe "$BUILD_ID" --region "$REGION" --format='value(source.storageSource.bucket,source.storageSource.object)' | tr '\t' '/')
   [[ -n "$SRC" && "$SRC" != "/" ]] && gc storage rm "gs://$SRC" >/dev/null 2>&1 || true
   DEPLOY_IMAGE="$IMAGE:$TAG"
 else
