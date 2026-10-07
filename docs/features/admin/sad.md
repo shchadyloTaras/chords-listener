@@ -378,13 +378,20 @@ sequenceDiagram
 
 | Concept | Convention | Where defined |
 |---|---|---|
-| Logging | <e.g. structured, fields `module=<name>`> | <convention file §X or here> |
-| Authentication | <e.g. token-based via middleware> | <convention file §X> |
-| Error handling | <e.g. domain sentinel → ports error mapping → JSON> | <convention file §X> |
-| ID strategy | <e.g. sortable time-based ID in the app layer> | <convention file §X> |
-| Internationalisation | <e.g. N/A, single language> | — |
-| Observability | <e.g. tracing on the request boundary> | — |
-| Events | <module-specific patterns, if any> | <here> |
+| Logging | Існуючі логери `chords.*` + новий `chords.admin`, stdout → Cloud Logging. **У логах лише uid — ніколи email, назви пісень, тексти банера чи причини обмеження** (інакше логи стають залишками після остаточного видалення) | `backend/app/*` (конвенція репо) + тут |
+| Authentication | Існуючий middleware перевірки Firebase ID-токена; додатково віддає `auth_time` | `backend/app/auth.py` |
+| Authorization | Allowlist адміністраторів у Firestore, перевірка на кожен `/api/admin/*`, кеш ≤ 60 с; не-адміністратору — відповідь, ідентична 404 FastAPI на неіснуючу адресу | ADR-0006 |
+| Fresh login | Заплановане видалення й увімкнення паузи нових аналізів вимагають `auth_time` ≤ 15 хв, інакше адмінка просить повторний вхід | ADR-0006 |
+| Probe rate limit | Не-адміністратор: понад 30 запитів до `/api/admin/*` за ковзні 60 с — відхиляються без обробки; лічильник у пам'яті процесу (max 1 instance); адміністраторів не стосується | тут (AC-36) |
+| Audit | Пишуться зміни, відхилені спроби змін і перегляди особистих даних (пошук, картка); помилки валідації форм — ні. Batched write зі зміною або «журнал перший»; без запису — ні дії, ні даних | ADR-0007 |
+| Output encoding / XSS | Лише текстовий рендер React; `dangerouslySetInnerHTML` і `innerHTML` заборонені lint-правилом у `frontend/src/admin/`; сувора CSP у `admin.html`; тест із набором шкідливих рядків для назв, джерел, текстів помилок і email | ADR-0002 |
+| Error handling | Формат `{"detail", "code"}` + `STATUS_BY_CODE`; нові коди відмови допуску (обмежено / пауза / вимкнено) і адмінські коди валідації; тексти бекенду англійською, сайт і адмінка мапить коди на uk/en | `backend/app/main.py`, `models.py` |
+| Time & ID strategy | Усе в UTC; ключ доби `YYYY-MM-DD` з `utc_day()`; id запису історії = id задачі (`secrets.token_hex(8)`); журнал — авто-ID Firestore + поле часу для сортування | `backend/app/quotas.py`, `jobs.py` |
+| Caching | allowlist 60 с; стан користувача для допуску 60 с; налаштування 30 с (лінивий TTL); публічний стан на сайті 5 хв. **Жодного фонового опитування** ні на сервері, ні у відкритій вкладці адмінки (дані — при відкритті екрана, при поверненні до вкладки не частіше ніж раз на хвилину, або за «Оновити») | ADR-0005, AC-02 |
+| Concurrency | Денна квота — замок у процесі (`Quotas`), скидання під тим самим замком; стан користувача (обмеження ↔ заплановане видалення ↔ скасування) — Firestore-транзакція; ліміт 10 запланованих видалень за ковзні 60 хв на всіх адміністраторів — під замком у процесі + count-запит до журналу | ADR-0003, ADR-0008 |
+| Privacy | Адмінський API ніколи не віддає аудіо, акорди, правки — лише метадані пісень; причину хмарного обмеження бачать лише адміністратори; знеособлення при видаленні — без email і назв пісень | spec §6.1, ADR-0011 |
+| Internationalisation | Домен `admin` у `frontend/src/i18n/{uk,en}.ts`; підписи причин збою uk/en; банер обслуговування зберігається двома мовами, сайт показує мовою інтерфейсу | конвенція репо |
+| Events | Подій між модулями немає — хуки проєкцій у `JobManager` викликаються синхронно в процесі | ADR-0004 |
 
 ## 9. Architecture decisions
 
