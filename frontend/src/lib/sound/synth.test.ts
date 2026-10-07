@@ -13,7 +13,20 @@ import {
   renderHarmonium,
   speechCurve,
 } from './harmonium'
-import { inharmonicity, pianoEnvelope, pianoPartials } from './piano'
+import {
+  PIANO_REF_VELOCITY,
+  PIANO_RMS,
+  PIANO_SPECTRA,
+  PIANO_TAIL_MAX,
+  damperTime,
+  inharmonicity,
+  pianoDecay,
+  pianoParams,
+  pianoSpectrum,
+  pianoTouch,
+  pianoTuning,
+  renderPiano,
+} from './piano'
 import { allpassCoefficient, pluckParams, pluckRelease, renderPluck, type PluckInstrument } from './pluck'
 import { roomImpulse } from './reverb'
 import { COMPRESSOR_DELAY, contextToPerformance, timeRef } from './time'
@@ -142,43 +155,151 @@ describe('Karplus-Strong plucks', () => {
   })
 })
 
-describe('piano partials', () => {
-  it('are slightly stretched, quieter and faster-decaying towards the top', () => {
-    const p = pianoPartials(60, 0.7, 20000)
-    expect(p).toHaveLength(8)
-    const f0 = p[0].freq
-    expect(f0).toBeCloseTo(261.63 * Math.sqrt(1 + inharmonicity(60)), 1)
-    for (let i = 1; i < p.length; i++) {
-      expect(p[i].freq / f0).toBeGreaterThan(i + 1) // inharmonic stretch
-      expect(cents(p[i].freq, (i + 1) * f0)).toBeLessThan(25) // but only slightly
-      expect(p[i].fast).toBeLessThan(p[i - 1].fast)
-      expect(p[i].slow).toBeLessThan(p[i - 1].slow)
+describe('piano keys', () => {
+  const fs = 16000
+  /** Amplitude of the component at `freq` (Hann-windowed DFT over [from, from + seconds)). */
+  const amplitude = (x: Float32Array, freq: number, from: number, seconds: number) => {
+    const a = Math.round(from * fs)
+    const n = Math.round(seconds * fs)
+    let re = 0
+    let im = 0
+    let ws = 0
+    for (let i = 0; i < n; i++) {
+      const w = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / n)
+      re += x[a + i] * w * Math.cos((2 * Math.PI * freq * i) / fs)
+      im += x[a + i] * w * Math.sin((2 * Math.PI * freq * i) / fs)
+      ws += w
     }
-    expect(p[7].amp).toBeLessThan(p[0].amp * 0.2)
-    // a softer touch is darker
-    expect(pianoPartials(60, 0.3, 20000)[5].amp).toBeLessThan(p[5].amp)
-    // low notes ring longer; partials above the limit are dropped
-    expect(pianoPartials(40, 0.7, 20000)[0].slow).toBeGreaterThan(p[0].slow)
-    expect(pianoPartials(96, 0.7, 6000).length).toBeLessThan(8)
+    return (2 * Math.hypot(re, im)) / ws
+  }
+  const rms = (x: Float32Array, from: number, to: number) => {
+    let s = 0
+    const a = Math.round(from * fs)
+    const b = Math.round(to * fs)
+    for (let i = a; i < b; i++) s += x[i] * x[i]
+    return Math.sqrt(s / (b - a))
+  }
+  const db = (a: number, b: number) => 20 * Math.log10(a / b)
+  const render = (midi: number, hold = 2.6, velocity = PIANO_REF_VELOCITY) => renderPiano(pianoParams(midi, velocity, hold, fs))
+  /** Partial n of `midi` as rendered: stretched by the string's stiffness and the tuning. */
+  const partial = (midi: number, n: number) =>
+    n * 440 * Math.pow(2, (midi - 69) / 12 + pianoTuning(midi) / 1200) * Math.sqrt(1 + inharmonicity(midi) * n * n)
+
+  it('have the measured spectra, stretched partials and stretch tuning', () => {
+    for (const s of PIANO_SPECTRA) expect(Math.max(...s.levels)).toBe(0) // dB re the key's strongest partial
+    expect(PIANO_SPECTRA[0].levels.length).toBeGreaterThan(40) // the bass is rich…
+    expect(PIANO_SPECTRA[PIANO_SPECTRA.length - 1].levels.length).toBeLessThan(4) // …the top nearly pure
+    expect(pianoSpectrum(61.5)[2]).toBeCloseTo((pianoSpectrum(60)[2] + pianoSpectrum(63)[2]) / 2, 6)
+    expect(pianoSpectrum(20)).toEqual(pianoSpectrum(33))
+    // B as measured on both pianos: ~1e-4 in the bass, ~3e-4 at C4, ~2.5e-3 at C6
+    expect(inharmonicity(36)).toBeCloseTo(1e-4, 6)
+    expect(inharmonicity(60)).toBeGreaterThan(2.6e-4)
+    expect(inharmonicity(60)).toBeLessThan(3.6e-4)
+    expect(inharmonicity(84)).toBeGreaterThan(2.1e-3)
+    expect(inharmonicity(84)).toBeLessThan(2.9e-3)
+    expect(pianoTuning(69)).toBe(0)
+    expect(pianoTuning(36)).toBeLessThan(-2)
+    expect(pianoTuning(96)).toBeGreaterThan(5)
+    // the rendered C4: its partials sit where the stiff string puts them, nothing in between
+    const x = render(60)
+    for (const n of [1, 2, 5]) {
+      const f = partial(60, n)
+      const near = [-4, -2, 0, 2, 4].map((c) => amplitude(x, f * Math.pow(2, c / 1200), 0.1, 1.2))
+      expect(Math.max(...near)).toBe(near[2])
+    }
+    expect(cents(partial(60, 8), 8 * partial(60, 1))).toBeGreaterThan(5)
+    const main = amplitude(x, partial(60, 1), 0.1, 0.5)
+    expect(amplitude(x, partial(60, 1) * 1.5, 0.1, 0.5)).toBeLessThan(main * 0.03)
   })
 
-  it('has a double decay, then the damper', () => {
-    const [fund] = pianoPartials(60, 0.7, 20000)
-    const hold = 2.6
-    const env = pianoEnvelope(fund, hold, 0.1)
-    const at = (t: number) => env[Math.round(t / 0.004)]
-    expect(env[0]).toBe(0)
-    expect(env[env.length - 1]).toBe(0)
-    const peak = Math.max(...env)
-    // fast prompt drop over the first half second…
-    const early = 20 * Math.log10(at(0.5) / peak)
-    // …then a slow aftersound
-    const late = 20 * Math.log10(at(2) / at(1))
-    expect(early).toBeLessThan(-5)
-    expect(late).toBeGreaterThan(-5)
+  it('decay twice: the prompt sound, then the aftersound, faster up the keyboard and for upper partials', () => {
+    const c4 = pianoDecay(60, 262)
+    expect(c4.prompt).toBeGreaterThan(0.25)
+    expect(c4.prompt).toBeLessThan(0.5)
+    expect(c4.after).toBeGreaterThan(5 * c4.prompt)
+    expect(10 * Math.log10(c4.share)).toBeLessThan(-12)
+    expect(pianoDecay(60, 3000).after).toBeLessThan(c4.after)
+    expect(pianoDecay(84, 1050).prompt).toBeLessThan(pianoDecay(48, 1050).prompt)
+    const x = render(60, 6)
+    const f = partial(60, 1)
+    const level = (t: number) => amplitude(x, f, t, 0.2)
+    const peak = level(0.02)
+    // the measured C4: −7…−9 dB at 0.3 s, ~−25 dB at 1 s, ~−30 dB at 3 s (beats blur each reading)
+    expect(db(level(0.3), peak)).toBeLessThan(-3)
+    expect(db(level(0.3), peak)).toBeGreaterThan(-14)
+    expect(db(level(1), peak)).toBeLessThan(-12)
+    const late = db(level(4), level(2))
     expect(late).toBeLessThan(0)
-    // the damper falls after the hold
-    expect(at(hold + 0.3)).toBeLessThan(at(hold) * 0.06)
+    expect(late).toBeGreaterThan(db(level(1), peak)) // slower after the first second
+  })
+
+  it('beat: the unison strings make every partial waver', () => {
+    const x = render(60, 6)
+    const ripples = [1, 2, 3, 4, 5, 6].map((n) => {
+      const f = partial(60, n)
+      const env = Array.from({ length: 30 }, (_, k) => 20 * Math.log10(amplitude(x, f, 0.8 + k * 0.1, 0.12)))
+      // remove the straight-line decay, keep the ripple
+      const k0 = (env.length - 1) / 2
+      const mean = env.reduce((a, b) => a + b, 0) / env.length
+      const slope = env.reduce((a, v, k) => a + (k - k0) * (v - mean), 0) / env.reduce((a, _, k) => a + (k - k0) ** 2, 0)
+      const res = env.map((v, k) => v - mean - slope * (k - k0))
+      return Math.max(...res) - Math.min(...res)
+    })
+    ripples.sort((a, b) => a - b)
+    expect(ripples[3]).toBeGreaterThan(2) // median ripple, dB peak to peak
+  })
+
+  it('knock: the hammer thumps the soundboard under the tone, then it dies away', () => {
+    // probes 150–220 Hz, under the fundamental of both keys; dB re the fundamental
+    const knock = (x: Float32Array, from: number) => Math.hypot(...[150, 180, 220].map((f) => amplitude(x, f, from, 0.02)))
+    const re = (midi: number) => {
+      const x = render(midi)
+      return db(knock(x, 0.01), amplitude(x, partial(midi, 1), 0.01, 0.1))
+    }
+    // on the top keys the measured knock is about as loud as the fundamental, in the middle ~10 dB less
+    expect(re(84)).toBeGreaterThan(-20)
+    expect(re(84)).toBeLessThan(6)
+    expect(re(84)).toBeGreaterThan(re(64) + 4)
+    const c6 = render(84)
+    expect(db(knock(c6, 0.35), knock(c6, 0.01))).toBeLessThan(-20)
+  })
+
+  it('touch: softer is darker and quieter, harder brighter and louder', () => {
+    expect(pianoTouch(PIANO_REF_VELOCITY, 300)).toBe(0)
+    expect(pianoTouch(0.3, 4000)).toBeLessThan(pianoTouch(0.3, 250) - 10)
+    expect(pianoTouch(1, 4000)).toBeGreaterThan(pianoTouch(1, 250) + 5)
+    const ref = render(60, 1)
+    const soft = render(60, 1, 0.35)
+    const hard = render(60, 1, 0.95)
+    const at = (x: Float32Array, n: number) => amplitude(x, partial(60, n), 0.02, 0.2)
+    expect(at(soft, 1)).toBeLessThan(at(ref, 1))
+    expect(at(hard, 1)).toBeGreaterThan(at(ref, 1))
+    expect(at(soft, 10) / at(soft, 1)).toBeLessThan((at(ref, 10) / at(ref, 1)) * 0.6)
+    expect(at(hard, 10) / at(hard, 1)).toBeGreaterThan((at(ref, 10) / at(ref, 1)) * 1.4)
+  })
+
+  it('stop as the dampers fall (the top keys have none) and end in silence', () => {
+    const hold = 1
+    const x = render(60, hold)
+    expect(x.length).toBeLessThanOrEqual(Math.round((hold + PIANO_TAIL_MAX) * fs) + 1)
+    expect(rms(x, hold + 0.3, hold + 0.35)).toBeLessThan(rms(x, hold - 0.1, hold) * 0.05)
+    expect(Math.abs(x[x.length - 1])).toBeLessThan(1e-6)
+    expect(Math.abs(x[0])).toBeLessThan(1e-3)
+    expect(damperTime(60, 4000)).toBeLessThan(damperTime(60, 250))
+    expect(damperTime(91, 2000)).toBe(Infinity)
+    const top = render(91, hold)
+    expect(rms(top, hold + 0.1, hold + 0.15)).toBeGreaterThan(rms(top, hold - 0.05, hold) * 0.3)
+  })
+
+  it('are deterministic, clean and level across the keys', () => {
+    expect(render(67, 1)).toEqual(render(67, 1))
+    for (const m of [36, 48, 60, 72, 84]) {
+      const x = render(m, 1)
+      let peak = 0
+      for (const v of x) peak = Math.max(peak, Math.abs(v))
+      expect(peak).toBeLessThan(0.9)
+      expect(Math.abs(db(rms(x, 0, 0.3), PIANO_RMS))).toBeLessThan(6)
+    }
   })
 })
 
