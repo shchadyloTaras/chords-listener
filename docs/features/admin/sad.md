@@ -467,12 +467,26 @@ Each top-3 goal from §1 expanded into a full scenario (numbers verbatim from sp
 
 | Risk / debt | Severity | Mitigation | Owner |
 |---|---|---|---|
-| <e.g. Worker lag may reach hours during a downstream outage> | Medium | <alert >10 min, on-call playbook, retry backoff> | <DevOps> |
-| <e.g. No event-schema versioning in v1> | Medium | <ADR-NNNN planned for v2, tolerate unknown fields> | <Backend> |
-| Open architectural decision: <decision-headline> | Open question | Resolve before <stage trigger or YYYY-MM-DD>; <inline rationale from the Save-as-OQ> | <owner> |
+| Коректність денної квоти, ліміту спроб не-адміністраторів і ліміту 10 видалень / 60 хв спирається на **max-instances = 1** (замки й лічильники в пам'яті процесу) | Medium | Перевірка значення в `scripts/deploy_cloud.sh` + попередження в лозі старту; шлях міграції — лічильники у Firestore-транзакції (ADR-0003, ADR-0008) | Tech Lead |
+| **KPI «Додаткові години роботи сервера через адмінку ≤ 2%»** може не виконатися при малому органічному трафіку: відкриття адмінки + 2 пробудження планувальника на добу (§7) | Medium | Метрика `server_wake_by`; огляд за перший місяць після етапу 1; відкат на 1 пробудження/добу або винесення фонових робіт у Cloud Run Job | Власник |
+| Дрейф проєкцій (довідник користувачів, лічильники дня, індекс email) від даних у GCS і `users` | Medium | Нічна звірка дня й повна синхронізація індексу; ідемпотентний backfill; алерт `stats_mismatch` | Backend |
+| Публічний документ стану сервісу може випадково отримати зайві поля (ліміти, особисті дані) | Medium | Білий список полів у `admin/settings.py` + тест `firestore.rules` і вмісту документа | Security Lead |
+| Повторна публікація з `publish-pending.json` або пізня задача може відновити трек видаленого користувача | Medium | Надгробок uid (ADR-0011) перевіряється у publish-шляху й шлюзі допуску; інтеграційний тест | Backend |
+| Власний REST-клієнт Firestore (`backend/app/firestore.py`) ще не вміє batched write, транзакції, запити й count-агрегації | Medium | Розширити клієнт першою задачею етапу 1, тести на емуляторі Firestore | Backend |
+| Скрипт власника працює з правами сервісного акаунта — шлях до видачі прав адміністратора | Medium | Скрипт через `gcloud auth` власника (без файлу ключа на диску); зміни allowlist видно в Cloud Audit Logs | Власник |
+| Brownfield: задачі живуть лише в пам'яті — рестарт інстансу лишає записи історії в стані «виконується» | Low | Фонова робота закриває їх із причиною збою «Інше» (≤ 12 год) | Backend |
+| Open architectural decision: дедлайн і бюджет зусиль на три етапи | Open question | Resolve before `sdd:tasks`; §2 Organisational — `<TBD by PM>` | Власник |
+| Open question (spec §8): адреса чи канал підтримки в поясненні хмарного обмеження | Open question | Resolve before `sdd:tasks`; default — email власника з README | Власник |
+| Open question (spec §8): чи рахувати службовий акаунт smoke-test у статистиці й списку користувачів | Open question | Resolve before `sdd:data-model`; default — показувати окремо з позначкою «службовий», у статистику не враховувати | Власник |
+
+**Spec §8 questions resolved at design (2026-10-07, owner: Власник):**
+- **2FA для входу адміністратора — ні у v1.** Компенсація: свіжий вхід ≤ 15 хв для запланованого видалення й паузи нових аналізів, 7-денне вікно видалення, ліміт 10 запланованих видалень / 60 хв, журнал переглядів. Архітектура не блокує 2FA пізніше (Identity Platform + перевірка фактора в `admin/authz.py`).
+- **Листи користувачам — ні у v1.** Користувач під хмарним обмеженням чи запланованим видаленням бачить на сайті те саме пояснення хмарного обмеження, без дати видалення. Позначити ці два OQ закритими в `spec.md` — окремим кроком власника.
 
 **Accepted debt (acceptable in v1, plan to fix later):**
-- <e.g. the entity is immutable / unversioned — OK for v1, may need audit versioning in v2>
+- Без 2FA для адміністратора у v1 (див. вище) — security debt, переглянути перед додаванням другого адміністратора.
+- Зміна email користувачем потрапляє в індекс пошуку лише при наступній повній синхронізації (≤ 12 год).
+- Завантаження в Storage від обмежених користувачів (вхід через запис вкладки) лежать до звичайного очищення завантажень.
 
 ## 12. Glossary
 
