@@ -16,6 +16,7 @@ import {
   zigzagLayout,
 } from './scales'
 import { bestTransposeForHandpan, chordTones, playability, songCoverage } from './playability'
+import { handpanFieldSizes, handpanMidis } from './pitches'
 
 const mine = customScale(DEFAULT_HANDPAN_NOTES)
 const kurd = presetScale('d-kurd')!
@@ -195,5 +196,27 @@ describe('song coverage', () => {
     const both = customScale(['D', 'F#', 'A', 'E', 'G#', 'B', 'D', 'E', 'A'])
     expect(bestTransposeForHandpan([{ label: 'Eb', weight: 1 }], both)?.shift).toBe(-1)
     expect(bestTransposeForHandpan([], mine)).toBeNull()
+  })
+})
+
+describe('field sizes', () => {
+  it('make the lowest field the largest and shrink the fields up the scale, ding left out', () => {
+    for (const scale of [customScale(DEFAULT_HANDPAN_NOTES), presetScale('d-kurd')!, presetScale('f-low-pygmy')!]) {
+      const sizes = handpanFieldSizes(scale)
+      const midis = handpanMidis(scale).slice(1)
+      expect(sizes).toHaveLength(scale.tones.length)
+      expect(Math.max(...sizes)).toBe(1)
+      expect(sizes[midis.indexOf(Math.min(...midis))]).toBe(1)
+      // strictly in pitch order: higher → smaller
+      const byPitch = midis.map((m, i) => [m, sizes[i]]).sort((a, b) => a[0] - b[0])
+      for (let k = 1; k < byPitch.length; k++) {
+        if (byPitch[k][0] > byPitch[k - 1][0]) expect(byPitch[k][1]).toBeLessThan(byPitch[k - 1][1])
+        else expect(byPitch[k][1]).toBe(byPitch[k - 1][1])
+      }
+      for (const s of sizes) expect(s).toBeGreaterThanOrEqual(0.55)
+    }
+    // an octave up ≈ 0.71×, works without written octaves too (A | D F A C G E C A: A3 … C5)
+    const mine = handpanFieldSizes(customScale(DEFAULT_HANDPAN_NOTES))
+    expect(Math.min(...mine)).toBeCloseTo(Math.pow(2, -15 / 24), 6)
   })
 })

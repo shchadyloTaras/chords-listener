@@ -1,10 +1,12 @@
 import { memo, useId } from 'react'
-import { noteMidi, type FieldRole, type HandpanNote, type HandpanScale } from '../../../lib/handpan'
+import { HANDPAN_MIN_FIELD, handpanFieldSizes, type FieldRole, type HandpanNote, type HandpanScale } from '../../../lib/handpan'
 import '../handpan/handpan.css'
 
 const C = 50
 const SHELL_R = 46.2
 const DING_R = 11.8
+/** No tone field narrower than this (half-width), so its name still fits. */
+const MIN_RX = 4.3
 
 interface FieldGeom {
   x: number
@@ -23,8 +25,9 @@ const geomCache = new Map<string, FieldGeom[]>()
 
 /**
  * Top-down layout: ding in the centre, tone fields on a ring in physical order — clockwise from
- * the bottom (the field nearest the player). With known octaves lower notes get larger fields,
- * like on a real instrument.
+ * the bottom (the field nearest the player). The lowest field is the largest and the fields get
+ * smaller as they go up in pitch, like on a real instrument (octaves inferred when the scale has
+ * none); the ding keeps its size.
  */
 function layout(scale: HandpanScale): FieldGeom[] {
   const cached = geomCache.get(scale.key)
@@ -35,13 +38,9 @@ function layout(scale: HandpanScale): FieldGeom[] {
   const rxMax = Math.min(8.6, spacing * 0.37)
   const ryMax = Math.min(11.6, rxMax * 1.38)
   const fs = Math.max(5.4, Math.min(7.8, rxMax * 0.92))
-  let factor = scale.tones.map(() => 1)
-  if (scale.octavesKnown && n > 1) {
-    const midi = scale.tones.map((t) => noteMidi(t) ?? 0)
-    const lo = Math.min(...midi)
-    const hi = Math.max(...midi)
-    if (hi > lo) factor = midi.map((m) => 1 - (0.2 * (m - lo)) / (hi - lo))
-  }
+  // on a crowded ring the fields are small already: narrow the range so the top ones keep a name
+  const floor = Math.min(1, Math.max(HANDPAN_MIN_FIELD, MIN_RX / rxMax))
+  const size = handpanFieldSizes(scale).map((s) => 1 - ((1 - s) * (1 - floor)) / (1 - HANDPAN_MIN_FIELD))
   const out: FieldGeom[] = [{ x: C, y: C, rx: DING_R, ry: DING_R, rot: 0, fs: 9.4 }]
   scale.tones.forEach((_, i) => {
     const deg = 90 + (i * 360) / n
@@ -49,10 +48,11 @@ function layout(scale: HandpanScale): FieldGeom[] {
     out.push({
       x: C + ring * Math.cos(a),
       y: C + ring * Math.sin(a),
-      rx: rxMax * factor[i],
-      ry: ryMax * factor[i],
+      rx: rxMax * size[i],
+      ry: ryMax * size[i],
       rot: deg - 90,
-      fs,
+      // the name shrinks less than the field, so it stays readable
+      fs: fs * (0.6 + 0.4 * size[i]),
     })
   })
   if (geomCache.size > 64) geomCache.clear()

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { bassVoicings } from '../diagrams/bass'
 import { harmoniumVoicing } from '../diagrams/harmonium'
 import { loadChordDb, lookupLabel, type DbInstrument } from '../diagrams/chordsDb'
-import { customScale, DEFAULT_HANDPAN_NOTES, formatHandpanNote, parseHandpanNote, presetScale } from '../handpan'
+import { customScale, DEFAULT_HANDPAN_NOTES, formatHandpanNote, handpanMidis, parseHandpanNote, presetScale } from '../handpan'
 import { parseChord } from '../music/chord'
 import { pcToName } from '../music/notes'
 import {
@@ -12,7 +12,6 @@ import {
   HANDPAN_STEP,
   handpanChordNotes,
   handpanFieldNote,
-  handpanMidis,
   HARMONIUM_SPREAD,
   harmoniumChordNotes,
   harmoniumKeyNote,
