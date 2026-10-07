@@ -167,39 +167,82 @@ Each tactical decision in later sections should trace to one of these seeds. Tac
      just one surface's container — swap/add per what was declared in §4. → _shared/surfaces.md
      📌 e.g. «web app, content API, media worker, datastore, object store, CDN». -->
 
-<One paragraph: layered / hexagonal / clean / event-driven, and why.>
+Шарова архітектура репозиторію зберігається (§2): API-шар (FastAPI-роутери) → бізнес-модулі → інфраструктура (`firestore`, `gcs`, `auth`). Адмінка — новий пакет `backend/app/admin/` зі своїм роутером, що монтується в `main.py`; зміни існуючих модулів зведені до двох точок інтеграції: **шлюз допуску** (admission gate) перед `Quotas.consume` для кожної хмарної задачі і **хуки проєкцій** у `JobManager` (запис історії задач і денної статистики в момент подій). На фронтенді адмінка — окрема точка входу `admin.html` (ADR-0002), а основний сайт отримує лише читача публічного стану сервісу (банер + перемикачі).
+
+**Building-block decisions:**
+- **Єдиний шлюз допуску** ([ADR-0008](adr/0008-gate-every-cloud-job-through-one-admission-check.md)) — усі п'ять входів хмарних задач проходять `admission.py` до `Quotas.consume`: обмеження/видалення → перемикачі → чинний ліміт → consume; відмова нічого не рахує.
+- **Пошук email у пам'яті над компактним індексом** ([ADR-0009](adr/0009-search-emails-in-memory-over-a-compact-firestore-index.md)) — шарди uid → email у Firestore, підрядок шукається на сервері; нові реєстрації дотягуються з `users` перед пошуком.
+- **Денна статистика: живі лічильники + нічна звірка й заморожування** ([ADR-0010](adr/0010-count-daily-stats-live-and-freeze-after-nightly-reconciliation.md)).
+- **Історія задач** пишеться з `JobManager` при прийомі й при завершенні задачі (ADR-0004); задача, що «зависла» через рестарт інстансу, закривається щоденною фоновою роботою з причиною збою «Інше». `ErrorCode` відображається на фіксований список причин збою з підписами uk/en.
 
 **Internal decomposition:**
 
 ```
-<e.g. modules/<feature>/>
-├── domain/       <entities + sentinel errors>
-├── app/          <use cases / services>
-├── infra/        <repository + integration impl>
-├── ports/        <handlers, DTOs, error mapping>
-└── wiring        <self-wiring entry point>
+backend/app/
+├── admission.py        шлюз допуску: хмарне обмеження / заплановане видалення, перемикачі сервісу,
+│                       чинний ліміт (персональний > типовий) — до Quotas.consume; відмова не рахується в квоту
+├── admin/
+│   ├── router.py       /api/admin/* (APIRouter); не-адміністратору — та сама відповідь, що й на неіснуючу адресу
+│   ├── authz.py        allowlist адміністраторів (кеш ≤ 60 с), перевірка auth_time, ліміт спроб не-адміністраторів
+│   ├── audit.py        журнал дій адміністратора: batched write зі зміною або «журнал перший» (ADR-0007)
+│   ├── directory.py    довідник користувачів (проєкція) + індекс email + пошук підрядка
+│   ├── history.py      запис історії задач + відображення ErrorCode → причина збою
+│   ├── stats.py        денні лічильники (інкремент у момент події), закриття й звірка дня
+│   ├── settings.py     налаштування сервісу (лінивий кеш 30 с) + публічне дзеркало
+│   ├── actions.py      скидання квоти, персональний ліміт, хмарне обмеження, заплановане видалення
+│   ├── deletion.py     остаточне видалення: стирання даних + знеособлення журналу й історії
+│   └── sweeps.py       внутрішні ендпоінти, які будить Cloud Scheduler (OIDC)
+├── jobs.py             + виклик admission, + хуки history/stats (існуючий)
+├── quotas.py           + чинний ліміт на uid, + reset під тим самим замком (існуючий)
+├── auth.py             + віддає auth_time перевіреного токена (існуючий)
+└── firestore.py        + batched write, запити, count-агрегації (існуючий)
+
+frontend/
+├── admin.html          друга точка входу Vite, сувора CSP у <meta>
+└── src/
+    ├── admin/          main.tsx, маршрути, екрани: Огляд, Користувачі, Картка, Задачі, Статистика, Журнал, Налаштування
+    ├── lib/adminApi.ts клієнт /api/admin/* (перевхід при вимозі свіжого входу)
+    ├── lib/serviceStatus.ts  читання публічного стану (банер + перемикачі) для основного сайту
+    └── i18n/{uk,en}.ts       + домен admin
+scripts/admin_grant.py      скрипт власника: видати / зняти позначку адміністратора
 ```
 
-**C4 Container (L2):** <!-- syntax → references/c4-mermaid-syntax.md. Real names, no <placeholder> stubs. ONE Container per declared target_surface (frontmatter); the web container below is one example surface. -->
+**C4 Container (L2):**
 
 ```mermaid
 C4Container
-    title <feature> — Containers
+    title admin — Containers
 
-    Person(actor, "<Actor>")
+    Person(admin, "Адміністратор")
+    Person(user, "Користувач акаунта")
+    Person(guest, "Гість")
+    Person_Ext(owner, "Скрипт власника")
 
-    Container_Boundary(app, "<Our system>") {
-        Container(web, "<Web/UI>", "<technology>", "<purpose>")
-        Container(api, "<API/handler>", "<technology>", "<purpose>")
-        ContainerDb(db, "<Datastore>", "<technology>", "<purpose>")
+    Container_Boundary(cl, "Chords Listener") {
+        Container(site, "Сайт", "React 19, Vite, GitHub Pages", "розпізнавання, бібліотека; читає публічний стан сервісу")
+        Container(adminui, "Адмінка admin.html", "React 19, Vite, сувора CSP", "екрани адмінки; дані лише через сервер")
+        Container(api, "Хмарний сервер", "Python 3.11, FastAPI, Cloud Run", "аналізи, шлюз допуску, /api/admin/*, фонові ендпоінти")
+        ContainerDb(fs, "Firestore", "Firestore eur3", "бібліотека; адмінські проєкції, журнал, налаштування, публічний стан")
+        ContainerDb(gcs, "Бакет", "Cloud Storage", "аудіо й треки, quota.json")
     }
 
-    System_Ext(ext, "<External>", "<purpose>")
+    System_Ext(fbauth, "Firebase Authentication", "вхід, ID-токени, облікові записи")
+    System_Ext(sched, "Cloud Scheduler", "щоденний виклик фонових робіт")
+    System_Ext(yt, "YouTube", "джерело завантажень")
 
-    Rel(actor, web, "<interaction>", "<protocol>")
-    Rel(web, api, "<calls>")
-    Rel(api, db, "<reads/writes>", "<driver>")
-    Rel(api, ext, "<emits>", "<protocol>")
+    Rel(admin, adminui, "переглядає й змінює", "HTTPS")
+    Rel(user, site, "аналізи, бібліотека", "HTTPS")
+    Rel(guest, site, "розпізнає в браузері", "HTTPS")
+    Rel(adminui, api, "адмінські запити з ID-токеном", "JSON/HTTPS")
+    Rel(site, api, "хмарні задачі з ID-токеном", "JSON/HTTPS")
+    Rel(site, fs, "читає публічний стан і свою бібліотеку", "Firebase SDK")
+    Rel(adminui, fbauth, "вхід і повторний вхід", "Firebase SDK")
+    Rel(api, fs, "проєкції, журнал, налаштування", "REST, service account")
+    Rel(api, gcs, "треки, квоти, видалення", "GCSFuse")
+    Rel(api, fbauth, "перевіряє токени, читає й видаляє акаунти", "HTTPS")
+    Rel(api, yt, "завантажує аудіо", "HTTPS")
+    Rel(sched, api, "будить фонові роботи", "HTTPS + OIDC")
+    Rel(owner, fs, "пише allowlist адміністраторів", "service account")
 ```
 
 ## 6. Runtime view
