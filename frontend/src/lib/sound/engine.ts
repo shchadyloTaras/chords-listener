@@ -12,8 +12,8 @@
 import { useApp, type Instrument } from '../../store'
 import { emitLiveNotes, type LiveNote } from '../liveNotes'
 import type { NoteEvent } from './chordNotes'
-import { clamp, mulberry32 } from './dsp'
-import { startHandpanNote } from './handpanTone'
+import { clamp } from './dsp'
+import { handpanParams, handpanRelease, renderHandpan } from './handpanTone'
 import { harmoniumParams, renderHarmonium } from './harmonium'
 import { pianoParams, renderPiano } from './piano'
 import { pluckParams, pluckRelease, renderPluck, type PluckInstrument } from './pluck'
@@ -58,7 +58,7 @@ const BUS: Record<Instrument, { level: number; reverb: number }> = {
   guitar: { level: 1.3, reverb: 0.12 },
   bass: { level: 1.46, reverb: 0.06 },
   ukulele: { level: 1.45, reverb: 0.12 },
-  handpan: { level: 0.7, reverb: 0.24 },
+  handpan: { level: 1.4, reverb: 0.24 },
 }
 /** Per-string level of the cached plucks (they are RMS-normalized). */
 const PLUCK_LEVEL = 0.55
@@ -66,6 +66,8 @@ const PLUCK_LEVEL = 0.55
 const HARMONIUM_LEVEL = 0.44
 /** Per-key level of the cached piano notes (rendered at PIANO_RMS; the touch's loudness is in the buffer). */
 const PIANO_LEVEL = 0.75
+/** Per-note level of the cached handpan notes (rendered at HANDPAN_RMS; the strike's force scales it). */
+const HANDPAN_LEVEL = 0.77
 /** Piano notes are rendered at touches this far apart (≤ 0.1 dB off; the cache stays small). */
 const PIANO_TOUCH_STEP = 0.02
 const BUFFER_CACHE_MAX = 48
@@ -88,10 +90,9 @@ interface Graph {
   master: GainNode
   reverb: ConvolverNode | null
   buses: Partial<Record<Instrument, GainNode>>
-  noise: AudioBuffer | null
 }
 
-/** Master → limiter → destination, the room, and a shared noise buffer (hand attacks). */
+/** Master → limiter → destination, and the room. */
 function buildGraph(ctx: BaseAudioContext, volume: number): Graph {
   const master = ctx.createGain()
   master.gain.value = volumeGain(volume)
@@ -118,17 +119,7 @@ function buildGraph(ctx: BaseAudioContext, volume: number): Graph {
   } catch {
     reverb = null
   }
-
-  let noise: AudioBuffer | null = null
-  try {
-    noise = ctx.createBuffer(1, Math.round(ctx.sampleRate * 0.5), ctx.sampleRate)
-    const data = noise.getChannelData(0)
-    const rand = mulberry32(42)
-    for (let i = 0; i < data.length; i++) data[i] = rand() * 2 - 1
-  } catch {
-    noise = null
-  }
-  return { ctx, master, reverb, buses: {}, noise }
+  return { ctx, master, reverb, buses: {} }
 }
 
 function busFor(g: Graph, instrument: Instrument): GainNode {
@@ -147,8 +138,9 @@ function busFor(g: Graph, instrument: Instrument): GainNode {
   return bus
 }
 
-// Plucked strings (per instrument, pitch, sample rate), harmonium keys (per pitch, hold, sample rate)
-// and piano keys (per pitch, touch, hold, sample rate) are rendered once; least recently used dropped.
+// Plucked strings (per instrument, pitch, sample rate), harmonium keys (per pitch, hold, sample rate),
+// piano keys (per pitch, touch, hold, sample rate) and handpan notes (per pitch, ding or field, sample
+// rate) are rendered once; least recently used dropped.
 const bufferCache = new Map<string, AudioBuffer>()
 
 function cachedBuffer(ctx: BaseAudioContext, key: string, render: () => Float32Array): AudioBuffer {
@@ -211,6 +203,20 @@ function startPianoNote(ctx: BaseAudioContext, when: number, midi: number, veloc
   return { out, level, sources: [src], nodes: [src, out], end: when + buffer.duration, release: hold }
 }
 
+/** A handpan note — the ding or a tone field — struck with `velocity`: its rendered ring. */
+function startHandpanNote(ctx: BaseAudioContext, when: number, midi: number, velocity: number, ding: boolean): VoiceParts {
+  const params = handpanParams(midi, ding, ctx.sampleRate)
+  const buffer = cachedBuffer(ctx, `handpan:${midi}:${ding ? 'ding' : 'field'}:${ctx.sampleRate}`, () => renderHandpan(params))
+  const src = ctx.createBufferSource()
+  src.buffer = buffer
+  const level = HANDPAN_LEVEL * Math.pow(clamp(velocity, 0.05, 1), 1.2)
+  const out = ctx.createGain()
+  out.gain.value = level
+  src.connect(out)
+  src.start(when)
+  return { out, level, sources: [src], nodes: [src, out], end: when + buffer.duration, release: handpanRelease(midi, ding) }
+}
+
 function startVoice(g: Graph, instrument: Instrument, kind: PlayKind, n: NoteEvent, when: number): VoiceParts {
   switch (instrument) {
     case 'piano':
@@ -218,7 +224,7 @@ function startVoice(g: Graph, instrument: Instrument, kind: PlayKind, n: NoteEve
     case 'harmonium':
       return startHarmoniumNote(g.ctx, when, n.midi, n.velocity, KEY_HOLD[kind])
     case 'handpan':
-      return startHandpanNote(g.ctx, when, n.midi, n.velocity, g.noise)
+      return startHandpanNote(g.ctx, when, n.midi, n.velocity, n.target === 0)
     default:
       return startPluckNote(g.ctx, when, instrument, n.midi, n.velocity)
   }
