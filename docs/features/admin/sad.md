@@ -4,7 +4,7 @@ owner: "Тарас Щадило (Tech Lead)"
 reviewers: ["Tech Lead", "Security Lead"]
 updated_at: "2026-10-07"
 feature_size: "L"
-target_surfaces: []  # filled in §4 — subset of: backend-service | web-frontend | mobile-app | desktop-app | cli | worker | library-sdk. Read (never re-derived) by api/sequences/tasks/plan-tests/review → _shared/surfaces.md
+target_surfaces: [backend-service, web-frontend]  # decided in §4 (ADR-0001) — subset of: backend-service | web-frontend | mobile-app | desktop-app | cli | worker | library-sdk. Read (never re-derived) by api/sequences/tasks/plan-tests/review → _shared/surfaces.md
 ---
 
 # Software Architecture Document — admin
@@ -143,9 +143,15 @@ C4Context
 
 **Top strategic choices (the seeds for ADRs):**
 
-1. **<e.g. Module isolation through events>** — <2–3 sentences citing quality goals + constraints>.
-2. **<e.g. Single-store persistence>** — <2–3 sentences>.
-3. **<e.g. Server-rendered read side>** — <2–3 sentences>.
+1. **Дві поверхні: `backend-service` + `web-frontend`; фонові роботи — всередині сервера** ([ADR-0001](adr/0001-build-admin-as-backend-service-and-web-frontend.md)). Адмінський API й внутрішні фонові ендпоінти (остаточне видалення, закриття денної статистики, очищення історії) живуть в існуючому FastAPI-сервісі, а Cloud Scheduler будить їх. Так фонові роботи бачать ті самі замки, що й задачі (AC-22), і лишається один серверний деплой (§2).
+2. **Адмінка — окрема точка входу `admin.html` із суворою CSP** ([ADR-0002](adr/0002-ship-admin-ui-as-separate-strict-csp-entry.md)). Та сама Vite-збірка й ті самі компоненти, Tailwind-токени, i18n і вхід Firebase, але без TF.js і плеєра та з `<meta>`-CSP, що забороняє inline-скрипти й eval. Друга лінія захисту від stored XSS (ціль якості №1) без ризику для основного сайту.
+3. **Адмінський API — роутер `/api/admin/*` в існуючому сервері** ([ADR-0003](adr/0003-host-admin-api-in-existing-backend-service.md)). Скидання квоти проходить через той самий об'єкт `Quotas` і той самий замок, що й прийом аналізу (AC-12b), а задачі, що виконуються зараз, читаються з пам'яті `JobManager` (AC-01). Ціна — залежність від max-instances=1 (§11).
+4. **Модель читання — заздалегідь пораховані проєкції у Firestore** ([ADR-0004](adr/0004-precompute-admin-read-model-in-firestore.md)). Сервер у момент подій пише довідник користувачів, запис кожної задачі, атомарні інкременти денної статистики й журнал у закриті для клієнтів колекції; кожен екран — кілька десятків читань (ціль якості №2: ≤ 200 читань на екран). Строки зберігання — TTL-політики Firestore.
+5. **Налаштування сервісу — Firestore + публічне дзеркало** ([ADR-0005](adr/0005-store-runtime-config-in-firestore-with-public-status-mirror.md)). Закритий документ налаштувань сервер кешує лінивим TTL 30 с (≤ 60 с на набуття чинності, без фонового опитування); публічний документ із банером і станом перемикачів сайт читає напряму з Firestore (0 запитів до сервера, ≤ 5 хв). Env-змінні лишаються лише початковими значеннями.
+6. **Права адміністратора — allowlist у Firestore з кешем 60 с** ([ADR-0006](adr/0006-authorize-admins-via-firestore-allowlist-with-60s-cache.md)). Список пише лише скрипт власника; сервер перевіряє його на кожен адмінський запит і відповідає не-адміністраторам так само, як на неіснуючу адресу. Повторний вхід для остаточних дій — за `auth_time` ID-токена (≤ 15 хв).
+7. **«Без журналу — без дії»: атомарно, де можна, інакше журнал перший** ([ADR-0007](adr/0007-write-audit-atomically-or-before-the-effect.md)). Зміни у Firestore і запис журналу — один batched write; для ефектів поза Firestore (скидання `quota.json`) — спершу журнал, потім дія, при невдачі — запис «не застосовано»; перегляди — журнал перед відповіддю.
+
+**UI-architecture (web-frontend):** окремий multi-page entry `admin.html` (client-side SPA, React 19) з власним hash-роутингом за зразком `frontend/src/hooks/useRoute.ts`; стан — локальний для екранів (React state + невеликий zustand-стор для сесії адміністратора), бо екрани незалежні й дані завжди свіжі з сервера; перевикористовує компоненти, Tailwind-токени, `i18n/{uk,en}.ts` і `lib/auth` основного сайту → ADR-0002.
 
 Each tactical decision in later sections should trace to one of these seeds. Tactical decisions that *contradict* a strategic choice are red flags — surface them in §11.
 

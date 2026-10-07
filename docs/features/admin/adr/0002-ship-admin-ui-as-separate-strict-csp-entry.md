@@ -1,0 +1,55 @@
+---
+status: Accepted
+owner: "Тарас Щадило (Tech Lead)"
+reviewers: ["Tech Lead", "Security Lead"]
+updated_at: "2026-10-07"
+feature_size: "L"
+ticket: "docs/features/admin/spec.md"
+---
+
+# 0002 — Ship the admin UI as a separate admin.html entry with a strict CSP
+
+- **Status:** Accepted
+- **Date:** 2026-10-07
+- **Deciders:** Тарас Щадило (Tech Lead) + Claude під час Socratic-проходу `design`
+
+## Context
+
+Найгостріший ризик зі spec §6.1 — stored XSS: шкідливий текст у назві пісні, джерелі, тексті помилки чи email виконується в браузері Адміністратора. Сайт хоститься на GitHub Pages, тож CSP можлива лише через `<meta http-equiv>` і діє на всю сторінку; основний сайт використовує TensorFlow.js, WebAssembly і вбудований плеєр YouTube, яким сувора CSP заважає.
+
+## Decision drivers
+
+- Ціль якості №1 (§1) — безпека межі адміністратора; spec §6.1 «адмінка забороняє виконання вбудованих скриптів».
+- AC-05 — назва показується дослівно, нічого з неї не виконується.
+- §2 — GitHub Pages без HTTP-заголовків.
+- Перевикористання існуючих компонентів, Tailwind-токенів, i18n і Firebase Auth (не будуємо дизайн-систему наново).
+
+## Considered options
+
+1. **Окремий `admin.html` у тій самій Vite-збірці** — multi-page build: власний React-корінь, спільні компоненти/токени/i18n/auth, без TF.js і плеєра, сувора CSP у `<meta>`.
+2. **Маршрут `#/admin` в існуючому SPA** — lazy chunk у тому самому `index.html`; CSP або м'яка (винятки для TF.js/YouTube/wasm), або відсутня.
+
+## Decision outcome
+
+**Chosen:** Option 1. Сувора CSP (`script-src 'self'`, без inline і eval, `connect-src` лише до API сервера й Firebase Auth, `frame-src 'none'`, `object-src 'none'`) дає другу лінію захисту від XSS, не ламаючи основний сайт; бандл адмінки легкий.
+
+## Consequences
+
+**Positive**
+- Навіть пропущена розмітка не виконується браузером.
+- Адмінка вантажиться без моделей і плеєра.
+- Основний сайт не змінюється.
+
+**Negative**
+- Друга точка входу у `vite.config` і в CI; адреса `/chords-listener/admin.html#/…`.
+- Спільні модулі не мають тягнути TF.js у бандл адмінки — потрібна перевірка розміру/вмісту бандла в CI.
+- Inline-стилі/скрипти, які додає Vite у dev-режимі, можуть вимагати окремої dev-CSP.
+
+**Neutral**
+- Код адмінки публічний (як і весь сайт) — безпека тримається на сервері (ADR-0006), CSP — лише друга лінія.
+
+## Links
+
+- Spec: [[../spec.md]]
+- SAD: [[../sad.md]] §4, §5, §8
+- Related ADR: [[0001-build-admin-as-backend-service-and-web-frontend]]
