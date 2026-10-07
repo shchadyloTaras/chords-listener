@@ -349,18 +349,24 @@ sequenceDiagram
      🎯 N/A allowed for XS/S that reuses an existing deployment unit with no change.
      Deployment-diagram scaffold → templates/deployment.md. -->
 
-<Topology in 2–3 sentences. Where it runs, replicas, scaling thresholds.>
+Нових сервісів немає. Той самий Cloud Run-сервіс (europe-west1, max 1 / min 0 instance, засинає за ~15 хв) отримує `/api/admin/*` і внутрішні фонові ендпоінти; `admin.html` збирається й деплоїться тим самим GitHub Pages workflow, що й сайт. Фонові роботи (остаточні видалення, звірка й заморожування вчорашнього дня, закриття «завислих» задач, повна синхронізація індексу email) запускаються **двічі на добу** — Cloud Scheduler о 00:15 і 12:15 UTC — і додатково самі при першому «природному» пробудженні сервера після 00:00 UTC. Чому двічі: видалення виконується ≤ 12 год після кінця вікна, а один упалий прохід ще вкладається в 24 год; ціна — до 30 хв роботи інстансу на добу в дні без живого трафіку (ризик KPI у §11).
+
+**Infrastructure additions:**
+- **Cloud Scheduler:** два завдання → внутрішній ендпоінт фонових робіт з OIDC-токеном окремого сервісного акаунта `chords-scheduler@…` (роль `run.invoker`); сервер перевіряє підпис, аудиторію й email цього акаунта.
+- **Firestore:** TTL-політики (історія задач — `expireAt` = +90 днів; журнал дій адміністратора — `expireAt` = +400 днів, щоб гарантувати ≥ 365); складені індекси для фільтрів історії задач (результат × причина × джерело × час) і журналу (адміністратор × користувач × тип × час); `firestore.rules` — публічний документ стану сервісу: `allow read: if true`, запис заборонено; усі адмінські колекції: доступ клієнтів заборонено (лише сервісний акаунт).
+- **Скрипт власника** `scripts/admin_grant.py` — видає/знімає позначку адміністратора через сервісний акаунт; запускається локально власником.
+- **Збірка й CI:** друга точка входу Vite `admin.html`; CI-перевірка, що бандл адмінки не містить TF.js / моделей і що в `admin.html` є CSP-`<meta>`.
+- **Конфіг сервера:** env-змінні `CHORDS_QUOTA_*` лишаються лише початковими значеннями для документа налаштувань (ADR-0005).
 
 **Monitoring:**
-- <Metrics — e.g. `<metric_name>`>
-- <Alerts — e.g. «worker lag > 10 min → page on-call»>
-- <Tracing — e.g. spans on the request boundary>
+- Лог-метрики (структуровані записи `chords.admin`): `admin_request` (маршрут, статус, тривалість — для availability ≥ 99% і p95 latency), `server_wake_by` (admin / scheduler / user — для KPI додаткових годин), `deletion_overdue` (кількість видалень, прострочених понад 24 год), `stats_mismatch` (розбіжність звірки дня), `audit_write_failed`.
+- Алерти Cloud Monitoring на email власника: `deletion_overdue > 0`; `stats_mismatch > 0`. Це операційний нагляд за NFR у консолі хмари, як бюджетні сповіщення — не функція адмінки (spec §3 Non-goals).
+- Tracing: не додається (у репо немає трасування; запит адмінки — один процес).
 
 **Scaling thresholds:**
-- <e.g. comfortable in one table up to N rows/year>
-- <e.g. partition by quarter above N rows/year>
-
-<!-- For XS/S with no deployment change: <!-- N/A: reuses existing deployment unit, no infra change --> -->
+- Індекс email: один документ-шард до ~20 000 записів (межа 1 МБ); далі — додаткові шарди, пошук лишається ≤ 10 читань.
+- Денні лічильники: один документ на добу витримує сталий ~1 запис/с — з max 1 instance і ≤ 2 одночасними задачами на користувача запас великий; при > 1 запису/с — шардовані лічильники.
+- Max instances = 1 — передумова ADR-0003/ADR-0008 (квота під замком у процесі); підняття потребує перенесення лічильників квоти у Firestore-транзакції (§11).
 
 ## 8. Crosscutting concepts
 
