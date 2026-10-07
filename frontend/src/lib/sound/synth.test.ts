@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import { volumeGain } from './engine'
-import { handpanDecay, handpanPartials, handpanRelease } from './handpanTone'
+import { midiToFreq } from './dsp'
+import {
+  HANDPAN_DING,
+  HANDPAN_FIELDS,
+  HANDPAN_MAX,
+  HANDPAN_RMS,
+  handpanModes,
+  handpanParams,
+  handpanRelease,
+  handpanSource,
+  renderHandpan,
+} from './handpanTone'
 import {
   HARMONIUM_RELEASE,
   HARMONIUM_RMS,
@@ -303,16 +314,158 @@ describe('piano keys', () => {
   })
 })
 
-describe('handpan tone', () => {
-  it('has fundamental, octave and compound fifth with a long ring', () => {
-    const p = handpanPartials(62)
-    expect(p.map((x) => x.ratio)).toEqual([1, 2, 3])
-    expect(p[0].attack).toBeCloseTo(0.008, 6)
-    for (const x of p) expect(x.beat).toBeGreaterThan(0)
-    expect(handpanDecay(45)).toBeGreaterThan(handpanDecay(77))
-    for (const m of [45, 62, 77]) {
-      expect(handpanRelease(m)).toBeGreaterThanOrEqual(2.5)
-      expect(handpanRelease(m)).toBeLessThanOrEqual(4)
+describe('handpan notes', () => {
+  const fs = 16000
+  /** Amplitude of the component at `freq` (Hann-windowed DFT over [from, from + seconds)). */
+  const amplitude = (x: Float32Array, freq: number, from: number, seconds: number) => {
+    const a = Math.round(from * fs)
+    const n = Math.round(seconds * fs)
+    let re = 0
+    let im = 0
+    let ws = 0
+    for (let i = 0; i < n; i++) {
+      const w = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / n)
+      re += x[a + i] * w * Math.cos((2 * Math.PI * freq * i) / fs)
+      im += x[a + i] * w * Math.sin((2 * Math.PI * freq * i) / fs)
+      ws += w
+    }
+    return (2 * Math.hypot(re, im)) / ws
+  }
+  const rms = (x: Float32Array, from: number, to: number) => {
+    let s = 0
+    const a = Math.round(from * fs)
+    const b = Math.min(x.length, Math.round(to * fs))
+    for (let i = a; i < b; i++) s += x[i] * x[i]
+    return Math.sqrt(s / (b - a))
+  }
+  const db = (a: number, b: number) => 20 * Math.log10(a / b)
+  const render = (midi: number, ding = false) => renderHandpan(handpanParams(midi, ding, fs))
+  const near = (ratio: number, k: number) => Math.abs(ratio - k) < 0.03 * k
+
+  it('have the measured modes: split tuned partials and the steel\'s own untuned ones', () => {
+    for (const field of [HANDPAN_DING, ...HANDPAN_FIELDS]) {
+      const modes = field.modes
+      expect(Math.max(...modes.map((m) => m[1]))).toBe(0) // dB re the strongest mode
+      expect(modes.some((m) => m[0] === 1)).toBe(true) // the pitch: the strongest long-ringing mode
+      // fundamental, octave and compound fifth
+      for (const k of [1, 2, 3]) expect(modes.some((m) => near(m[0], k))).toBe(true)
+      // the fundamental is two or more modes a few hertz apart (it beats)
+      expect(modes.filter((m) => near(m[0], 1)).length).toBeGreaterThanOrEqual(2)
+      // and the steel rings at untuned frequencies too
+      expect(modes.filter((m) => ![1, 2, 3, 4, 5, 6].some((k) => near(m[0], k))).length).toBeGreaterThan(0)
+      for (const [, , t60] of modes) {
+        expect(t60).toBeGreaterThan(0.1)
+        expect(t60).toBeLessThan(10)
+      }
+    }
+  })
+
+  it('voice the ding from the recorded ding and a field from the nearest recorded field, transposed', () => {
+    expect(handpanSource(41, true)).toBe(HANDPAN_DING)
+    expect(handpanSource(56, true)).toBe(HANDPAN_DING)
+    expect(handpanSource(62, false).midi).toBe(62)
+    expect(handpanSource(60, false).midi).toBe(62)
+    expect(handpanSource(40, false).midi).toBe(HANDPAN_FIELDS[0].midi)
+    expect(handpanSource(90, false).midi).toBe(HANDPAN_FIELDS[HANDPAN_FIELDS.length - 1].midi)
+    const at = handpanModes(62, false)
+    const down = handpanModes(61, false) // D4's modes a semitone lower, ringing a little longer
+    down.forEach((m, i) => {
+      expect(m.freq / at[i].freq).toBeCloseTo(Math.pow(2, -1 / 12), 9)
+      expect(m.tau).toBeGreaterThan(at[i].tau)
+      expect(m.amp).toBe(at[i].amp)
+    })
+    expect(Math.max(...handpanModes(62, false).filter((m) => m.amp === 1).map((m) => m.freq))).toBeCloseTo(midiToFreq(62), 6)
+  })
+
+  it('ring like the recording: the fundamental first, the octave blooming and outliving it', () => {
+    for (const [midi, ding] of [
+      [50, true],
+      [62, false],
+      [69, false],
+    ] as const) {
+      const x = render(midi, ding)
+      const f = midiToFreq(midi)
+      const octave = (t: number) => db(amplitude(x, 2 * f, t, 0.04), amplitude(x, f, t, 0.04))
+      // at the strike the fundamental leads by 10+ dB; a second later the octave is (nearly) as strong
+      expect(octave(0.005)).toBeLessThan(-10)
+      expect(octave(1)).toBeGreaterThan(octave(0.005) + 10)
+      // nothing between the partial clusters
+      expect(amplitude(x, 1.5 * f, 0.05, 0.5)).toBeLessThan(amplitude(x, f, 0.05, 0.5) * 0.05)
+    }
+    // the octave blooms: ~10 dB up within 100 ms (as measured on D3 and D4)
+    for (const [midi, ding] of [
+      [50, true],
+      [62, false],
+    ] as const) {
+      const x = render(midi, ding)
+      const f = midiToFreq(midi)
+      expect(db(amplitude(x, 2 * f, 0.09, 0.04), amplitude(x, 2 * f, 0.002, 0.02))).toBeGreaterThan(6)
+    }
+  })
+
+  it('shimmer: the split modes make the partials beat', () => {
+    for (const midi of [62, 69]) {
+      const x = render(midi)
+      const f = midiToFreq(midi)
+      const env = Array.from({ length: 25 }, (_, k) => db(amplitude(x, f, 0.2 + k * 0.04, 0.08), 1))
+      // remove the straight-line decay, keep the ripple
+      const k0 = (env.length - 1) / 2
+      const mean = env.reduce((a, b) => a + b, 0) / env.length
+      const slope = env.reduce((a, v, k) => a + (k - k0) * (v - mean), 0) / env.reduce((a, _, k) => a + (k - k0) ** 2, 0)
+      const res = env.map((v, k) => v - mean - slope * (k - k0))
+      expect(Math.max(...res) - Math.min(...res)).toBeGreaterThan(3)
+    }
+  })
+
+  it('clang: the untuned modes sound with the strike and die away first', () => {
+    const x = render(69) // A4: its strongest untuned mode, 0.84 × f0
+    const f = midiToFreq(69)
+    expect(db(amplitude(x, 0.8434 * f, 0.02, 0.25), amplitude(x, f, 0.02, 0.25))).toBeGreaterThan(-20)
+    const g = render(55) // G3: a hard, short ring under the fundamental
+    const g0 = midiToFreq(55)
+    const early = db(amplitude(g, 0.877 * g0, 0.01, 0.1), amplitude(g, g0, 0.01, 0.1))
+    const late = db(amplitude(g, 0.877 * g0, 1, 0.2), amplitude(g, g0, 1, 0.2))
+    expect(early).toBeGreaterThan(-10)
+    expect(late).toBeLessThan(early - 20)
+  })
+
+  it('decay in a few seconds: −30 dB in 1–2.5 s, never longer than HANDPAN_MAX', () => {
+    for (const [midi, ding] of [
+      [41, true],
+      [50, true],
+      [55, false],
+      [64, false],
+      [72, false],
+      [81, false],
+    ] as const) {
+      const release = handpanRelease(midi, ding)
+      expect(release).toBeGreaterThan(1)
+      expect(release).toBeLessThan(2.5)
+      const x = render(midi, ding)
+      expect(x.length).toBeLessThanOrEqual(HANDPAN_MAX * fs + 1)
+      expect(db(rms(x, release, release + 0.2), rms(x, 0, 0.3))).toBeLessThan(-22)
+    }
+    // low dings ring longer than high fields
+    expect(handpanRelease(41, true)).toBeGreaterThan(handpanRelease(81, false))
+  })
+
+  it('are deterministic, clean, level and end in silence', () => {
+    expect(render(67)).toEqual(render(67))
+    for (const [midi, ding] of [
+      [41, true],
+      [50, true],
+      [52, false],
+      [60, false],
+      [69, false],
+      [77, false],
+    ] as const) {
+      const x = render(midi, ding)
+      let peak = 0
+      for (const v of x) peak = Math.max(peak, Math.abs(v))
+      expect(peak).toBeLessThan(0.9)
+      expect(Math.abs(db(rms(x, 0, 0.3), HANDPAN_RMS))).toBeLessThan(0.1)
+      expect(Math.abs(x[0])).toBeLessThan(1e-3)
+      expect(Math.abs(x[x.length - 1])).toBeLessThan(1e-6)
     }
   })
 })
