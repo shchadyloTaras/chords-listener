@@ -12,8 +12,8 @@ const TREBLE_TOP = 17 // y of the F5 line
 const BASS_TOP = TREBLE_TOP + 4 * SP + 3.5 * SP // y of the A3 line
 const W = 74
 const H = BASS_TOP + 4 * SP + 9
-/** height of the treble staff alone (one hand, no bass) */
-const H_TREBLE = TREBLE_TOP + 4 * SP + 9
+/** height of the treble staff alone (one hand, no bass): room down to G3, two ledger lines below */
+const H_TREBLE = TREBLE_TOP + (38 - 25) * STEP + 6
 const CLEF_X = 4
 const NOTE_X = 50 // notehead centre
 const HEAD_W = 1.688 * SP // noteheadWhole width (Bravura metadata)

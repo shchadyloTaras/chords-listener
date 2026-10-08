@@ -158,6 +158,7 @@ describe('bass: the generated voicing', () => {
 describe('harmonium: the right hand\'s shape on its 37 keys, pressed together', () => {
   it('plays one hand, no bass below it, every note at once', () => {
     expect(midis(harmoniumChordNotes('C')).map(name)).toEqual(['C4', 'E4', 'G4'])
+    expect(midis(harmoniumChordNotes('F')).map(name)).toEqual(['C4', 'F4', 'A4'])
     expect(midis(harmoniumChordNotes('C/E')).map(name)).toEqual(['E4', 'G4', 'C5'])
     for (const label of ['C', 'F#m7', 'C/E']) {
       for (const n of harmoniumChordNotes(label)) expect(n.offset).toBe(0)
