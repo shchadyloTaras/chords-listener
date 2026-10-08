@@ -8,7 +8,7 @@ files_hint: ["frontend/src/components/clip/ClipPage.tsx", "frontend/src/componen
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 10 — re-review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T51 — Offer the tab on the fragment picker when the cloud refuses for the admin's reason
@@ -19,4 +19,4 @@ status: "todo"
 
 **Re-review fix 1. A ClipPage test shows that an admin refusal (youtube_disabled, cloud_restricted, analyses_paused) of a fragment opens «Слухати у вкладці» at the same start with the reason shown, and that a picker opened while the site already knows YouTube is off goes straight to the tab page without sending anything.**
 
-- [ ] lint + type-check clean (ruff / oxlint + tsc)
+- [x] lint + type-check clean (ruff / oxlint + tsc)

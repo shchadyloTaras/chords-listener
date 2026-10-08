@@ -57,7 +57,7 @@
 | [T48](./t48-stop-leaking-admin-routes-via-options-and-require.md) | Stop leaking admin routes via OPTIONS and require a verified email in the grant script | app | Тарас Щадило | S | T45 | done |
 | [T49](./t49-consolidate-the-in-memory-firestore-fakes-and-fix.md) | Consolidate the in-memory Firestore fakes and fix the AC-13b settings test | tests | Тарас Щадило | S | T48 | done |
 | [T50](./t50-run-the-emulator-tests-in-ci-and-align-the-test-pl.md) | Run the emulator tests in CI and align the test plan with the levels used | tests | Тарас Щадило | S | T49 | done |
-| [T51](./t51-offer-the-tab-on-the-fragment-picker-when-the-clou.md) | Offer the tab on the fragment picker when the cloud refuses for the admin's reason | ui | Тарас Щадило | S | T47 | todo |
+| [T51](./t51-offer-the-tab-on-the-fragment-picker-when-the-clou.md) | Offer the tab on the fragment picker when the cloud refuses for the admin's reason | ui | Тарас Щадило | S | T47 | done |
 | [T52](./t52-label-quiet-pre-launch-days-as-restored-and-show-t.md) | Label quiet pre-launch days as restored and show the YouTube source in job rows | migration | Тарас Щадило | S | T42, T41 | todo |
 | [T53](./t53-pass-the-admin-set-upload-limit-to-the-link-and-fr.md) | Pass the admin-set upload limit to the link and fragment downloads on every job | app | Тарас Щадило | S | T40 | todo |
 | [T54](./t54-keep-get-settings-and-get-jobs-inside-the-contract.md) | Keep GET /settings and GET /jobs inside the contract | ports | Тарас Щадило | S | T43, T44 | todo |
