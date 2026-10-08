@@ -198,7 +198,7 @@ export const LiveChordsView = memo(function LiveChordsView({ session, title, com
               <ChordDiagram label={shown ? shown.label : 'N'} instrument={instrument} size="sm" spelling={spelling} />
             </div>
             <div className="hidden sm:block">
-              {/* two rows of three: six buttons in one row would squeeze the chord name on narrow screens */}
+              {/* rows of three or four: eight buttons in one row would squeeze the chord name on narrow screens */}
               <InstrumentPicker className="max-w-64 flex-wrap justify-center" />
             </div>
           </div>

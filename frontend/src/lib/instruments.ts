@@ -4,8 +4,9 @@
 import type { Instrument } from '../store'
 import type { FretInstrument } from './diagrams/chordsDb'
 import type { CapoInstrument } from './music/capo'
+import type { WindInstrument } from './wind'
 
-export const INSTRUMENTS: readonly Instrument[] = ['guitar', 'bass', 'ukulele', 'piano', 'harmonium', 'handpan']
+export const INSTRUMENTS: readonly Instrument[] = ['guitar', 'bass', 'ukulele', 'piano', 'harmonium', 'handpan', 'sopilka', 'flute']
 
 /** Keyboards: a keyboard diagram (the piano's, the harmonium's) under the staff, and the live keys panel. */
 export function isKeyboard(i: Instrument): i is 'piano' | 'harmonium' {
@@ -15,6 +16,11 @@ export function isKeyboard(i: Instrument): i is 'piano' | 'harmonium' {
 /** Fretted instruments: a fretboard chart with a voicing switcher. */
 export function isFretted(i: Instrument): i is FretInstrument {
   return i === 'guitar' || i === 'bass' || i === 'ukulele'
+}
+
+/** Wind instruments (one note at a time): a fingering chart per note of the chord's arpeggio. */
+export function isWind(i: Instrument): i is WindInstrument {
+  return i === 'sopilka' || i === 'flute'
 }
 
 /** Instruments a capo suggestion makes sense for. */

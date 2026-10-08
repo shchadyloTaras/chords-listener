@@ -8,6 +8,8 @@ import { useApp, type Instrument } from '../../store'
 import { getLoadedDb, loadChordDb, type ChordDb, type FretInstrument } from '../diagrams/chordsDb'
 import { fretVoicings } from '../diagrams/fretted'
 import { HARMONIUM_LOW } from '../diagrams/harmonium'
+import { isWind } from '../instruments'
+import type { WindInstrument } from '../wind'
 import { resolveScale } from '../handpan'
 import { parseChord, type ParsedChord } from '../music/chord'
 import {
@@ -20,6 +22,8 @@ import {
   pianoChordNotes,
   pianoKeyNote,
   pickChordIndex,
+  windChordNotes,
+  windNote,
   type ChordSpan,
   type NoteEvent,
 } from './chordNotes'
@@ -60,6 +64,7 @@ export function chordSoundNotes(label: string, instrument: Instrument): NoteEven
   if (instrument === 'piano') return pianoChordNotes(label)
   if (instrument === 'harmonium') return harmoniumChordNotes(label)
   if (instrument === 'handpan') return handpanChordNotes(label, handpanScale())
+  if (isWind(instrument)) return windChordNotes(label, instrument)
   if (instrument === 'bass') return fretNotes(null, 'bass', label, parsed)
   const db = getLoadedDb(instrument)
   if (db) return fretNotes(db, instrument, label, parsed)
@@ -154,6 +159,15 @@ export function playHandpanField(label: string, index: number, opts: SoundOption
   if (!soundEngine.unlock()) return unavailable()
   feedback(opts)
   void soundEngine.play({ instrument: 'handpan', kind: 'note', label, notes: [note] })
+}
+
+/** One note (column) of a chord's sopilka / flute diagram. */
+export function playWindNote(label: string, instrument: WindInstrument, index: number, opts: SoundOptions = {}): void {
+  const note = windNote(label, instrument, index)
+  if (!note) return
+  if (!soundEngine.unlock()) return unavailable()
+  feedback(opts)
+  void soundEngine.play({ instrument, kind: 'note', label, notes: [note] })
 }
 
 export interface SongChords {

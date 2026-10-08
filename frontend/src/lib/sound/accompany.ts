@@ -12,6 +12,9 @@
 //   harmonium         the chord's shape pressed when the chord comes and held until it changes
 //   handpan           the bass field on the downbeat and at every change, the chord's other fields
 //                     in turn on the other beats and on every "and"
+//   sopilka / flute   one voice, as a melody player outlines the harmony: the diagram's arpeggio a
+//                     note per beat, from its first note on the downbeat and at every change, each
+//                     blown until a breath before the next beat
 
 import type { Instrument } from '../../store'
 import type { PulseGrid } from '../tempo'
@@ -48,6 +51,10 @@ const UP_GAP = 0.012
 const UP_STRINGS = 4
 /** How long the piano's keys stay down on a step (s): the next chord cuts it anyway. */
 export const PIANO_STEP_HOLD = 1.6
+/** A wind player tongues the next note: the breath stops this long (s) before the next beat. */
+export const WIND_BREATH = 0.05
+/** The longest a wind note is held in the play-along (s): over a long pause the player stops. */
+const WIND_MAX_HOLD = 2.4
 /** The play-along offset setting's range and step (ms; positive = the instrument plays later). */
 export const PLAY_ALONG_OFFSET_LIMIT = 150
 export const ALONG_OFFSET_STEP = 5
@@ -198,6 +205,26 @@ function handpan(beats: Beat[], chords: readonly AccompChord[], notesFor: ChordN
   return steps
 }
 
+function wind(beats: Beat[], chords: readonly AccompChord[], notesFor: ChordNotesFn): AccompStep[] {
+  const steps: AccompStep[] = []
+  let turn = 0
+  for (let i = 0; i < beats.length; i++) {
+    const b = beats[i]
+    if (b.chord < 0) continue
+    const chord = chords[b.chord]
+    const line = notesFor(chord.label)
+    if (!line.length) continue
+    if (b.change || b.pos === 0) turn = 0
+    const n = line[turn++ % line.length]
+    // blown until the next beat (or the chord's end), a breath before it
+    const next = Number.isFinite(b.next) ? b.next : chord.end
+    const hold = Math.min(next, chord.end, b.time + WIND_MAX_HOLD) - b.time - WIND_BREATH
+    if (hold < 0.06) continue
+    steps.push({ time: b.time, label: chord.label, cut: 'all', notes: [{ ...n, offset: 0, velocity: b.pos === 0 ? 0.9 : 0.8, hold }] })
+  }
+  return steps
+}
+
 /** The steps the instrument plays along the song (ascending time). */
 export function accompanySteps(instrument: Instrument, chords: readonly AccompChord[], grid: PulseGrid, notesFor: ChordNotesFn): AccompStep[] {
   const beats = beatsOf(chords, grid)
@@ -218,6 +245,10 @@ export function accompanySteps(instrument: Instrument, chords: readonly AccompCh
       break
     case 'handpan':
       steps = handpan(beats, chords, notesFor)
+      break
+    case 'sopilka':
+    case 'flute':
+      steps = wind(beats, chords, notesFor)
       break
   }
   return steps.sort((a, b) => a.time - b.time)

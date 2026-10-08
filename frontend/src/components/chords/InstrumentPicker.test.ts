@@ -33,16 +33,16 @@ afterEach(() => {
 const render = () => act(() => root!.render(createElement(InstrumentPicker)))
 const click = (el: Element | null | undefined) => act(() => (el as HTMLElement).click())
 
-it('shows the six instruments as buttons on a wide screen', () => {
+it('shows the eight instruments as buttons on a wide screen', () => {
   wide = true
   render()
   const radios = [...host.querySelectorAll('[role="radio"]')]
-  expect(radios.map((r) => r.textContent)).toEqual(['Гітара', 'Бас', 'Укулеле', 'Фортепіано', 'Фісгармонія', 'Хендпан'])
+  expect(radios.map((r) => r.textContent)).toEqual(['Гітара', 'Бас', 'Укулеле', 'Фортепіано', 'Фісгармонія', 'Хендпан', 'Сопілка', 'Флейта'])
   click(radios[4])
   expect(useApp.getState().instrument).toBe('harmonium')
 })
 
-it('opens its own menu on a narrow screen: the six instruments, the current one checked', () => {
+it('opens its own menu on a narrow screen: the eight instruments, the current one checked', () => {
   wide = false
   render()
   expect(host.querySelector('select')).toBeNull()
@@ -56,8 +56,8 @@ it('opens its own menu on a narrow screen: the six instruments, the current one 
   expect(host.contains(menu)).toBe(false)
   expect(menu.getAttribute('aria-label')).toBe('Інструмент')
   const items = [...menu.querySelectorAll('[role="menuitemradio"]')]
-  expect(items.map((i) => i.textContent)).toEqual(['Гітара', 'Бас', 'Укулеле', 'Фортепіано', 'Фісгармонія', 'Хендпан'])
-  expect(items.map((i) => i.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false', 'false', 'false', 'false'])
+  expect(items.map((i) => i.textContent)).toEqual(['Гітара', 'Бас', 'Укулеле', 'Фортепіано', 'Фісгармонія', 'Хендпан', 'Сопілка', 'Флейта'])
+  expect(items.map((i) => i.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false', 'false', 'false', 'false', 'false', 'false'])
   click(items[1])
   expect(useApp.getState().instrument).toBe('bass')
   expect(document.body.querySelector('[role="menu"]')).toBeNull()
@@ -76,11 +76,11 @@ it('moves through the menu with the arrow keys', () => {
   expect(document.activeElement).toBe(items[1])
   key('ArrowUp')
   key('ArrowUp')
-  expect(document.activeElement).toBe(items[5])
+  expect(document.activeElement).toBe(items[7])
   key('Home')
   expect(document.activeElement).toBe(items[0])
   key('End')
-  expect(document.activeElement).toBe(items[5])
+  expect(document.activeElement).toBe(items[7])
 })
 
 it('carries its tour anchor on a wide and on a narrow screen', () => {
@@ -100,6 +100,10 @@ it('looks like a control on a narrow screen: a visible «Інструмент» 
   expect(host.querySelector('svg.lucide-harmonium')).not.toBeNull()
   act(() => useApp.setState({ instrument: 'handpan' }))
   expect(host.querySelector('svg.lucide-handpan')).not.toBeNull()
+  act(() => useApp.setState({ instrument: 'sopilka' }))
+  expect(host.querySelector('svg.lucide-sopilka')).not.toBeNull()
+  act(() => useApp.setState({ instrument: 'flute' }))
+  expect(host.querySelector('svg.lucide-flute')).not.toBeNull()
 })
 
 it('gives every instrument an icon of its own in the menu', () => {
@@ -109,5 +113,5 @@ it('gives every instrument an icon of its own in the menu', () => {
   const icons = [...document.body.querySelectorAll('[role="menuitemradio"] > span[aria-hidden] > svg')].map((svg) =>
     [...svg.classList].find((c) => c.startsWith('lucide-')),
   )
-  expect(icons).toEqual(['lucide-guitar', 'lucide-bass-guitar', 'lucide-ukulele', 'lucide-piano', 'lucide-harmonium', 'lucide-handpan'])
+  expect(icons).toEqual(['lucide-guitar', 'lucide-bass-guitar', 'lucide-ukulele', 'lucide-piano', 'lucide-harmonium', 'lucide-handpan', 'lucide-sopilka', 'lucide-flute'])
 })

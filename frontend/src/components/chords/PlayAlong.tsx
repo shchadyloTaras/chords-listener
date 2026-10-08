@@ -13,6 +13,7 @@ import clsx from 'clsx'
 import { Minus, Plus } from 'lucide-react'
 import { useT } from '../../i18n'
 import { getLoadedDb, loadChordDb } from '../../lib/diagrams/chordsDb'
+import { isWind } from '../../lib/instruments'
 import { accompanySteps, ALONG_OFFSET_STEP, clampAlongOffset, PLAY_ALONG_OFFSET_LIMIT, type AccompStep, type ChordNotesFn } from '../../lib/sound/accompany'
 import { chordSoundNotes, PLAY_ALONG_MAX_VOLUME, soundEngine, type NoteEvent } from '../../lib/sound'
 import { lowerBound, MetronomeScheduler } from '../../lib/tempo'
@@ -30,9 +31,9 @@ const LOOKAHEAD = 0.3
 const PREPARE_AHEAD = 4
 
 
-/** A step's notes at playback rate `rate`: a held harmonium chord is held for the same stretch of the song. */
+/** A step's notes at playback rate `rate`: a held harmonium chord / blown wind note lasts the same stretch of the song. */
 function stepNotes(instrument: Instrument, step: AccompStep, rate: number): NoteEvent[] {
-  if (instrument !== 'harmonium' || rate === 1) return step.notes
+  if ((instrument !== 'harmonium' && !isWind(instrument)) || rate === 1) return step.notes
   return step.notes.map((n) => (n.hold != null ? { ...n, hold: n.hold / rate } : n))
 }
 
