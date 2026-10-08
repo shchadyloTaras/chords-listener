@@ -75,6 +75,8 @@ export interface Settings {
   /** the selected instrument plays along with the song in its own style (lib/sound/accompany.ts); this device only */
   playAlong: boolean
   playAlongVolume: number // 0..2 (PLAY_ALONG_MAX_VOLUME)
+  /** play-along timing correction, ms (positive = the instrument plays later), ±PLAY_ALONG_OFFSET_LIMIT */
+  playAlongOffsetMs: number
 }
 
 export interface AppState extends Settings {
@@ -136,6 +138,7 @@ const defaultSettings: Settings = {
   harmoniumDrone: false,
   playAlong: false,
   playAlongVolume: 0.8,
+  playAlongOffsetMs: 0,
 }
 
 let toastSeq = 1
@@ -225,6 +228,7 @@ export const useApp = create<AppState>()(
         harmoniumDrone: s.harmoniumDrone,
         playAlong: s.playAlong,
         playAlongVolume: s.playAlongVolume,
+        playAlongOffsetMs: s.playAlongOffsetMs,
       }),
     },
   ),

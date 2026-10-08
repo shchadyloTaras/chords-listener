@@ -4,13 +4,16 @@
 // the audio clock (MetronomeScheduler: re-synced after a seek, a loop wrap or a speed change). The
 // clock it plans on is the one being heard (the output timestamp), the player reports the position
 // being heard, so a step is heard together with the recording's beat whatever the output latency.
+// The beat grid itself may sit a few ms off the recording's attacks (it depends on the song): the
+// playAlongOffsetMs setting moves the whole accompaniment earlier / later.
 // The next seconds' notes are rendered ahead, one per tick, so none renders when it is due.
 
 import { useEffect, useMemo, useState } from 'react'
 import clsx from 'clsx'
+import { Minus, Plus } from 'lucide-react'
 import { useT } from '../../i18n'
 import { getLoadedDb, loadChordDb } from '../../lib/diagrams/chordsDb'
-import { accompanySteps, type AccompStep, type ChordNotesFn } from '../../lib/sound/accompany'
+import { accompanySteps, ALONG_OFFSET_STEP, clampAlongOffset, PLAY_ALONG_OFFSET_LIMIT, type AccompStep, type ChordNotesFn } from '../../lib/sound/accompany'
 import { chordSoundNotes, PLAY_ALONG_MAX_VOLUME, soundEngine, type NoteEvent } from '../../lib/sound'
 import { lowerBound, MetronomeScheduler } from '../../lib/tempo'
 import { useApp, type Instrument } from '../../store'
@@ -25,6 +28,7 @@ import { useChordUi } from './uiStore'
 const LOOKAHEAD = 0.3
 /** Notes of the steps due within this many song seconds are rendered ahead. */
 const PREPARE_AHEAD = 4
+
 
 /** A step's notes at playback rate `rate`: a held harmonium chord is held for the same stretch of the song. */
 function stepNotes(instrument: Instrument, step: AccompStep, rate: number): NoteEvent[] {
@@ -97,6 +101,9 @@ class PlayAlongRuntime {
       // player not ready
     }
     const rate = s.playbackRate
+    // the offset: planned as if the song were that much earlier (positive = the instrument later);
+    // a change is eased in by the scheduler like clock drift
+    media -= (clampAlongOffset(s.playAlongOffsetMs) / 1000) * rate
     const loop = s.loop && s.loop.end > s.loop.start ? s.loop.end : null
     // plan on the clock of what is heard now: a step planned at context time `at` is heard when the
     // song is at its time
@@ -224,6 +231,53 @@ export function PlayAlongVolume({ className }: { className?: string }) {
         className="h-1 min-w-0 flex-1 cursor-pointer accent-accent"
       />
       <span className={clsx('w-9 shrink-0 text-right font-mono text-[11px] tabular-nums', volume > 1 ? 'text-accent' : 'text-muted')}>{pct}%</span>
+    </div>
+  )
+}
+
+const signedMs = (n: number) => (n > 0 ? `+${n}` : n < 0 ? `−${Math.abs(n)}` : '0')
+
+/** The play-along offset: ±150 ms (positive = the instrument plays later), steppers and a reset. */
+export function PlayAlongOffset() {
+  const t = useT()
+  const value = clampAlongOffset(useApp((s) => s.playAlongOffsetMs))
+  const set = (ms: number) => useApp.getState().setSetting('playAlongOffsetMs', clampAlongOffset(ms))
+  const step = 'grid size-7 shrink-0 place-items-center rounded-md text-muted hover:bg-surface-3 hover:text-text'
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-1.5">
+        <button type="button" aria-label={t('sound.along.offset.earlier')} title={t('sound.along.offset.earlier')} onClick={() => set(value - ALONG_OFFSET_STEP)} className={step}>
+          <Minus size={14} />
+        </button>
+        <input
+          type="range"
+          min={-PLAY_ALONG_OFFSET_LIMIT}
+          max={PLAY_ALONG_OFFSET_LIMIT}
+          step={ALONG_OFFSET_STEP}
+          value={value}
+          aria-label={t('sound.along.offset')}
+          aria-valuetext={t('sound.along.offset.ms', { n: signedMs(value) })}
+          onChange={(e) => set(Number(e.target.value))}
+          className="h-1 min-w-0 flex-1 cursor-pointer accent-accent"
+        />
+        <button type="button" aria-label={t('sound.along.offset.later')} title={t('sound.along.offset.later')} onClick={() => set(value + ALONG_OFFSET_STEP)} className={step}>
+          <Plus size={14} />
+        </button>
+        <span className={clsx('w-14 shrink-0 text-right font-mono text-[11px] tabular-nums', value ? 'text-accent' : 'text-muted')}>
+          {t('sound.along.offset.ms', { n: signedMs(value) })}
+        </span>
+      </div>
+      <div className="flex items-center justify-between gap-2 text-[11px] text-muted">
+        <span>{t('sound.along.offset.hint')}</span>
+        <button
+          type="button"
+          onClick={() => set(0)}
+          disabled={!value}
+          className="shrink-0 rounded px-1.5 py-0.5 hover:bg-surface-3 hover:text-text disabled:opacity-40"
+        >
+          {t('sound.along.offset.reset')}
+        </button>
+      </div>
     </div>
   )
 }

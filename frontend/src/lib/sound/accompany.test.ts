@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PulseGrid } from '../tempo'
-import { accompanySteps, BEAT_SNAP, HARMONIUM_LIFT, PIANO_STEP_HOLD, type AccompChord, type AccompStep } from './accompany'
+import { accompanySteps, BEAT_SNAP, clampAlongOffset, HARMONIUM_LIFT, PIANO_STEP_HOLD, PLAY_ALONG_OFFSET_LIMIT, type AccompChord, type AccompStep } from './accompany'
 import type { NoteEvent } from './chordNotes'
 
 /** 4/4 at 120 BPM: a beat every 0.5 s, 16 beats (4 bars). */
@@ -124,5 +124,16 @@ describe('play-along: handpan', () => {
 
   it('plays nothing for a chord the handpan has no notes of', () => {
     expect(accompanySteps('handpan', [{ start: 0, end: 2, label: 'Dbm' }], grid(), shape(3))).toEqual([])
+  })
+})
+
+describe('play-along offset setting', () => {
+  it('keeps multiples of 5 ms within ±150 ms, 0 for anything odd', () => {
+    expect(clampAlongOffset(23)).toBe(25)
+    expect(clampAlongOffset(-12)).toBe(-10)
+    expect(clampAlongOffset(400)).toBe(PLAY_ALONG_OFFSET_LIMIT)
+    expect(clampAlongOffset(-400)).toBe(-PLAY_ALONG_OFFSET_LIMIT)
+    expect(clampAlongOffset(Number.NaN)).toBe(0)
+    expect(Object.is(clampAlongOffset(-1), 0)).toBe(true)
   })
 })
