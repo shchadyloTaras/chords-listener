@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseChord } from '../music/chord'
+import { chordPitchClasses, parseChord } from '../music/chord'
 import {
   HARMONIUM_HIGH,
   HARMONIUM_KEYS,
@@ -8,12 +8,11 @@ import {
   harmoniumKeyMidi,
   harmoniumKeys,
   harmoniumMidiKey,
+  harmoniumStaff,
   harmoniumVoicing,
   harmoniumWhiteSlot,
   isHarmoniumBlack,
 } from './harmonium'
-import { pianoVoicing } from './piano'
-import { staffChord } from './staff'
 
 const voicing = (label: string) => harmoniumVoicing(parseChord(label)!)
 
@@ -60,29 +59,55 @@ describe('harmonium keyboard', () => {
   })
 })
 
-describe('harmonium voicing', () => {
-  it('plays the bass in the lowest octave and the chord from middle C', () => {
-    expect(voicing('C')).toEqual({ notes: [0, 12, 16, 19], bass: 0 })
-    expect(voicing('Am')).toEqual({ notes: [9, 21, 24, 28], bass: 9 })
-    expect(voicing('F#m')).toEqual({ notes: [6, 18, 21, 25], bass: 6 })
-    expect(voicing('Bb')).toEqual({ notes: [10, 22, 26, 29], bass: 10 })
-    expect(voicing('G7')).toEqual({ notes: [7, 19, 23, 26, 29], bass: 7 })
-    expect(voicing('Cmaj7')).toEqual({ notes: [0, 12, 16, 19, 23], bass: 0 })
+describe('harmonium voicing: one hand (the left pumps the bellows)', () => {
+  it('plays the chord in close position from its root, in the octave from middle C', () => {
+    expect(voicing('C')).toEqual({ notes: [12, 16, 19] })
+    expect(voicing('Am')).toEqual({ notes: [21, 24, 28] })
+    expect(voicing('F#m')).toEqual({ notes: [18, 21, 25] })
+    expect(voicing('Bb')).toEqual({ notes: [22, 26, 29] })
+    expect(voicing('G7')).toEqual({ notes: [19, 23, 26, 29] })
+    expect(voicing('Cmaj7')).toEqual({ notes: [12, 16, 19, 23] })
   })
 
-  it('takes a slash bass out of the right hand, like the staff', () => {
-    expect(voicing('C/G')).toEqual({ notes: [7, 24, 28, 31], bass: 7 })
-    expect(voicing('C/E')).toEqual({ notes: [4, 24, 28, 31], bass: 4 })
+  it('puts a slash bass at the bottom of the hand: an inversion, no separate bass', () => {
+    expect(voicing('C/E')).toEqual({ notes: [16, 19, 24] }) // E G C
+    expect(voicing('C/G')).toEqual({ notes: [19, 24, 28] }) // G C E
+    expect(voicing('C/D')).toEqual({ notes: [14, 16, 19, 24] }) // D E G C
+    expect(voicing('Bbadd9/C')).toEqual({ notes: [12, 14, 17, 22] }) // C D F Bb
   })
 
-  it('lights exactly the notes the grand staff shows, all on the keyboard', () => {
-    for (const label of ['C', 'Am', 'F#m', 'Bb', 'C/G', 'G7', 'Cmaj7', 'B9', 'Cdim7', 'D/F#', 'Ebm6', 'Bbadd9/C']) {
+  it('leaves out the perfect fifth of a five-tone chord', () => {
+    expect(voicing('C9')).toEqual({ notes: [12, 14, 16, 22] }) // C D E Bb
+    expect(voicing('B9')).toEqual({ notes: [23, 25, 27, 33] }) // B C# D# A
+  })
+
+  it('fits every chord in one hand on the keyboard: bass lowest, within an octave, every other tone kept', () => {
+    const roots = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B']
+    const suffixes = ['', 'm', '7', 'maj7', 'm7', 'dim', 'aug', 'sus2', 'sus4', 'dim7', 'm7b5', '6', 'm6', '9', 'add9']
+    for (const root of roots)
+      for (const suffix of [...suffixes, ...suffixes.map((s) => `${s}/E`)]) {
+        const parsed = parseChord(root + suffix)!
+        const { notes } = harmoniumVoicing(parsed)
+        const bassPc = parsed.bassPc ?? parsed.rootPc
+        expect(notes[0]).toBe(12 + bassPc)
+        expect(notes.at(-1)! - notes[0]).toBeLessThan(12)
+        expect(notes.length).toBeLessThanOrEqual(5)
+        expect(notes.every((k, i) => k >= 0 && k < HARMONIUM_KEYS && (i === 0 || k > notes[i - 1]))).toBe(true)
+        const fifth = (parsed.rootPc + 7) % 12
+        const missing = chordPitchClasses(parsed).filter((pc) => !notes.some((k) => k % 12 === pc))
+        expect(missing.every((pc) => pc === fifth && pc !== bassPc)).toBe(true)
+      }
+  })
+
+  it('writes the shape on the treble staff, spelled by chord degree', () => {
+    const names = (label: string) => harmoniumStaff(parseChord(label)!).map((n) => n.name + n.octave)
+    expect(names('C')).toEqual(['C4', 'E4', 'G4'])
+    expect(names('Gm')).toEqual(['G4', 'Bb4', 'D5'])
+    expect(names('Cdim7')).toEqual(['C4', 'Eb4', 'Gb4', 'Bbb4'])
+    expect(names('D/F#')).toEqual(['F#4', 'A4', 'D5'])
+    for (const label of ['C', 'Am', 'G7', 'C/E', 'B9', 'Ebm6']) {
       const parsed = parseChord(label)!
-      const staff = staffChord(parsed, pianoVoicing(parsed))
-      const v = harmoniumVoicing(parsed)
-      expect(v.notes).toEqual([staff.bass, ...staff.treble].map((n) => n.midi - 48))
-      expect(v.bass).toBe(staff.bass.midi - 48)
-      expect(v.notes.every((k) => k >= 0 && k < HARMONIUM_KEYS)).toBe(true)
+      expect(harmoniumStaff(parsed).map((n) => n.midi)).toEqual(harmoniumVoicing(parsed).notes.map((k) => k + 48))
     }
   })
 })

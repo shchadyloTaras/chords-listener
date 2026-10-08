@@ -143,6 +143,7 @@ export const chords: Dict = {
     'chords.voicing.none': 'Немає аплікатури',
     'chords.fret': '{n} лад',
     'chords.staff.label': '{chord} на нотному стані: права рука {notes}, ліва рука {bass}',
+    'chords.staff.label.oneHand': '{chord} на нотному стані: права рука {notes}',
     'chords.staff.treble': 'Скрипковий ключ (ключ соль): його завиток обвиває лінію соль першої октави',
     'chords.staff.bass': 'Басовий ключ (ключ фа): дві крапки стоять обабіч лінії фа малої октави',
 
@@ -293,6 +294,7 @@ export const chords: Dict = {
     'chords.voicing.none': 'No shape available',
     'chords.fret': 'fret {n}',
     'chords.staff.label': '{chord} on the staff: right hand {notes}, left hand {bass}',
+    'chords.staff.label.oneHand': '{chord} on the staff: right hand {notes}',
     'chords.staff.treble': 'Treble clef (G clef): its curl wraps the G4 line',
     'chords.staff.bass': 'Bass clef (F clef): its two dots sit either side of the F3 line',
 
