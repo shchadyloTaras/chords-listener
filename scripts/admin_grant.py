@@ -141,7 +141,9 @@ def run(argv: list[str], *, db: Any = None, lookup: Any = None, now: Optional[da
         note = check_note(args.note) if args.action == "grant" else None
         lookup = lookup or AuthEmailLookup(args.project)
         uid = resolve_uid(args.target, lookup)
-        db = db or FirestoreIndex(args.project, session_factory=adc_session_factory(args.project))
+        # with the Firestore emulator host set, FirestoreIndex talks to the emulator without credentials
+        db = db or FirestoreIndex(args.project, session_factory=None if os.environ.get("FIRESTORE_EMULATOR_HOST")
+                                  else adc_session_factory(args.project))
         message = (grant(db, uid, note, now or datetime.now(timezone.utc)) if args.action == "grant"
                    else revoke(db, uid))
     except Refused as exc:

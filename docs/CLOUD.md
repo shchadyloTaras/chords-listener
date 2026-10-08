@@ -174,6 +174,65 @@ As deployed by `scripts/deploy_cloud.sh`: runtime service account `chords-api@bu
 - A full deploy takes ~9 min (Cloud Build ~7.5 min on the default free-tier machine, image ≈0.9 GB compressed); the uploaded source archive is deleted afterwards.
 - The build runs in `$REGION` (europe-west1), the Artifact Registry repo's region. From the global pool (US) each build's cache pull of the previous image was billed as intercontinental Artifact Registry egress (~$0.06 per deploy).
 
+## Admin console
+
+The administrator's page (`admin.html`, built next to the site by the Pages workflow) and `/api/admin/*` on the same Cloud Run service: **https://shchadylotaras.github.io/chords-listener/admin.html**. Anyone without the admin mark gets "Сторінку не знайдено" (AC-31). Design: [`docs/features/admin/sad.md`](features/admin/sad.md), [spec](features/admin/spec.md), [data model](features/admin/data-model.md); who may write the allowlist: [ADR-0006](features/admin/adr/0006-authorize-admins-via-firestore-allowlist-with-60s-cache.md). No new service, no 2FA in v1 (final actions need a sign-in no older than 15 minutes), no e-mails to users.
+
+### Granting and revoking admins
+
+Only the owner can do it, from their own machine: `scripts/admin_grant.py` writes or deletes `adminAllowlist/<uid>` in Firestore with the owner's Application Default Credentials (no key file, no service account; the server's code has no write path to that collection). The e-mail is only looked up in Firebase Auth to find the uid and is never stored; the document holds `grantedAt` and an optional `--note` (up to 200 characters, never an e-mail).
+
+```bash
+gcloud auth application-default login
+gcloud auth application-default set-quota-project build-chords-listener   # once per machine
+backend/.venv/bin/python scripts/admin_grant.py grant  person@example.com --note "support"
+backend/.venv/bin/python scripts/admin_grant.py revoke person@example.com
+```
+
+A uid works in place of the e-mail; `--project ID` overrides `build-chords-listener`. Exit code 0 also means "already granted" / "was not an admin"; 1 means refused or failed (the message says why). The person has to have signed in to the site once, or the e-mail has no uid yet. The server caches the allowlist for 60 seconds, so **a revoke takes effect within a minute** (AC-32): from then on every admin action and read of an already open admin page is refused with the same "not found" answer. Every change is visible in Cloud Audit Logs under the owner's name; anyone with write access to the project's Firestore can also change the allowlist, so keep that IAM role with the owner alone. Against the emulators: `FIRESTORE_EMULATOR_HOST=localhost:8080 FIREBASE_AUTH_EMULATOR_HOST=localhost:9099 backend/.venv/bin/python scripts/admin_grant.py grant some-test-uid` (an e-mail needs an account in the Auth emulator).
+
+### Migrations: promotion order 01–06
+
+The staged files in [`docs/features/admin/migrations/`](features/admin/migrations/) are the only copy (the repo has no live migrations tree). Each step is idempotent and has a `.down` pair; run them one at a time, in this order, each with the owner's OK. 02 and 03 are already merged into `firestore.indexes.json` and `firestore.rules`, so they are deployed, not copied.
+
+| # | File | Run |
+|---|---|---|
+| 01 | `01_add_track_size.up.py` | adds `sizeBytes` to every published track; it measures the track files, so `CHORDS_DATA_DIR` must point at the mounted bucket (the same files the service sees at `/data`) |
+| 02 | `02_admin_indexes_and_ttl.up.json` | `npx -y firebase-tools@latest deploy --only firestore:indexes --project build-chords-listener`; wait until the indexes are built (Firebase console → Firestore → Indexes) |
+| 03 | `03_admin_rules.up.rules` | `npx -y firebase-tools@latest deploy --only firestore:rules --project build-chords-listener` |
+| 04 | `04_seed_runtime_config.up.py` | creates `adminConfig/settings` and `publicStatus/current` from the `CHORDS_*` values, only if absent |
+| 05 | `05_build_email_index.up.py` | builds the e-mail search index from `users` |
+| 06 | `06_restore_stats_from_tracks.up.py` | restores the daily statistics before the launch day: `--before YYYY-MM-DD` (the day the admin goes live) |
+
+01, 04, 05 and 06 run from `backend/` with the owner's credentials; add `--dry-run` first, then run again without it (each prints what it found or changed):
+
+```bash
+gcloud auth application-default login
+cd backend
+export CHORDS_FIREBASE_PROJECT=build-chords-listener
+export PYTHONPATH=.:../docs/features/admin/migrations
+.venv/bin/python ../docs/features/admin/migrations/04_seed_runtime_config.up.py --dry-run
+.venv/bin/python ../docs/features/admin/migrations/05_build_email_index.up.py --dry-run
+.venv/bin/python ../docs/features/admin/migrations/06_restore_stats_from_tracks.up.py --before 2026-10-15 --dry-run
+CHORDS_DATA_DIR=/path/to/mounted/bucket .venv/bin/python ../docs/features/admin/migrations/01_add_track_size.up.py --dry-run
+```
+
+Put the real launch day in `--before`. Roll back with the matching `*.down.*` file in reverse order (06 → 01); roll back 01 only after the code that writes `sizeBytes` is rolled back, or the publish path adds it again. Rolling out the code: 01–04 before the new revision serves the admin page (the server falls back to the `CHORDS_*` values while `adminConfig/settings` is missing), 05 and 06 may follow it.
+
+### Sweep schedule and alerts
+
+`scripts/deploy_cloud.sh` (after the deploy; `SKIP_OPS=1` skips it) sets up the background work, idempotently:
+
+- **Max instances = 1 guard.** The daily quota, the probe limiter and the deletion limit are counted in the memory of the one process, so the script refuses any `MAX_INSTANCES` other than 1 before it touches Google Cloud, checks the deployed value afterwards, and the server logs a warning at start-up when the cap is not 1.
+- **Two Cloud Scheduler jobs** `chords-sweep-0015` (00:15 UTC) and `chords-sweep-1215` (12:15 UTC) call `POST /api/internal/sweep` with an OIDC token of the service account `chords-scheduler@build-chords-listener.iam.gserviceaccount.com` (role `run.invoker`); the server checks signature, audience and that e-mail. A sweep replays the projections, closes stale jobs, reconciles and freezes yesterday, syncs the e-mail index and runs due deletions; the first natural wake-up after 00:00 UTC runs it too. Twice a day because a deletion then runs at most 12 hours after its window and one failed pass still fits in 24; the price is up to 30 minutes of instance time on a day with no traffic.
+- **Log-based metrics** `admin_request`, `server_wake_by`, `deletion_overdue`, `stats_mismatch`, `audit_write_failed`, and **two alert policies e-mailed to `ALERT_EMAIL`** (environment or `.cloud.env`): `deletion_overdue > 0` (a deletion is more than 24 hours late) and `stats_mismatch > 0` (the nightly reconciliation of a day found a difference). Without `ALERT_EMAIL` the script warns and creates no alerts. These are operational alerts for the owner, not an admin feature.
+
+See the plan without touching Google Cloud: `DRY_RUN=1 scripts/deploy_cloud.sh`. Run the sweep by hand: `gcloud scheduler jobs run chords-sweep-0015 --location europe-west1`; look at the logs: `gcloud run services logs read chords-api --region europe-west1 --limit 100`.
+
+### Decisions taken at design (spec §8)
+
+Closed 2026-10-07: no 2FA in v1, no e-mails to users (a restricted or scheduled-for-deletion user sees the same cloud-restriction explanation, without the deletion date). Defaults applied: the support address in that explanation is the owner's (`SUPPORT_EMAIL` in `frontend/src/i18n/cloud.ts`), and the `smoke-test` account is shown apart as "службовий" and left out of the statistics.
+
 ## Verified (2026-10-05, revisions `chords-api-00002` and `-00003`)
 
 - `scripts/smoke_cloud.py`: 26/26 checks on both revisions — health; 401 without / with an invalid token (readable cross-origin); CORS preflight from GitHub Pages; multipart upload → job → track with chords → signed audio with `Range` (206), tampered / unsigned audio → 401; notes PUT/GET; bucket upload with `gcloud storage cp` → `POST /api/jobs/storage` linked to a YouTube video with `startOffset` (title from oEmbed, times shifted, upload object deleted); another user's path → 403; a real YouTube link; third concurrent job → 429 `quota_exceeded`; daily counter; delete.
