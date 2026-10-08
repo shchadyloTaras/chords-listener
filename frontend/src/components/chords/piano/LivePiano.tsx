@@ -24,6 +24,7 @@ import { useChordModel } from '../model'
 import { usePianoNotes } from '../score/pianoNotes'
 import { useScoreSettings } from '../score/scoreSettings'
 import { IconButton } from '../ui/controls'
+import { useCancelVocals } from '../useCancelVocals'
 import { noteName } from './keyboard'
 import { readPalette } from './palette'
 import { PianoRenderer, type RollChord } from './renderer'
@@ -265,6 +266,7 @@ function VocalsLine({ notes, source, vocals, showVocals }: { notes: NotesState; 
   // Only starting asks the cloud anything (startVocals); showing the offer never does.
   useConnection((s) => s.status)
   useConnection((s) => s.health)
+  const { cancelling, cancel } = useCancelVocals(track)
   if (notes.status !== 'ready' || !notes.index.count) return null
   const line = 'flex min-w-0 items-center gap-1.5 text-xs text-muted'
   switch (vocals.status) {
@@ -306,6 +308,16 @@ function VocalsLine({ notes, source, vocals, showVocals }: { notes: NotesState; 
           <span className="truncate" aria-live="polite">
             {t('keys.vocals.running', { pct: Math.floor(vocals.progress * 100) })}
           </span>
+          <button
+            type="button"
+            onClick={cancel}
+            disabled={cancelling || !vocals.jobId}
+            title={t('score.vocals.cancel.title')}
+            className="inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 font-medium text-text underline-offset-2 hover:underline disabled:opacity-50"
+          >
+            {cancelling ? <LoaderCircle size={12} className="animate-spin" aria-hidden /> : <X size={12} aria-hidden />}
+            {t('score.vocals.cancel')}
+          </button>
         </div>
       )
     case 'error': {

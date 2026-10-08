@@ -16,7 +16,7 @@ import { baseOptions, configureRules, fracAt, measureLayout, OpenSheetMusicDispl
 import { SCORE_LEVELS, type Score, type ScoreLevel } from '../../../lib/score/types'
 import { useConnection } from '../../../lib/serverMode'
 import { requestNotes, type NotesState } from '../../../lib/transcription'
-import { cancelVocals, loadVocals, startVocals, vocalsSupport, type VocalsState } from '../../../lib/vocals'
+import { loadVocals, startVocals, vocalsSupport, type VocalsState } from '../../../lib/vocals'
 import { useApp } from '../../../store'
 import { AccountButtons } from '../../account/AccountCta'
 import { useCloudInvite } from '../../account/cloudInvite'
@@ -26,6 +26,7 @@ import { isTypingTarget } from '../hotkeys'
 import { useChordModel } from '../model'
 import { useChordUi } from '../uiStore'
 import { useTourFlags, useTourTrigger } from '../../tour/hooks'
+import { useCancelVocals } from '../useCancelVocals'
 import { Floating } from '../ui/Floating'
 import { Divider, Segmented, ToggleChip } from '../ui/controls'
 import { EXPORT_KINDS, exportScore, useScoreExport, type ExportKind } from './exportScore'
@@ -248,18 +249,7 @@ function VocalsCard({ state }: { state: VocalsState }) {
   const cloud = useConnection((s) => s.backend === 'cloud')
   // a song kept on this device: the cloud transcribes its vocals once it is moved there
   const local = isLocalId(track.id)
-  const [cancelling, setCancelling] = useState(false)
-  const cancel = async () => {
-    setCancelling(true)
-    try {
-      await cancelVocals(track)
-    } catch (err) {
-      console.warn('[vocals] cancel failed:', err)
-      useApp.getState().toast(t('score.vocals.cancelError'), 'error')
-    } finally {
-      setCancelling(false)
-    }
-  }
+  const { cancelling, cancel } = useCancelVocals(track)
   const transfer = useTransfers((s) => (local ? s[track.id] : undefined))
   const moving = !!transfer && transfer.phase !== 'error'
   useEffect(() => {
@@ -313,7 +303,7 @@ function VocalsCard({ state }: { state: VocalsState }) {
             </ol>
             <button
               type="button"
-              onClick={() => void cancel()}
+              onClick={cancel}
               disabled={cancelling || !state.jobId}
               title={t('score.vocals.cancel.title')}
               className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-sm font-medium text-muted hover:bg-surface-3 hover:text-text disabled:opacity-50"
