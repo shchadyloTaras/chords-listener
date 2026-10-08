@@ -4,7 +4,8 @@ import { useSyncExternalStore } from 'react'
  * Hash-based routes: #/ · #/job/<id> · #/track/<id> · #/demo ·
  * #/listen[?src=mic|tab][&title=<name>] (live chords from the microphone / a tab; the title names the recording) ·
  * #/listen/youtube/<videoId>[?blocked=1][&t=<s>] (play a YouTube video here and listen to this tab, from t) ·
- * #/youtube/<videoId>[?t=<s>] (pick a fragment of a YouTube video for the cloud, starting at t)
+ * #/youtube/<videoId>[?t=<s>] (pick a fragment of a YouTube video for the cloud, starting at t) ·
+ * #/tuner (a chromatic tuner on the microphone)
  */
 export type Route =
   | { name: 'home' }
@@ -14,6 +15,7 @@ export type Route =
   | { name: 'listen'; source: 'mic' | 'tab' | null; title: string | null }
   | { name: 'capture'; videoId: string; blocked: boolean; start: number | null }
   | { name: 'clip'; videoId: string; start: number | null }
+  | { name: 'tuner' }
   | { name: 'notFound' }
 
 /** `t=` of the YouTube routes: whole seconds, left out below 1. */
@@ -31,6 +33,7 @@ export const paths = {
   job: (id: string) => `/job/${encodeURIComponent(id)}`,
   track: (id: string) => `/track/${encodeURIComponent(id)}`,
   demo: () => '/demo',
+  tuner: () => '/tuner',
   listen: (source?: 'mic' | 'tab', opts: { title?: string } = {}) => {
     const q = new URLSearchParams()
     if (source) q.set('src', source)
@@ -74,6 +77,7 @@ export function parseHash(hash: string): Route {
   const path = (q >= 0 ? raw.slice(0, q) : raw).replace(/\/+$/, '') || '/'
   if (path === '/' || path === '') return { name: 'home' }
   if (path === '/demo') return { name: 'demo' }
+  if (path === '/tuner') return { name: 'tuner' }
   if (path === '/listen') {
     const src = query.get('src')
     return { name: 'listen', source: src === 'mic' || src === 'tab' ? src : null, title: query.get('title') || null }
