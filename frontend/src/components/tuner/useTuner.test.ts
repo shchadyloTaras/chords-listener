@@ -100,6 +100,20 @@ describe('useTuner', () => {
     expect(seen.hook.state).toEqual({ phase: 'running', reading: null })
   })
 
+  it('right after a pause it ignores the window that still holds the reference tone', async () => {
+    vi.mocked(captureMicrophone).mockResolvedValue(fakeMic().stream)
+    vi.mocked(startTuner).mockReturnValue(fakeInput())
+    await render(true)
+    await act(() => seen.hook.start())
+    step(2)
+    await render(false)
+    // 16..80 ms after the tone: the 85 ms analyser window still holds it
+    step(5)
+    expect(seen.hook.state).toEqual({ phase: 'running', reading: null })
+    step(10)
+    expect(seen.hook.state).toMatchObject({ phase: 'running', reading: { midi: 69 } })
+  })
+
   it('a refused microphone is an error with its code', async () => {
     vi.mocked(captureMicrophone).mockRejectedValue(new CaptureError('denied'))
     await render()

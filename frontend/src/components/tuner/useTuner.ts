@@ -88,11 +88,16 @@ export function useTuner({ a4, paused }: { a4: number; paused: boolean }) {
     const stabilizer = createStabilizer()
     const frame = new Float32Array(FRAME_SIZE)
     let shown: TunerReading | null = null
+    // after a pause the analyser window still holds the reference tone (the mic hears it): wait it out
+    const toneTailMs = (FRAME_SIZE / tuner.sampleRate) * 1000 + 50
+    let deafUntil = 0
     const tick = (now: number) => {
       if (input.current !== tuner) return
       let reading: TunerReading | null = null
-      if (pausedRef.current) stabilizer.reset()
-      else {
+      if (pausedRef.current) {
+        stabilizer.reset()
+        deafUntil = now + toneTailMs
+      } else if (now >= deafUntil) {
         const rms = tuner.read(frame)
         reading = stabilizer.push(detector.detect(frame, tuner.sampleRate), rms, now, a4Ref.current)
       }
