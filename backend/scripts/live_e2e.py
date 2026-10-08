@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -30,10 +31,16 @@ sys.path.insert(0, str(BACKEND))
 EMULATOR_VARS = ("FIRESTORE_EMULATOR_HOST", "FIREBASE_AUTH_EMULATOR_HOST", "STORAGE_EMULATOR_HOST")
 
 
+LOOPBACK = re.compile(r"^(https?://)?(127\.0\.0\.1|localhost|\[::1\]):\d+/?$")
+
+
 def _emulators_only() -> None:
     missing = [name for name in EMULATOR_VARS if not os.environ.get(name, "").strip()]
     if missing:
         raise SystemExit(f"live_e2e: refusing to run without {', '.join(missing)}: this helper only talks to the emulators")
+    remote = [name for name in EMULATOR_VARS if not LOOPBACK.match(os.environ[name].strip())]
+    if remote:
+        raise SystemExit(f"live_e2e: refusing to run: {', '.join(remote)} must point at a local emulator (127.0.0.1, localhost or [::1])")
 
 
 def _when(value: Any, now: datetime) -> datetime:

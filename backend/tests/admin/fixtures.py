@@ -354,6 +354,15 @@ def _dig(data: Any, path: str) -> Any:
     return data
 
 
+def _has(data: Any, path: str) -> bool:
+    """Whether the dotted field path exists (a null value counts: Firestore orders it, before every other value)."""
+    for part in path.split("."):
+        if not isinstance(data, dict) or part not in data:
+            return False
+        data = data[part]
+    return True
+
+
 def decode(value: Any) -> Any:
     """A Python value the way ``FirestoreIndex`` hands it back: a timestamp is its ISO string."""
     return from_value(to_value(value))
@@ -517,12 +526,14 @@ class MemDb(FirestoreIndex):
         self.queries.append((collection, list(filters or [])))
         self.touched.append(collection)
         specs = [(o.lstrip("-"), o.startswith("-")) for o in (order_by or [])]
-        rows = [r for r in self._rows(collection, filters) if all(f in r[1] for f, _ in specs)]
+        if not specs:  # like Firestore: a range with no orderBy is ordered by the ranged field, ascending
+            specs = [(f, False) for f, op, _ in filters or [] if op in _RANGE_OPS][:1]
+        rows = [r for r in self._rows(collection, filters) if all(_has(r[1], f) for f, _ in specs)]
         name_desc = specs[-1][1] if specs else False
 
         def compare(a: tuple[str, dict], b: tuple[str, dict]) -> int:
             for field, desc in specs:
-                x, y = _key(a[1][field]), _key(b[1][field])
+                x, y = _key(_dig(a[1], field)), _key(_dig(b[1], field))
                 if x != y:
                     return (-1 if x < y else 1) * (-1 if desc else 1)
             if a[0] == b[0]:

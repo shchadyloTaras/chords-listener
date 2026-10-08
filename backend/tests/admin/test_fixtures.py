@@ -323,6 +323,17 @@ def test_a_range_without_an_order_sorts_ascending_and_an_aggregation_needs_the_s
     asc.check("adminJobs", stale, None)
 
 
+def test_memdb_returns_a_range_without_an_order_by_that_field_ascending():
+    """A limited page of ``status == running AND acceptedAt < t`` (the sweep's stale jobs) holds the oldest jobs, as
+    in Firestore, not the first document names."""
+    db = fx.MemDb()
+    for name, minutes in (("a", 30), ("b", 20), ("c", 10)):
+        db.put_doc(f"adminJobs/{name}", {"status": "running", "acceptedAt": T0.replace(minute=minutes)})
+    page = db.run_query("adminJobs", filters=[("status", "==", "running"), ("acceptedAt", "<", T0.replace(hour=13))],
+                        limit=2)
+    assert [d.id for d in page] == ["c", "b"]
+
+
 def test_memdb_checks_a_count_like_the_query_it_counts(tmp_path, monkeypatch):
     monkeypatch.setattr(fx, "INDEXES_FILE", indexes_file(
         tmp_path, ("adminJobs", [("reason", "ASCENDING"), ("acceptedAt", "DESCENDING")])))
