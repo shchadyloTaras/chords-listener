@@ -105,7 +105,7 @@ describe('the bubble', () => {
     press('Enter')
     expect(title()).toBe('Посилання або файл')
     press(' ')
-    expect(title()).toBe('Файл або «Слухати»')
+    expect(title()).toBe('Файл, «Слухати» чи тюнер')
     press('ArrowRight')
     expect(buttons().at(-1)).toBe('Готово')
     press('Enter')
@@ -263,7 +263,7 @@ describe('anchors and motion', () => {
       // gone for good: the tour moves on to the next step
       input.remove()
       await act(() => vi.advanceTimersByTimeAsync(350))
-      expect(title()).toBe('Файл або «Слухати»')
+      expect(title()).toBe('Файл, «Слухати» чи тюнер')
     } finally {
       vi.useRealTimers()
     }
