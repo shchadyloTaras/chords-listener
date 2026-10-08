@@ -70,6 +70,12 @@ export function blockedVideoId(job: Pick<Job, 'status' | 'errorCode' | 'source'>
   return job.source.videoId || (job.source.url ? parseYouTubeId(job.source.url) : null)
 }
 
+/** Where a job YouTube refused sends the user: «Слухати у вкладці» for that video, from the fragment's start. */
+export function blockedPath(job: Pick<Job, 'status' | 'errorCode' | 'source' | 'clip'>): string | null {
+  const videoId = blockedVideoId(job)
+  return videoId ? paths.capture(videoId, { blocked: true, t: job.clip?.start }) : null
+}
+
 // ------------------------------------------------------------------ polling
 
 /**
@@ -127,11 +133,11 @@ function applyUpdate(prev: Job, next: Job) {
       run: () => navigate(paths.track(trackId)),
     })
   } else if (next.status === 'error') {
-    const videoId = blockedVideoId(next)
-    if (videoId) {
+    const blocked = blockedPath(next)
+    if (blocked) {
       toast(`${jobTitle(next)}: ${t('cloud.blocked.toast')}`, 'info', {
         label: t('cloud.blocked.action'),
-        run: () => navigate(paths.capture(videoId, { blocked: true })),
+        run: () => navigate(blocked),
       })
       return
     }

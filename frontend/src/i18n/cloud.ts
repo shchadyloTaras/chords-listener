@@ -58,7 +58,7 @@ export const cloud: Dict = {
     'cloud.capture.intro':
       'Відео гратиме тут, а сайт слухатиме звук цієї вкладки й показуватиме акорди наживо. Наприкінці збережемо пісню й розпізнаємо її точно.',
     'cloud.capture.guest': 'Без акаунта пісню збережемо на цьому пристрої.',
-    'cloud.capture.accountHint': 'З акаунтом цей запис розпізнає сервер — точніше, з вокалом і на всіх пристроях.',
+    'cloud.capture.clipHint': 'Увійди, щоб розбирати YouTube без мікрофона',
     'cloud.capture.howTitle': 'Як це працює',
     'cloud.capture.step1': 'Натисни «Почати» — Chrome або Edge спитає, чи можна поділитися цією вкладкою.',
     'cloud.capture.step2': 'Постав галочку «Також поділитися звуком вкладки» й натисни «Поділитися».',
@@ -205,7 +205,7 @@ export const cloud: Dict = {
     'cloud.capture.intro':
       'The video plays here while the site listens to this tab and shows the chords live. At the end we save the song and analyze it accurately.',
     'cloud.capture.guest': 'Without an account the song is saved on this device.',
-    'cloud.capture.accountHint': 'With an account the server analyzes this recording — more precise, with vocals, on all your devices.',
+    'cloud.capture.clipHint': 'Sign in to get the chords of YouTube videos without a microphone',
     'cloud.capture.howTitle': 'How it works',
     'cloud.capture.step1': 'Press “Start” — Chrome or Edge asks whether to share this tab.',
     'cloud.capture.step2': 'Tick “Also share tab audio” and press “Share”.',

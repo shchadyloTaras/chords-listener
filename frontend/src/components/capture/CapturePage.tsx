@@ -38,7 +38,15 @@ import { VideoSiteIcon } from '../ui/Logo'
 import { formatTime } from '../ui/format'
 import { LiveChordsView } from '../live'
 import { CaptureErrorAlert } from './CaptureErrorAlert'
-import { chooseStartOffset, isCapturing, isRetryable, playerEvent, STARTING_HINT_MS, type CaptureFailure } from './machine'
+import {
+  chooseStartOffset,
+  idlePosition,
+  isCapturing,
+  isRetryable,
+  playerEvent,
+  STARTING_HINT_MS,
+  type CaptureFailure,
+} from './machine'
 import { recordingFilename, saveRecording } from './saveRecording'
 import { ShareTabIllustration } from './ShareTabIllustration'
 import { useCapture } from './useCapture'
@@ -160,7 +168,7 @@ function NoTabCapture({ url, title }: { url: string; title: string | null }) {
  * Where the browser cannot listen to a tab (phones, Safari, Firefox) the video still plays here and the
  * microphone (the video on another device), a file or a computer are offered instead.
  */
-export function CapturePage({ videoId, blocked }: { videoId: string; blocked: boolean }) {
+export function CapturePage({ videoId, blocked, start }: { videoId: string; blocked: boolean; start: number | null }) {
   const t = useT()
   const url = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`
   const cloudInvite = useCloudInvite()
@@ -174,7 +182,7 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
   /** the video has not started playing for a while after the recording began waiting for it */
   const [slowStart, setSlowStart] = useState(false)
   const [title, setTitle] = useState<string | null>(null)
-  const [position, setPosition] = useState(0)
+  const [position, setPosition] = useState(start ?? 0)
   /** video time where the recording began (set when the video starts playing) */
   const startOffsetRef = useRef<number | null>(null)
   const titleRef = useRef<string | null>(null)
@@ -224,7 +232,14 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
           width: '100%',
           height: '100%',
           host: 'https://www.youtube-nocookie.com',
-          playerVars: { playsinline: 1, rel: 0, iv_load_policy: 3, enablejsapi: 1, origin: window.location.origin },
+          playerVars: {
+            playsinline: 1,
+            rel: 0,
+            iv_load_policy: 3,
+            enablejsapi: 1,
+            origin: window.location.origin,
+            ...(start ? { start } : {}),
+          },
           events: {
             onReady: (e) => {
               if (cancelled) return
@@ -272,7 +287,7 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
       }
       host.replaceChildren()
     }
-  }, [videoId, dispatch, current, playerKey])
+  }, [videoId, start, dispatch, current, playerKey])
 
   // ---- before starting: where the video is (to offer "start at 1:23")
   useEffect(() => {
@@ -281,13 +296,13 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
       const p = playerRef.current
       if (!p) return
       try {
-        setPosition(chooseStartOffset(p.getCurrentTime(), p.getDuration()))
+        setPosition(chooseStartOffset(idlePosition(p.getCurrentTime(), start), p.getDuration()))
       } catch {
         /* not ready */
       }
     }, 500)
     return () => window.clearInterval(id)
-  }, [state.phase])
+  }, [state.phase, start])
 
   // ---- waiting for the video to start: after a while, point at the play button of the video itself
   useEffect(() => {
@@ -433,12 +448,12 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
         <p className="mt-2 text-[15px] leading-relaxed text-muted">
           {!tabCapture ? t('cloud.capture.here.intro') : blocked ? t('cloud.capture.blocked') : t('cloud.capture.intro')}
         </p>
-        {/* about the recording this page makes: none where the tab cannot be heard */}
-        {cloudInvite && tabCapture && (
+        {/* a guest: signed in, the cloud takes a fragment of this video - no microphone, no tab */}
+        {cloudInvite && (
           <p className="mt-1.5 text-sm text-muted">
-            {t('cloud.capture.guest')}{' '}
+            {tabCapture && <>{t('cloud.capture.guest')} </>}
             <button type="button" onClick={() => openAuthDialog('signIn')} className="text-left font-medium text-accent hover:underline">
-              {t('cloud.capture.accountHint')}
+              {t('cloud.capture.clipHint')}
             </button>
           </p>
         )}

@@ -32,7 +32,7 @@ vi.mock('../lib/api', () => ({
 }))
 
 import { useConnection, type ConnectionState } from '../lib/serverMode'
-import { retryJob, uploadAndFollow } from './useJobs'
+import { blockedPath, retryJob, uploadAndFollow } from './useJobs'
 import { navigate } from './useRoute'
 
 // done, so following it opens the track and starts no polling
@@ -122,5 +122,21 @@ describe('retryJob, a link', () => {
     connect({ status: 'server', backend: 'local', apiBase: '/api', remote: false })
     expect(await retryJob(failed({ type: 'youtube', videoId: 'dQw4w9WgXcQ', url: VIDEO }))).toBe(true)
     expect(api.createJob).toHaveBeenCalledWith(VIDEO, undefined, undefined)
+  })
+})
+
+describe('blockedPath', () => {
+  const source = { type: 'youtube' as const, videoId: 'dQw4w9WgXcQ' }
+
+  it('a fragment YouTube refused: listen in the tab from the fragment’s start', () => {
+    expect(blockedPath({ status: 'error', errorCode: 'download_blocked', source, clip: { start: 72, end: 102 } })).toBe(
+      '/listen/youtube/dQw4w9WgXcQ?blocked=1&t=72',
+    )
+    expect(blockedPath({ status: 'error', errorCode: 'download_blocked', source })).toBe('/listen/youtube/dQw4w9WgXcQ?blocked=1')
+  })
+
+  it('nothing for other failures', () => {
+    expect(blockedPath({ status: 'error', errorCode: 'download_failed', source })).toBeNull()
+    expect(blockedPath({ status: 'done', source })).toBeNull()
   })
 })
