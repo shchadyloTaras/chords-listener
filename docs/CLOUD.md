@@ -226,6 +226,7 @@ The staged files in [`docs/features/admin/migrations/`](features/admin/migration
 ```bash
 gcloud auth application-default login
 cd backend
+export CHORDS_AUTH=firebase   # cloud mode: tracks live under <data>/users/<uid> (without it 01 finds nothing)
 export CHORDS_FIREBASE_PROJECT=build-chords-listener
 export PYTHONPATH=.:../docs/features/admin/migrations
 .venv/bin/python ../docs/features/admin/migrations/04_seed_runtime_config.up.py --dry-run
@@ -234,7 +235,7 @@ export PYTHONPATH=.:../docs/features/admin/migrations
 CHORDS_DATA_DIR=/path/to/mounted/bucket .venv/bin/python ../docs/features/admin/migrations/01_add_track_size.up.py --dry-run
 ```
 
-Put the real launch day in `--before`. Roll back with the matching `*.down.*` file in reverse order (06 → 01); roll back 01 only after the code that writes `sizeBytes` is rolled back, or the publish path adds it again. Rolling out the code: 01–04 before the new revision serves the admin page (the server falls back to the `CHORDS_*` values while `adminConfig/settings` is missing), 05 and 06 may follow it.
+Without a local mount of the bucket, 01 can run against a size-only mirror: list `gs://<bucket>/users/**` with `gcloud storage ls -l -r`, create each object as an empty file truncated to its size (sparse: no content is downloaded, `dir_size` reads `st_size`), point `CHORDS_DATA_DIR` at it, and delete the mirror afterwards (done this way on 2026-10-08). Put the real launch day in `--before`. Roll back with the matching `*.down.*` file in reverse order (06 → 01); roll back 01 only after the code that writes `sizeBytes` is rolled back, or the publish path adds it again. Rolling out the code: 01–04 before the new revision serves the admin page (the server falls back to the `CHORDS_*` values while `adminConfig/settings` is missing), 05 and 06 may follow it.
 
 ### Sweep schedule and alerts
 
