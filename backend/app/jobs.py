@@ -1,7 +1,8 @@
 """Background job system: in-memory registry + a small worker pool running the analysis pipeline.
 
 Overall progress mapping (docs/SPEC.md): queued 0 -> downloading 0..0.35 -> decoding 0.35..0.45 ->
-analyzing 0.45..1.0 (engine fraction scaled) -> done 1.
+analyzing 0.45..1.0 (engine fraction scaled) -> done 1. A YouTube fragment job runs in two phases (download, then
+processing) and waits as ``queued`` at 0.35 between them.
 """
 from __future__ import annotations
 
@@ -57,8 +58,8 @@ ERROR_CODES = frozenset(get_args(ErrorCode))
 DOWNLOAD_RANGE = (0.0, 0.35)
 DECODE_RANGE = (0.35, 0.45)
 ANALYZE_RANGE = (0.45, 1.0)
-# A YouTube fragment's download (phase 1 of its job) waits on chords-fetch for seconds to minutes and uses
-# no CPU here: it runs on its own pool, so it never holds one of the few analysis workers.
+# A YouTube fragment's download (phase 1 of its job) mostly waits on the network or on chords-fetch (a local server
+# runs yt-dlp/ffmpeg here): it runs on its own pool, so it never holds one of the few analysis workers.
 CLIP_FETCH_WORKERS = 4
 
 
@@ -477,12 +478,15 @@ class JobManager:
         first phase, a download, on the download pool; ``fn`` then queues the job's last phase itself and the
         dedup keys stay claimed in between. ``cleanup`` takes over whatever ``fn`` needs on disk: it runs once
         when the queued work has ended, even if it never started (cancelled while queued), and at once when
-        the work is refused (the manager is closed)."""
+        the work is refused (the manager is closed). ``shutdown()`` drops queued work with ``cancel_futures``, without
+        its ``cleanup``: the work root is wiped at the next start (``TrackStore.init``)."""
         # The worker runs in a copy of the submitting request's context: same user (app.users), so the
         # storage helpers resolve that user's paths inside the job.
         if not self._closed:
             executor = self._fetch_executor if fetch else self._executor
             try:
+                # Invariant: a first phase (``fetch``) must either end the job (done or failed) or queue the next phase,
+                # otherwise ``_run`` never releases the job's dedup keys.
                 executor.submit(contextvars.copy_context().run, self._run, rec, fn, last=not fetch, cleanup=cleanup)
                 return
             except RuntimeError:  # shutdown() closed the pool between the check and the call
@@ -507,8 +511,14 @@ class JobManager:
             self._check_cancel(rec)
             fn()
             if last:
+                # "done in" is this phase; a fragment job's download phase ran before it, so the whole job is logged too
                 log.info(
-                    "job %s (%s) done in %.1fs -> track %s", rec.id, rec.kind, time.monotonic() - started, rec.track_id
+                    "job %s (%s) done in %.1fs (%.1fs since it was created) -> track %s",
+                    rec.id,
+                    rec.kind,
+                    time.monotonic() - started,
+                    time.time() - rec.created_ts,
+                    rec.track_id,
                 )
         except Cancelled:
             code, message = rec.cancel_reason
@@ -601,7 +611,7 @@ class JobManager:
             shutil.rmtree(work, ignore_errors=True)
             raise
         # downloaded: the job now waits for an analysis worker (its progress stays where the download left it)
-        self._update(rec, status="queued", message="Waiting for analysis")
+        self._update(rec, status="queued", progress=DOWNLOAD_RANGE[1], message="Waiting for analysis")
         self._submit(
             rec,
             lambda: self._process_clip(rec, clip, work, track_id),

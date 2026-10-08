@@ -2,6 +2,8 @@
 fields, the clip download helpers, clip jobs. Offline: yt-dlp and the clip fetcher are fakes."""
 from __future__ import annotations
 
+import logging
+import re
 import shutil
 import threading
 import time
@@ -425,6 +427,22 @@ def test_a_fragment_is_one_job_while_it_waits_for_analysis_and_while_it_is_analy
     env.engine.gate.set()
     assert wait_job(env.client, running["id"])["status"] == "done"
     assert keys_in_use(env) == {} and work_leftovers(env) == []
+
+
+@needs_ffmpeg
+def test_the_done_log_of_a_fragment_counts_its_download_too(clip_env, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="chords.jobs")
+    env = clip_env()
+    env.clips.gate = threading.Event()
+    clip = post_clip(env, 72)
+    wait_until(lambda: env.clips.calls, "the fragment download to start")
+    time.sleep(0.4)  # a slow download: phase 1 alone takes this long
+    env.clips.gate.set()
+    assert wait_job(env.client, clip["id"])["status"] == "done"
+    wait_until(lambda: any("done in" in r.getMessage() for r in caplog.records), "the done log line")
+    line = next(r.getMessage() for r in caplog.records if "done in" in r.getMessage())
+    phase, total = map(float, re.search(r"done in ([\d.]+)s \(([\d.]+)s since it was created\)", line).groups())  # type: ignore[union-attr]
+    assert total >= 0.4 and total >= phase, line  # the analysis phase alone is far shorter than the whole job
 
 
 @needs_ffmpeg
