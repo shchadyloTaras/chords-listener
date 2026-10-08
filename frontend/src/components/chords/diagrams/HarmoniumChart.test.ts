@@ -51,12 +51,12 @@ it('opens the bellows at the low end (the left hand pumps there), hinged at the 
   expect(low).toBeLessThan(high)
 })
 
-it('lights the chord tones and marks the bass', () => {
-  const svg = render('Am') // A3 | A4 C5 E5
+it('lights the right hand\'s chord tones, with no bass marker (the left hand pumps the bellows)', () => {
+  const svg = render('Am') // A4 C5 E5
   const lit = [...svg.querySelectorAll(`[fill="${COLOR}"]`)]
-  expect(lit).toHaveLength(4)
+  expect(lit).toHaveLength(3)
   const markers = [...svg.querySelectorAll('circle')].filter((c) => c.style.pointerEvents === 'none')
-  expect(markers).toHaveLength(1)
+  expect(markers).toHaveLength(0)
 })
 
 it('makes all 37 keys clickable, each reporting its own index (0 = C3)', () => {
