@@ -9,6 +9,7 @@ import { holdCloudBusy, onServerRequired, useConnection } from '../../lib/server
 import { useJobs } from '../../hooks/useJobs'
 import { paths } from '../../hooks/useRoute'
 import { useCanListenInTab, useIsDesktopPointer, useMediaQuery } from '../../hooks/useMediaQuery'
+import { CLIP_SECONDS } from '../clip/clipWindow'
 import { errorText } from '../jobs/errorText'
 import { AccountButtons } from '../account/AccountCta'
 import { useCloudInvite } from '../account/cloudInvite'
@@ -314,7 +315,7 @@ export function SmartInput({ className }: { className?: string }) {
       case 'youtube':
         // a local server downloads the video; signed in, the cloud takes a fragment; a guest listens on the capture page
         if (localServer) return ok(t('core.input.hintYoutube'))
-        if (onCloud) return ok(t('cloud.input.hintYoutubeClip'))
+        if (onCloud) return ok(t('cloud.input.hintYoutubeClip', { seconds: CLIP_SECONDS }))
         return ok(t(tabCapable ? 'cloud.input.hintYoutubeGuest' : 'cloud.input.hintYoutubeHere'))
       case 'other':
         return guest ? (

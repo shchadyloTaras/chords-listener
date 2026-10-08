@@ -17,7 +17,7 @@ class FakePlayer {
     this.opts = opts
     FakePlayer.made.push(this)
   }
-  getCurrentTime = () => 0 // the video has not played yet: the page offers where it was opened
+  getCurrentTime = () => playerTime
   getDuration = () => 213
   getVideoData = () => ({ title: 'A song' })
   destroy() {
@@ -26,6 +26,8 @@ class FakePlayer {
 }
 
 const VIDEO = 'dQw4w9WgXcQ'
+/** where the fake video is: 0 = it has not played yet, so the page offers the start it was opened with */
+let playerTime = 0
 let root: Root
 let host: HTMLDivElement
 
@@ -49,6 +51,9 @@ beforeEach(async () => {
     removeEventListener() {},
   })) as unknown as typeof window.matchMedia
   FakePlayer.made = []
+  playerTime = 0
+  // before the page mounts: its "where is the video" poll must run on these timers
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
   ;(window as { YT?: unknown }).YT = { Player: FakePlayer }
   useApp.setState({ lang: 'uk' })
   host = document.createElement('div')
@@ -81,15 +86,34 @@ describe('the capture page player', () => {
     expect(FakePlayer.made[0]!.destroyed).toBe(false)
   })
 
-  it('keeps offering the start it was opened with', async () => {
-    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
-    render(90)
-    await act(async () => {})
+  const ready = () => {
     const player = FakePlayer.made[FakePlayer.made.length - 1]! // the page's player, whichever one it is by now
     act(() => player.opts.events?.onReady?.({ target: player as unknown as YTPlayer }))
+  }
+  const poll = () =>
     act(() => {
-      vi.advanceTimersByTime(1200)
+      vi.advanceTimersByTime(600)
     })
+
+  it('offers where the video is once it has played (the poll runs)', async () => {
+    ready()
+    poll()
+    expect(host.textContent).toContain('1:12') // not played: the start the page was opened with
+    playerTime = 100
+    poll()
+    expect(host.textContent).toContain('1:40')
+  })
+
+  it('keeps offering the start it was opened with, not a later `t`', async () => {
+    ready()
+    playerTime = 100
+    poll()
+    expect(host.textContent).toContain('1:40')
+    playerTime = 0 // back at the beginning: the offer falls back to the start the page was opened with
+    render(90)
+    await act(async () => {})
+    ready()
+    poll()
     expect(host.textContent).toContain('1:12')
     expect(host.textContent).not.toContain('1:30')
   })
