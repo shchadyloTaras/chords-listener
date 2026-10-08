@@ -148,7 +148,8 @@ class JobManager:
     def running_count(self, uid: Optional[str] = None) -> int:
         uid = uid if uid is not None else current_uid()
         with self._lock:
-            return sum(1 for r in self._jobs.values() if r.uid == uid and not r.finished)
+            # a job being cancelled stops at its next progress report: it no longer counts
+            return sum(1 for r in self._jobs.values() if r.uid == uid and not r.finished and not r.cancel.is_set())
 
     def admit(self, quota: Optional[str] = "analyses") -> None:
         """Cloud mode: may the current user start one more job now? Checks the running-jobs limit, then
@@ -353,6 +354,20 @@ class JobManager:
             self._submit(rec, lambda: self._run_vocals(rec, track_id))
             return rec.to_model()
 
+    def cancel(self, job_id: str) -> Optional[Job]:
+        """The user cancels a job: it stops at its next progress report and ends with ``errorCode: "cancelled"``.
+        A cancelled vocal transcription gives its daily quota unit back. None: no such job (of this user)."""
+        with self._lock:
+            rec = self._jobs.get(job_id)
+            if rec is None or not self._visible(rec):
+                return None
+            if not rec.finished and not rec.cancel.is_set():
+                rec.cancel_reason = ("cancelled", "Cancelled")
+                rec.cancel.set()
+                if rec.kind == "vocals" and self.settings.cloud:
+                    self.quotas.refund("vocals", rec.uid)
+            return rec.to_model()
+
     def cancel_track_jobs(self, track_id: str, code: ErrorCode, message: str) -> None:
         with self._lock:
             for key in (f"track:{track_id}", f"vocals:{track_id}"):
@@ -408,7 +423,8 @@ class JobManager:
         for k in keys:
             job_id = self._active.get(k)
             rec = self._jobs.get(job_id) if job_id else None
-            if rec and not rec.finished:
+            # one being cancelled is not shared: the same work asked again starts afresh
+            if rec and not rec.finished and not rec.cancel.is_set():
                 return rec
         return None
 

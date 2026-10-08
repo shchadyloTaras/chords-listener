@@ -12,7 +12,6 @@ import {
   HANDPAN_STEP,
   handpanChordNotes,
   handpanFieldNote,
-  HARMONIUM_SPREAD,
   harmoniumChordNotes,
   harmoniumKeyNote,
   pianoChordNotes,
@@ -33,10 +32,10 @@ describe('piano: the staff voicing', () => {
     const played = Object.fromEntries(LABELS.map((l) => [l, midis(pianoChordNotes(l))]))
     expect(played).toEqual({
       C: [48, 60, 64, 67], // C3 | C4 E4 G4
-      Gm: [55, 67, 70, 74], // G3 | G4 Bb4 D5
-      'F#m7': [54, 66, 69, 73, 76], // F#3 | F#4 A4 C#5 E5
-      'C/E': [52, 72, 76, 79], // E3 | C5 E5 G5
-      Bb: [58, 70, 74, 77], // Bb3 | Bb4 D5 F5
+      Gm: [43, 58, 62, 67], // G2 | Bb3 D4 G4
+      'F#m7': [42, 61, 64, 69], // F#2 | C#4 E4 A4 (the root is the left hand's)
+      'C/E': [40, 60, 64, 67], // E2 | C4 E4 G4
+      Bb: [46, 62, 65, 70], // Bb2 | D4 F4 Bb4
       N: [],
     })
   })
@@ -51,11 +50,11 @@ describe('piano: the staff voicing', () => {
     }
   })
 
-  it('maps every note to the key it lights on the two-octave diagram', () => {
-    // key 0 = C4; the left-hand bass lights its own pitch class in the lower octave (the bass marker)
-    expect(pianoChordNotes('C').map((n) => n.target)).toEqual([0, 0, 4, 7])
-    expect(pianoChordNotes('C/E').map((n) => n.target)).toEqual([4, 12, 16, 19])
-    expect(pianoKeyNote(9)).toMatchObject({ midi: 69, target: 9 })
+  it('maps every note to the key it lights on the C2–C5 diagram, the left hand in its own octave', () => {
+    // key 0 = C2
+    expect(pianoChordNotes('C').map((n) => n.target)).toEqual([12, 24, 28, 31])
+    expect(pianoChordNotes('C/E').map((n) => n.target)).toEqual([4, 24, 28, 31])
+    expect(pianoKeyNote(9)).toMatchObject({ midi: 45, target: 9 })
   })
 })
 
@@ -156,30 +155,28 @@ describe('bass: the generated voicing', () => {
   })
 })
 
-describe('harmonium: the staff notes on its 37 keys, held together', () => {
-  it('plays the piano staff notes, the right hand 10 ms after the bass', () => {
+describe('harmonium: the right hand\'s shape on its 37 keys, pressed together', () => {
+  it('plays one hand, no bass below it, every note at once', () => {
+    expect(midis(harmoniumChordNotes('C')).map(name)).toEqual(['C4', 'E4', 'G4'])
+    expect(midis(harmoniumChordNotes('F')).map(name)).toEqual(['C4', 'F4', 'A4'])
+    expect(midis(harmoniumChordNotes('C/E')).map(name)).toEqual(['E4', 'G4', 'C5'])
     for (const label of ['C', 'F#m7', 'C/E']) {
-      const h = harmoniumChordNotes(label)
-      const p = pianoChordNotes(label)
-      expect(midis(h)).toEqual(midis(p))
-      expect(h[0].offset).toBe(0)
-      for (const n of h.slice(1)) expect(n.offset).toBeCloseTo(HARMONIUM_SPREAD, 6)
+      for (const n of harmoniumChordNotes(label)) expect(n.offset).toBe(0)
     }
     expect(harmoniumChordNotes('N')).toEqual([])
   })
 
   it('lights the harmonium keys the notes sound on (key 0 = C3)', () => {
-    expect(harmoniumChordNotes('C').map((n) => n.target)).toEqual([0, 12, 16, 19])
-    expect(harmoniumChordNotes('C/E').map((n) => n.target)).toEqual([4, 24, 28, 31])
+    expect(harmoniumChordNotes('C').map((n) => n.target)).toEqual([12, 16, 19])
     for (const label of ['Am', 'Bb', 'G7', 'Cmaj7', 'C/G', 'B9']) {
       expect(harmoniumChordNotes(label).map((n) => n.target)).toEqual(harmoniumVoicing(parseChord(label)!).notes)
     }
   })
 
-  it('plays a clicked key from C3, leaving the piano diagram at C4', () => {
+  it('plays a clicked key from C3, the piano diagram from C2', () => {
     expect(harmoniumKeyNote(0)).toMatchObject({ midi: 48, target: 0 })
     expect(harmoniumKeyNote(36)).toMatchObject({ midi: 84, target: 36 })
-    expect(pianoKeyNote(0)).toMatchObject({ midi: 60, target: 0 })
+    expect(pianoKeyNote(0)).toMatchObject({ midi: 36, target: 0 })
   })
 })
 

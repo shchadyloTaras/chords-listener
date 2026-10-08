@@ -143,6 +143,11 @@ export const chords: Dict = {
     'chords.voicing.none': 'Немає аплікатури',
     'chords.fret': '{n} лад',
     'chords.staff.label': '{chord} на нотному стані: права рука {notes}, ліва рука {bass}',
+    'chords.staff.label.oneHand': '{chord} на нотному стані: права рука {notes}',
+    'chords.drone': 'Дрон',
+    'chords.drone.off': 'Дрон: тоніка пісні ({note}) тягнеться, поки грає пісня, як дроновий регістр фісгармонії. Увімкнути',
+    'chords.drone.on': 'Дрон {note} звучить, поки грає пісня. Вимкнути',
+    'chords.drone.noKey': 'Тональність пісні невідома, тож дрону нема на чому тягнути',
     'chords.staff.treble': 'Скрипковий ключ (ключ соль): його завиток обвиває лінію соль першої октави',
     'chords.staff.bass': 'Басовий ключ (ключ фа): дві крапки стоять обабіч лінії фа малої октави',
 
@@ -293,6 +298,11 @@ export const chords: Dict = {
     'chords.voicing.none': 'No shape available',
     'chords.fret': 'fret {n}',
     'chords.staff.label': '{chord} on the staff: right hand {notes}, left hand {bass}',
+    'chords.staff.label.oneHand': '{chord} on the staff: right hand {notes}',
+    'chords.drone': 'Drone',
+    'chords.drone.off': 'Drone: the song’s tonic ({note}) held while the song plays, like the harmonium’s drone stops. Turn on',
+    'chords.drone.on': 'The {note} drone sounds while the song plays. Turn off',
+    'chords.drone.noKey': 'The song’s key is unknown, so there is no tonic to drone on',
     'chords.staff.treble': 'Treble clef (G clef): its curl wraps the G4 line',
     'chords.staff.bass': 'Bass clef (F clef): its two dots sit either side of the F3 line',
 

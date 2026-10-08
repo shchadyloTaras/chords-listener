@@ -39,12 +39,12 @@ describe('buildScore: notation levels', () => {
     expect(piano.staves.map((st) => st.clef)).toEqual(['treble', 'bass'])
     // Am | F | C | G: a whole note per bar
     expect(strikes(piano.staves[0].events)).toEqual([
-      [0, 16, [69, 72, 76]],
-      [16, 32, [65, 69, 72]],
+      [0, 16, [60, 64, 69]],
+      [16, 32, [60, 65, 69]],
       [32, 48, [60, 64, 67]],
-      [48, 64, [67, 71, 74]],
+      [48, 64, [59, 62, 67]],
     ])
-    expect(piano.staves[1].events.map((n) => n.pitches)).toEqual([[57], [53], [48], [55]])
+    expect(piano.staves[1].events.map((n) => n.pitches)).toEqual([[45], [41], [48], [43]])
     expect(s.pianoSource).toBe('chords')
     // the chord symbols stay on the top part
     expect(s.chordsOn).toBe('vocal')

@@ -27,6 +27,7 @@ ErrorCode = Literal[
     "quota_exceeded",  # per-user daily limit or concurrent-job limit (429)
     "download_blocked",  # YouTube refused the server (bot check / sign-in wall / 403)
     "unavailable",  # feature not installed / not enabled on this server (501)
+    "cancelled",  # the user cancelled the job (POST /api/jobs/{id}/cancel)
 ]
 SourceType = Literal["youtube", "url", "file"]
 

@@ -1,9 +1,9 @@
-// Grand-staff notation for a piano chord: right hand = the keyboard voicing (from C4),
-// left hand = the bass note (root or slash bass) in the octave below middle C.
+// Grand-staff notation for a piano chord: right hand = the voicing's chord around middle C (treble
+// clef), left hand = its bass (root or slash bass, E2–D#3) in the bass clef, each at the pitch it sounds.
 
 import type { ChordQuality } from '../../types'
 import { QUALITY_INTERVALS, type ParsedChord } from '../music/chord'
-import type { PianoVoicing } from './piano'
+import { PIANO_LOW, type PianoVoicing } from './piano'
 
 const LETTERS = ['C', 'D', 'E', 'F', 'G', 'A', 'B'] as const
 const LETTER_PC = [0, 2, 4, 5, 7, 9, 11]
@@ -27,9 +27,15 @@ export interface SpelledNote {
   name: string
 }
 
-export interface StaffChord {
+/** What a staff shows: the treble clef's notes and, on a grand staff, the left hand's bass. */
+export interface StaffNotes {
   /** right hand, ascending */
   treble: SpelledNote[]
+  /** left hand; none = the treble staff alone */
+  bass?: SpelledNote
+}
+
+export interface StaffChord extends StaffNotes {
   /** left hand */
   bass: SpelledNote
 }
@@ -63,11 +69,8 @@ function plainSpelling(pc: number, preferFlat: boolean) {
   return preferFlat ? { letter: LETTER_PC.indexOf(pc + 1), accidental: -1 } : { letter: LETTER_PC.indexOf(pc - 1), accidental: 1 }
 }
 
-/**
- * Spells the chord by thirds from its written root (Gm → G Bb D, F#m → F# A C#, Cdim7 → C Eb Gb Bbb),
- * so the staff never shows A# in a G minor chord.
- */
-export function staffChord(chord: ParsedChord, voicing: PianoVoicing): StaffChord {
+/** Letter + accidental of each pitch class by its degree in the chord, counted in thirds from the written root. */
+function degreeSpelling(chord: ParsedChord): (pc: number) => { letter: number; accidental: number } {
   const root = parseName(chord.root)
   const preferFlat = root.accidental < 0
   const byPc = new Map<number, { letter: number; accidental: number }>()
@@ -78,17 +81,29 @@ export function staffChord(chord: ParsedChord, voicing: PianoVoicing): StaffChor
       if (s) byPc.set(pc, s)
     }
   }
-  const nameFor = (pc: number) => byPc.get(pc) ?? plainSpelling(pc, preferFlat)
+  return (pc) => byPc.get(pc) ?? plainSpelling(pc, preferFlat)
+}
 
-  const slash = chord.bassPc != null
-  const bassName = slash && chord.bass ? parseName(chord.bass) : nameFor(chord.rootPc)
-  const bassPc = slash ? (chord.bassPc as number) : chord.rootPc
-  const bass = spell(48 + bassPc, bassName.letter, bassName.accidental)
+/**
+ * The piano voicing on the grand staff: the right hand in the treble clef, the left hand's bass in the
+ * bass clef, each at the pitch it sounds. Spelled by thirds from the written root (Gm → G Bb D, F#m →
+ * F# A C#, Cdim7 → C Eb Gb Bbb), so the staff never shows A# in a G minor chord; a slash bass as
+ * written after the slash.
+ */
+export function staffChord(chord: ParsedChord, voicing: PianoVoicing): StaffChord {
+  const [bass] = spellNotes(chord, [PIANO_LOW + voicing.bass])
+  return { treble: spellNotes(chord, voicing.right.map((k) => PIANO_LOW + k)), bass }
+}
 
-  const keys = slash ? voicing.notes.filter((k) => k !== voicing.bass) : voicing.notes
-  const treble = keys.map((k) => {
-    const s = nameFor(k % 12)
-    return spell(60 + k, s.letter, s.accidental)
+/**
+ * The given notes (MIDI, ascending) spelled like staffChord spells them, a slash bass as written after
+ * the slash: one hand's notes on the treble staff alone.
+ */
+export function spellNotes(chord: ParsedChord, midis: number[]): SpelledNote[] {
+  const nameFor = degreeSpelling(chord)
+  const slash = chord.bassPc != null && chord.bass ? parseName(chord.bass) : null
+  return midis.map((midi) => {
+    const s = slash && midi % 12 === chord.bassPc ? slash : nameFor(midi % 12)
+    return spell(midi, s.letter, s.accidental)
   })
-  return { treble, bass }
 }

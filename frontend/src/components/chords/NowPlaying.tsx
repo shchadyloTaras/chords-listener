@@ -14,6 +14,7 @@ import { ChordName } from './ChordName'
 import { useClockEffect } from './clock'
 import { ChordDiagram } from './diagrams/ChordDiagram'
 import { HandpanHint } from './handpan/HandpanHint'
+import { HarmoniumDroneToggle } from './HarmoniumDrone'
 import { InstrumentPicker } from './InstrumentPicker'
 import { useChordModel } from './model'
 import { useChordPos } from './usePlayhead'
@@ -80,6 +81,7 @@ export const NowPlaying = memo(
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 pt-4 sm:px-7 sm:pt-5">
           <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1">
             <TempoReadout />
+            {instrument === 'harmonium' && <HarmoniumDroneToggle />}
             {instrument !== 'handpan' && model.capo && (
               <span className="text-xs text-muted" title={t('chords.capo.title', { n: model.capo.capo })}>
                 {t('chords.capo.hint', { n: model.capo.capo, shapes: '' }).trim()}{' '}

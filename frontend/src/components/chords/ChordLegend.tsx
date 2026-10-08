@@ -34,7 +34,7 @@ export const ChordLegend = memo(function ChordLegend() {
           'grid gap-2',
           showDiagrams
             ? isKeyboard(instrument)
-              ? // the 120 px piano / 132 px harmonium + the tile's padding; two columns from a 340 px phone
+              ? // the 132 px piano / harmonium + the tile's padding; two columns from a 340 px phone
                 'grid-cols-[repeat(auto-fill,minmax(150px,1fr))]'
               : 'grid-cols-[repeat(auto-fill,minmax(112px,1fr))]'
             : 'grid-cols-[repeat(auto-fill,minmax(104px,1fr))]',

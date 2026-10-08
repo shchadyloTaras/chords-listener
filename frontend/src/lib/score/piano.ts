@@ -358,10 +358,11 @@ function chordHands(label: string): { rh: Voiced; lh: Voiced } | null {
 }
 
 /**
- * The simple level: the chord sheet's displayed chords (bar i = measure i) — the keyboard voicing from
- * middle C in the right hand, the bass (slash bass, else root) in the octave below in the left. A
- * chord is struck where it changes and again at every barline (no ties; a split long last bar too),
- * lasting until the next change or the end of its slot; no chord ("N") and unknown labels are rests.
+ * The simple level: the chord sheet's displayed chords (bar i = measure i) — the piano diagram's
+ * voicing: the chord around middle C in the right hand, the bass (slash bass, else root, E2–D#3) in
+ * the left. A chord is struck where it changes and again at every barline (no ties; a split long last
+ * bar too), lasting until the next change or the end of its slot; no chord ("N") and unknown labels are
+ * rests.
  */
 export function chordPiano(bars: readonly { slots: readonly ChordSlot[] }[], measures: readonly Measure[]): { rh: ScoreNote[]; lh: ScoreNote[] } {
   const rh: ScoreNote[] = []

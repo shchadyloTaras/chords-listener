@@ -225,14 +225,14 @@ describe('toMusicXml', () => {
     expect(notes.length).toBeGreaterThan(0)
     expect(new Set(notes.map((n) => textOf(n, 'type')))).toEqual(new Set(['whole']))
     expect(notes.some((n) => kid(n, 'rest') || kid(n, 'tie'))).toBe(false)
-    // bar 1, Am: A4 C5 E5 in the right hand, A3 in the left
+    // bar 1, Am: C4 E4 A4 in the right hand, A2 in the left
     const m1 = kids(d.getElementsByTagName('part')[0], 'measure')[0]
     const pitch = (n: Element) => [textOf(kid(n, 'pitch'), 'step'), textOf(kid(n, 'pitch'), 'octave'), textOf(n, 'staff')]
     expect(kids(m1, 'note').map(pitch)).toEqual([
+      ['C', '4', '1'],
+      ['E', '4', '1'],
       ['A', '4', '1'],
-      ['C', '5', '1'],
-      ['E', '5', '1'],
-      ['A', '3', '2'],
+      ['A', '2', '2'],
     ])
     expect(Array.from(d.getElementsByTagName('harmony')).map((h) => textOf(kid(h, 'root'), 'root-step'))).toEqual(['A', 'F', 'C', 'G'])
     checkDurations(d, s.map.measures.map((m) => m.ticks))
@@ -251,17 +251,17 @@ describe('toMusicXml', () => {
       )
     }
     expect(pitches({ tonic: 'D', mode: 'major', name: 'D' })).toEqual([
-      ['G4', 'B-14 flat', 'D5', 'G3'],
-      ['B-14 flat', 'D5', 'F5 natural', 'B-13 flat'],
+      ['B-13 flat', 'D4', 'G4', 'G2'],
+      ['D4', 'F4 natural', 'B-14 flat', 'B-12 flat'],
     ])
     const fm = steadyBars({ bpm: 100, bars: 1, chords: [['Fm', 0, 4]] })
     const s = buildScore(demoInput({ key: { tonic: 'C', mode: 'major', name: 'C' }, bars: fm.bars, piano: null, pianoSource: null, vocals: null, options: { vocals: false, piano: true, chords: true, level: 'simple' } }))
     const d = parse(toMusicXml(s, { date: '2026-10-04' }))
     const rh = kids(kids(d.getElementsByTagName('part')[0], 'measure')[0], 'note').filter((n) => textOf(n, 'staff') === '1')
     expect(rh.map((n) => [textOf(kid(n, 'pitch'), 'step'), textOf(kid(n, 'pitch'), 'alter') ?? '0', textOf(n, 'accidental') ?? ''])).toEqual([
+      ['C', '0', ''],
       ['F', '0', ''],
       ['A', '-1', 'flat'],
-      ['C', '0', ''],
     ])
   })
 

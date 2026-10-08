@@ -56,7 +56,7 @@ export function acknowledgeJob(id: string) {
 /** Jobs to surface in the header: running ones and failures not yet seen. Newest first. */
 export function selectHeaderJobs(s: JobsState): Job[] {
   return Object.values(s.jobs)
-    .filter((j) => isActiveJob(j) || (j.status === 'error' && !s.acknowledged[j.id]))
+    .filter((j) => isActiveJob(j) || (j.status === 'error' && j.errorCode !== 'cancelled' && !s.acknowledged[j.id]))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 }
 
@@ -132,7 +132,7 @@ function applyUpdate(prev: Job, next: Job) {
       label: t('core.jobs.open'),
       run: () => navigate(paths.track(trackId)),
     })
-  } else if (next.status === 'error') {
+  } else if (next.status === 'error' && next.errorCode !== 'cancelled') {
     const blocked = blockedPath(next)
     if (blocked) {
       toast(`${jobTitle(next)}: ${t('cloud.blocked.toast')}`, 'info', {

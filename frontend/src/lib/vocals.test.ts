@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   apiRequest: vi.fn<(path: string, init?: RequestInit) => Promise<unknown>>(),
   apiFetch: vi.fn<(path: string, init?: RequestInit) => Promise<Response>>(),
   getJob: vi.fn<(id: string) => Promise<Job>>(),
+  cancelJob: vi.fn<(id: string) => Promise<Job>>(),
   listJobs: vi.fn<() => Promise<Job[]>>(),
   fetchTrackAudio: vi.fn<(track: { id: string; audioUrl: string }) => Promise<Blob>>(),
   fetchMedia: vi.fn<(url: string, signal?: AbortSignal) => Promise<Blob>>(),
@@ -23,6 +24,7 @@ import { useAuth } from './auth'
 import { recentServerJobs, rememberServerJob } from './cloud/activity'
 import { refreshCloudHealth, useConnection } from './serverMode'
 import {
+  cancelVocals,
   fetchStem,
   loadVocals,
   resetVocals,
@@ -166,6 +168,56 @@ describe('vocals client', () => {
     await startVocals(track)
     const s = await until((x) => x.status === 'error')
     expect(s).toMatchObject({ status: 'error', code: 'quota_exceeded', during: 'job' })
+  })
+
+  it('cancels the running job: the vocals are missing again and the polling stops', async () => {
+    api.apiRequest.mockResolvedValue(job())
+    api.getJob.mockResolvedValue(job())
+    api.cancelJob.mockResolvedValue(job())
+    await startVocals(track)
+    expect(state()).toMatchObject({ status: 'running', jobId: 'job1' })
+    await cancelVocals(track)
+    expect(api.cancelJob).toHaveBeenCalledWith('job1')
+    expect(state()).toEqual({ status: 'missing' })
+    const polls = api.getJob.mock.calls.length
+    await new Promise((r) => setTimeout(r, 40))
+    expect(api.getJob.mock.calls.length).toBeLessThanOrEqual(polls + 1)
+    expect(state()).toEqual({ status: 'missing' })
+  })
+
+  it('a job cancelled elsewhere (another tab) leaves the vocals missing, not failed', async () => {
+    api.apiRequest.mockResolvedValue(job())
+    api.getJob.mockResolvedValue(job({ status: 'error', errorCode: 'cancelled', error: 'Cancelled' }))
+    await startVocals(track)
+    await until((s) => s.status === 'missing')
+  })
+
+  it('a cancel the server refuses keeps the job running', async () => {
+    api.apiRequest.mockResolvedValue(job())
+    api.getJob.mockResolvedValue(job())
+    api.cancelJob.mockRejectedValue(new ApiError('offline', 'network', 0))
+    await startVocals(track)
+    await expect(cancelVocals(track)).rejects.toThrow('offline')
+    expect(state()).toMatchObject({ status: 'running', jobId: 'job1' })
+  })
+
+  it('a server older than cancelling (404 while the job runs) keeps the job running', async () => {
+    api.apiRequest.mockResolvedValue(job())
+    api.getJob.mockResolvedValue(job())
+    api.cancelJob.mockRejectedValue(new ApiError('Not Found', 'not_found', 404))
+    await startVocals(track)
+    await expect(cancelVocals(track)).rejects.toThrow('Not Found')
+    expect(state()).toMatchObject({ status: 'running', jobId: 'job1' })
+  })
+
+  it('a job already gone from the server: the vocals are missing again', async () => {
+    api.apiRequest.mockResolvedValue(job())
+    api.getJob.mockRejectedValue(new ApiError('Job not found', 'not_found', 404))
+    api.cancelJob.mockRejectedValue(new ApiError('Job not found', 'not_found', 404))
+    vocalsPolling.ms = 10_000
+    await startVocals(track)
+    await cancelVocals(track)
+    expect(state()).toEqual({ status: 'missing' })
   })
 
   it('resumes following a job that is already running', async () => {

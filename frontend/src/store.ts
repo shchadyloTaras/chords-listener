@@ -18,6 +18,8 @@ export type Accidentals = 'auto' | 'sharp' | 'flat'
 export type ChordView = 'sheet' | 'timeline' | 'score'
 export type ThemePref = 'dark' | 'light' | 'system'
 export type Lang = 'uk' | 'en'
+/** live piano: the chords played along (both hands) or the song's own notes (transcribed) */
+export type LiveKeysSource = 'chords' | 'song'
 export type CopyFormat = 'bars' | 'timestamps' | 'chordpro' | 'unique'
 
 export interface Toast {
@@ -68,8 +70,17 @@ export interface Settings {
   liveKeys: boolean
   /** manual audio/visual sync correction for the live piano, ms (positive = keys light later) */
   syncOffsetMs: number
+  /** what the live piano shows: the chords as a pianist plays them along (default) or the recording's transcribed notes */
+  liveKeysSource: LiveKeysSource
   /** the screen stays on while the app is open and visible (Screen Wake Lock, lib/wakeLock.ts); this device only */
   keepAwake: boolean
+  /** the harmonium's drone: the song's tonic held while the song plays (lib/sound/drone.ts); this device only */
+  harmoniumDrone: boolean
+  /** the selected instrument plays along with the song in its own style (lib/sound/accompany.ts); this device only */
+  playAlong: boolean
+  playAlongVolume: number // 0..2 (PLAY_ALONG_MAX_VOLUME)
+  /** play-along timing correction, ms (positive = the instrument plays later), ±PLAY_ALONG_OFFSET_LIMIT */
+  playAlongOffsetMs: number
 }
 
 export interface AppState extends Settings {
@@ -127,7 +138,12 @@ const defaultSettings: Settings = {
   chordSoundVolume: 0.8,
   liveKeys: true,
   syncOffsetMs: 0,
+  liveKeysSource: 'chords',
   keepAwake: true,
+  harmoniumDrone: false,
+  playAlong: false,
+  playAlongVolume: 0.8,
+  playAlongOffsetMs: 0,
 }
 
 let toastSeq = 1
@@ -213,7 +229,12 @@ export const useApp = create<AppState>()(
         chordSoundVolume: s.chordSoundVolume,
         liveKeys: s.liveKeys,
         syncOffsetMs: s.syncOffsetMs,
+        liveKeysSource: s.liveKeysSource,
         keepAwake: s.keepAwake,
+        harmoniumDrone: s.harmoniumDrone,
+        playAlong: s.playAlong,
+        playAlongVolume: s.playAlongVolume,
+        playAlongOffsetMs: s.playAlongOffsetMs,
       }),
     },
   ),

@@ -4,10 +4,10 @@ import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useT } from '../../../i18n'
 import type { FretInstrument } from '../../../lib/diagrams/chordsDb'
 import { fretVoicings } from '../../../lib/diagrams/fretted'
-import { harmoniumVoicing } from '../../../lib/diagrams/harmonium'
+import { harmoniumStaff, harmoniumVoicing } from '../../../lib/diagrams/harmonium'
 import { pianoVoicing } from '../../../lib/diagrams/piano'
 import { isFretted, isKeyboard } from '../../../lib/instruments'
-import { staffChord } from '../../../lib/diagrams/staff'
+import { staffChord, type StaffNotes } from '../../../lib/diagrams/staff'
 import { parseChord } from '../../../lib/music/chord'
 import { chordTone } from '../../../lib/music/color'
 import type { Spelling } from '../../../lib/music/notes'
@@ -17,7 +17,7 @@ import { HandpanDiagram } from '../handpan/HandpanDiagram'
 import { useChordUi } from '../uiStore'
 import { FretChart } from './FretChart'
 import { HARMONIUM_ASPECT, HarmoniumChart } from './HarmoniumChart'
-import { PianoChart } from './PianoChart'
+import { PIANO_ASPECT, PianoChart } from './PianoChart'
 import { StaffChart } from './StaffChart'
 import { useChordDb } from './useChordDb'
 
@@ -25,7 +25,8 @@ const WIDTHS = {
   guitar: { sm: 64, md: 92, lg: 116 },
   bass: { sm: 56, md: 80, lg: 100 },
   ukulele: { sm: 52, md: 76, lg: 96 },
-  piano: { sm: 120, md: 168, lg: 210 },
+  // 37 keys (C2–C5, both hands): white keys as wide as the harmonium's
+  piano: { sm: 132, md: 240, lg: 264 },
   // 37 keys: ~5.7 px white keys in the legend (a tile as narrow as the piano's, two per row on a 360 px
   // phone), ~10.4 / ~11.5 px in the popover / hero
   harmonium: { sm: 132, md: 240, lg: 264 },
@@ -96,7 +97,7 @@ export const ChordDiagram = memo(function ChordDiagram({
     return (
       <div
         className={clsx('flex items-center justify-center rounded-lg border border-dashed border-border text-faint', className)}
-        style={{ width, height: instrument === 'harmonium' ? width * HARMONIUM_ASPECT : isKeyboard(instrument) ? width * 0.32 : width * 1.18 }}
+        style={{ width, height: instrument === 'harmonium' ? width * HARMONIUM_ASPECT : isKeyboard(instrument) ? width * PIANO_ASPECT : width * 1.18 }}
         aria-hidden
       >
         —
@@ -107,8 +108,10 @@ export const ChordDiagram = memo(function ChordDiagram({
   const title = `${label} — ${instName}`
 
   if (!fretted) {
+    // the harmonium: one hand's shape on the treble staff alone (the left hand pumps the bellows)
+    const hv = instrument === 'harmonium' ? harmoniumVoicing(parsed) : null
     const v = pianoVoicing(parsed)
-    const staff = staffChord(parsed, v)
+    const staff: StaffNotes = hv ? { treble: harmoniumStaff(parsed, hv) } : staffChord(parsed, v)
     const right = staff.treble.map((n) => n.name).join(' ')
     return (
       <figure
@@ -121,12 +124,14 @@ export const ChordDiagram = memo(function ChordDiagram({
           chord={staff}
           color={color}
           height={STAFF_HEIGHTS[size]}
-          title={t('chords.staff.label', { chord: label, notes: right, bass: staff.bass.name })}
+          title={
+            staff.bass ? t('chords.staff.label', { chord: label, notes: right, bass: staff.bass.name }) : t('chords.staff.label.oneHand', { chord: label, notes: right })
+          }
           clefTitles={{ treble: t('chords.staff.treble'), bass: t('chords.staff.bass') }}
         />
-        {instrument === 'harmonium' ? (
+        {hv ? (
           <HarmoniumChart
-            voicing={harmoniumVoicing(parsed)}
+            voicing={hv}
             color={color}
             width={width}
             title={title}
@@ -137,7 +142,8 @@ export const ChordDiagram = memo(function ChordDiagram({
           <PianoChart voicing={v} color={color} width={width} title={title} sounding={sounding} onKey={(k) => playPianoKey(label, k)} />
         )}
         <figcaption className="font-mono text-[11px] tracking-wide text-muted">
-          {parsed.bassPc != null && `${staff.bass.name} / `}
+          {/* the piano: the left hand's bass, then the right hand (which may leave the root to the left) */}
+          {staff.bass && `${staff.bass.name} / `}
           {staff.treble.map((n) => n.name).join('  ')}
         </figcaption>
       </figure>

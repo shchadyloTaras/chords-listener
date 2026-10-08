@@ -1,12 +1,12 @@
 // Which notes the chord sound plays — always exactly what the diagram for the selected instrument
-// shows: the staff voicing on the piano / harmonium keys, the displayed guitar / ukulele / bass
+// shows: the staff voicing on the piano keys, the right hand's shape on the harmonium, the displayed guitar / ukulele / bass
 // voicing (strummed low → high; the bass arpeggiated), or the chord tones the selected handpan
 // really has (a low → high arpeggio). Pure functions.
 
 import { BASS_TUNING } from '../diagrams/bass'
 import type { DbInstrument, FretInstrument, Voicing } from '../diagrams/chordsDb'
-import { HARMONIUM_LOW } from '../diagrams/harmonium'
-import { pianoVoicing } from '../diagrams/piano'
+import { HARMONIUM_LOW, harmoniumVoicing } from '../diagrams/harmonium'
+import { PIANO_LOW, pianoVoicing } from '../diagrams/piano'
 import { staffChord } from '../diagrams/staff'
 import { handpanMidis, playability, type HandpanScale } from '../handpan'
 import { parseChord, QUALITY_INTERVALS, type ParsedChord } from '../music/chord'
@@ -23,15 +23,17 @@ export interface NoteEvent {
   target: number
   /** stereo position −1..1 (when the instrument does not pan by pitch) */
   pan?: number
+  /** seconds the key stays down (piano, harmonium; default: the chord / note hold) */
+  hold?: number
 }
 
 // ---------- piano ----------
 
-/** MIDI note of key 0 of the two-octave piano diagram (its right hand starts at middle C). */
-export const PIANO_DIAGRAM_C = 60
+/** MIDI note of key 0 of the piano diagram (C2: its keys run C2–C5, both hands). */
+export const PIANO_DIAGRAM_C = PIANO_LOW
 
 /**
- * The chord as the piano diagram and the staff show it: the left hand's bass note (C3 octave) a
+ * The chord as the piano diagram and the staff show it: the left hand's bass note (E2–D#3) a
  * hair earlier and stronger, like a pianist, then the right-hand notes rolled upwards in ~4 ms.
  */
 export function pianoChordNotes(label: string): NoteEvent[] {
@@ -54,15 +56,16 @@ export function pianoKeyNote(key: number): NoteEvent {
 
 // ---------- harmonium ----------
 
-/** The harmonium's right hand speaks this long after the bass (s): pressed together, no roll. */
-export const HARMONIUM_SPREAD = 0.01
-
 /**
- * The staff's notes (the piano's) on the harmonium, lighting its own keys (0 = C3): bass first, the
- * rest together just after.
+ * The harmonium diagram's shape — one right hand, the left pumps the bellows — pressed together, no
+ * roll, lighting the instrument's own keys (0 = C3); the top note a touch stronger.
  */
 export function harmoniumChordNotes(label: string): NoteEvent[] {
-  return pianoChordNotes(label).map((n, i) => ({ ...n, offset: i === 0 ? 0 : HARMONIUM_SPREAD, target: n.midi - HARMONIUM_LOW }))
+  const parsed = parseChord(label)
+  if (!parsed) return []
+  const { notes } = harmoniumVoicing(parsed)
+  const top = notes.length - 1
+  return notes.map((k, i) => ({ midi: HARMONIUM_LOW + k, offset: 0, velocity: i === top ? 0.66 : 0.62, target: k }))
 }
 
 /** One key of the harmonium diagram (key 0 = C3, its lowest key). */

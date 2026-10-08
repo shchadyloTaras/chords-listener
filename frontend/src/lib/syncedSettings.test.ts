@@ -22,7 +22,12 @@ const local = {
   chordSoundVolume: 0.3,
   liveKeys: false,
   syncOffsetMs: 40,
+  liveKeysSource: 'song',
   keepAwake: false,
+  harmoniumDrone: true,
+  playAlong: true,
+  playAlongVolume: 1.5,
+  playAlongOffsetMs: -20,
 } as Settings
 
 describe('pickSynced', () => {
@@ -31,7 +36,7 @@ describe('pickSynced', () => {
     expect(SYNCED_KEYS).toHaveLength(11)
     expect(Object.keys(picked).sort()).toEqual([...SYNCED_KEYS].sort())
     expect(picked).toMatchObject({ theme: 'light', instrument: 'piano', barsPerLine: 8 })
-    for (const k of ['transpose', 'volume', 'handpanNotes', 'metronome', 'tempoFactors', 'serverUrl', 'chordSound', 'liveKeys', 'syncOffsetMs', 'keepAwake']) {
+    for (const k of ['transpose', 'volume', 'handpanNotes', 'metronome', 'tempoFactors', 'serverUrl', 'chordSound', 'liveKeys', 'syncOffsetMs', 'liveKeysSource', 'keepAwake', 'harmoniumDrone', 'playAlong', 'playAlongVolume', 'playAlongOffsetMs']) {
       expect(picked).not.toHaveProperty(k)
     }
   })

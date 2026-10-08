@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import clsx from 'clsx'
-import { AudioLines, CloudUpload, Download, FileMusic, FileText, Hash, LoaderCircle, Mic, Music2, Piano, RotateCcw } from 'lucide-react'
+import { AudioLines, CloudUpload, Download, FileMusic, FileText, Hash, LoaderCircle, Mic, Music2, Piano, RotateCcw, X } from 'lucide-react'
 import { useT } from '../../../i18n'
 import { navigate, paths } from '../../../hooks/useRoute'
 import { moveToCloud, onTransferDone, transferLabel, useTransfers } from '../../../lib/cloud/transfer'
@@ -26,6 +26,7 @@ import { isTypingTarget } from '../hotkeys'
 import { useChordModel } from '../model'
 import { useChordUi } from '../uiStore'
 import { useTourFlags, useTourTrigger } from '../../tour/hooks'
+import { useCancelVocals } from '../useCancelVocals'
 import { Floating } from '../ui/Floating'
 import { Divider, Segmented, ToggleChip } from '../ui/controls'
 import { EXPORT_KINDS, exportScore, useScoreExport, type ExportKind } from './exportScore'
@@ -248,6 +249,7 @@ function VocalsCard({ state }: { state: VocalsState }) {
   const cloud = useConnection((s) => s.backend === 'cloud')
   // a song kept on this device: the cloud transcribes its vocals once it is moved there
   const local = isLocalId(track.id)
+  const { cancelling, cancel } = useCancelVocals(track)
   const transfer = useTransfers((s) => (local ? s[track.id] : undefined))
   const moving = !!transfer && transfer.phase !== 'error'
   useEffect(() => {
@@ -299,6 +301,16 @@ function VocalsCard({ state }: { state: VocalsState }) {
                 </li>
               ))}
             </ol>
+            <button
+              type="button"
+              onClick={cancel}
+              disabled={cancelling || !state.jobId}
+              title={t('score.vocals.cancel.title')}
+              className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-sm font-medium text-muted hover:bg-surface-3 hover:text-text disabled:opacity-50"
+            >
+              {cancelling ? <LoaderCircle size={14} className="animate-spin" aria-hidden /> : <X size={14} aria-hidden />}
+              {t('score.vocals.cancel')}
+            </button>
           </div>
           <div className="h-1 w-full overflow-hidden rounded-full bg-surface-3" aria-hidden>
             <div className="h-full bg-accent transition-[width] duration-300" style={{ width: `${Math.max(2, Math.round(state.progress * 100))}%` }} />

@@ -8,13 +8,13 @@ import { useApp } from '../../../store'
 
 const TICK_MS = 25
 
-type Ticker = { start(): void; stop(): void }
+export type Ticker = { start(): void; stop(): void }
 
 /**
  * A 25 ms ticker. Runs in a tiny worker when possible: worker timers are not throttled in
  * background tabs, so the click keeps going while the user looks at another tab.
  */
-function createTicker(onTick: () => void): Ticker {
+export function createTicker(onTick: () => void): Ticker {
   let worker: Worker | null = null
   try {
     const src = 'let t=0;onmessage=(e)=>{clearInterval(t);if(e.data>0)t=setInterval(()=>postMessage(0),e.data)}'

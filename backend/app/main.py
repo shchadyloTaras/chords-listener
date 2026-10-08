@@ -640,6 +640,15 @@ def _api_router(
             raise _not_found("Job")
         return job
 
+    @api.post("/jobs/{job_id}/cancel", response_model=Job)
+    def cancel_job(job_id: str) -> Job:
+        """Cancel a running job: it ends with ``errorCode: "cancelled"`` at its next progress report (a finished
+        job is returned unchanged). A cancelled vocal transcription gives its daily quota unit back."""
+        job = jobs.cancel(job_id)
+        if job is None:
+            raise _not_found("Job")
+        return job
+
     # ------------------------------------------------------------------ tracks
 
     @api.get("/tracks", response_model=list[TrackSummary])

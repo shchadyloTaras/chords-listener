@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { volumeGain } from './engine'
+import { alongVolumeGain, PLAY_ALONG_MAX_VOLUME, volumeGain } from './engine'
 import { midiToFreq } from './dsp'
 import {
   HANDPAN_DING,
@@ -647,5 +647,15 @@ describe('volume', () => {
     expect(volumeGain(0.5)).toBeCloseTo(0.25, 6)
     expect(volumeGain(2)).toBe(1)
     expect(volumeGain(Number.NaN)).toBeCloseTo(0.64, 6)
+  })
+
+  it('lets the play-along go up to 200%, steeper above 100%, like the metronome', () => {
+    expect(alongVolumeGain(0)).toBe(0)
+    expect(alongVolumeGain(0.5)).toBeCloseTo(0.25, 6)
+    expect(alongVolumeGain(1)).toBe(1)
+    expect(alongVolumeGain(1.5)).toBeCloseTo(2.5, 6)
+    expect(PLAY_ALONG_MAX_VOLUME).toBe(2)
+    expect(alongVolumeGain(3)).toBeCloseTo(4, 6)
+    expect(alongVolumeGain(Number.NaN)).toBeCloseTo(0.64, 6)
   })
 })
