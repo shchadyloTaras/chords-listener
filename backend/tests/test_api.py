@@ -15,6 +15,7 @@ from typing import Any, Callable, Optional
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import BaseModel, Field
 
 from app.main import create_app
 from app.models import AnalysisResult, Settings
@@ -707,3 +708,116 @@ def test_cors_preflight_for_vite_dev_server(env: SimpleNamespace) -> None:
     )
     assert res.status_code == 200
     assert res.headers["access-control-allow-origin"] == "http://127.0.0.1:5173"
+
+
+# --------------------------------------------------------------------------- admin error codes (docs/features/admin)
+
+ADMIN_ERROR_STATUS = {
+    "cloud_restricted": 403,
+    "analyses_paused": 503,
+    "youtube_disabled": 503,
+    "vocals_disabled": 503,
+    "query_too_short": 422,
+    "invalid_period": 422,
+    "invalid_value": 422,
+    "confirm_email_mismatch": 422,
+    "reauth_required": 401,
+    "self_target": 409,
+    "deletion_pending": 409,
+    "not_scheduled": 409,
+    "not_set": 409,
+    "deletion_rate_limit": 429,
+    "not_applied": 503,
+    "audit_unavailable": 503,
+}
+
+
+def _add_route(app: Any, method: str, path: str, fn: Callable[..., Any]) -> None:
+    """Register a throwaway route ahead of the `/api/*` not-found catch-all (admin routes do not exist yet)."""
+    app.router.add_api_route(path, fn, methods=[method])
+    app.router.routes.insert(0, app.router.routes.pop())
+
+
+def test_admin_error_code_table_has_exactly_the_sixteen_new_codes() -> None:
+    from typing import get_args
+
+    from app.main import STATUS_BY_CODE
+    from app.models import ErrorCode
+
+    new_codes = set(get_args(ErrorCode)) - {
+        "invalid_url", "download_failed", "unsupported_format", "too_long", "too_large", "analysis_failed",
+        "not_found", "internal", "unauthorized", "quota_exceeded", "download_blocked", "unavailable",
+    }
+    assert new_codes == set(ADMIN_ERROR_STATUS)
+    assert len(ADMIN_ERROR_STATUS) == 16
+    assert {c: STATUS_BY_CODE[c] for c in new_codes} == ADMIN_ERROR_STATUS
+
+
+@pytest.mark.parametrize(("code", "status"), sorted(ADMIN_ERROR_STATUS.items()))
+def test_admin_error_code_maps_to_its_status(env: SimpleNamespace, code: str, status: int) -> None:
+    from typing import get_args
+
+    from app.main import STATUS_BY_CODE, ApiException
+    from app.models import ErrorCode
+
+    assert code in get_args(ErrorCode)
+    assert STATUS_BY_CODE[code] == status
+    assert ApiException(code, "boom").status == status  # type: ignore[arg-type]
+
+    def _raise() -> None:
+        raise ApiException(code, "boom")  # type: ignore[arg-type]
+
+    _add_route(env.client.app, "POST", f"/api/admin/_raise/{code}", _raise)
+    assert_error(env.client.post(f"/api/admin/_raise/{code}"), status, code)
+
+
+class _Limits(BaseModel):
+    analyses: int = Field(ge=1, le=1000)
+    vocals: int = Field(ge=1, le=150)
+
+
+def _add_validated_routes(app: Any) -> None:
+    def _limits(body: _Limits) -> dict:
+        return body.model_dump()
+
+    _add_route(app, "POST", "/api/admin/_t03/limits", _limits)
+    _add_route(app, "POST", "/api/_t03/limits", _limits)
+
+
+def test_admin_validation_error_is_invalid_value_with_details_per_field(env: SimpleNamespace) -> None:
+    _add_validated_routes(env.client.app)
+    res = env.client.post("/api/admin/_t03/limits", json={"analyses": 0, "vocals": 151})
+    assert_error(res, 422, "invalid_value")
+    fields = res.json()["details"]["fields"]
+    assert set(fields) == {"analyses", "vocals"}
+    assert all(isinstance(m, str) and m for m in fields.values())
+
+    missing = env.client.post("/api/admin/_t03/limits", json={"analyses": 5})
+    assert_error(missing, 422, "invalid_value")
+    assert set(missing.json()["details"]["fields"]) == {"vocals"}
+
+    not_json = env.client.post("/api/admin/_t03/limits", content=b"nope", headers={"content-type": "text/plain"})
+    assert_error(not_json, 422, "invalid_value")
+    assert isinstance(not_json.json()["details"]["fields"], dict)
+
+    assert env.client.post("/api/admin/_t03/limits", json={"analyses": 1, "vocals": 150}).status_code == 200
+
+
+def test_admin_validation_error_covers_query_params(env: SimpleNamespace) -> None:
+    def _search(q: str) -> dict:
+        return {"q": q}
+
+    _add_route(env.client.app, "GET", "/api/admin/_t03/search", _search)
+    res = env.client.get("/api/admin/_t03/search")
+    assert_error(res, 422, "invalid_value")
+    assert set(res.json()["details"]["fields"]) == {"q"}
+
+
+def test_non_admin_validation_errors_keep_their_code_and_have_no_details(env: SimpleNamespace) -> None:
+    _add_validated_routes(env.client.app)
+    res = env.client.post("/api/_t03/limits", json={"analyses": 0, "vocals": 151})
+    assert_error(res, 422, "internal")
+    assert "details" not in res.json()
+    jobs = env.client.post("/api/jobs", json={})
+    assert_error(jobs, 422, "invalid_url")
+    assert "details" not in jobs.json()

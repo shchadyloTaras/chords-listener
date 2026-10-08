@@ -82,6 +82,23 @@ STATUS_BY_CODE: dict[str, int] = {
     "quota_exceeded": 429,
     "download_blocked": 502,
     "unavailable": 501,
+    # admin (docs/features/admin)
+    "cloud_restricted": 403,
+    "analyses_paused": 503,
+    "youtube_disabled": 503,
+    "vocals_disabled": 503,
+    "query_too_short": 422,
+    "invalid_period": 422,
+    "invalid_value": 422,
+    "confirm_email_mismatch": 422,
+    "reauth_required": 401,
+    "self_target": 409,
+    "deletion_pending": 409,
+    "not_scheduled": 409,
+    "not_set": 409,
+    "deletion_rate_limit": 429,
+    "not_applied": 503,
+    "audit_unavailable": 503,
 }
 
 
@@ -93,8 +110,32 @@ class ApiException(Exception):
         self.status = status or STATUS_BY_CODE.get(code, 500)
 
 
-def error_response(status: int, code: ErrorCode, detail: str, headers: Optional[dict[str, str]] = None) -> JSONResponse:
-    return JSONResponse({"detail": detail, "code": code}, status_code=status, headers=headers)
+def error_response(
+    status: int,
+    code: ErrorCode,
+    detail: str,
+    headers: Optional[dict[str, str]] = None,
+    details: Optional[dict[str, Any]] = None,
+) -> JSONResponse:
+    body: dict[str, Any] = {"detail": detail, "code": code}
+    if details is not None:
+        body["details"] = details
+    return JSONResponse(body, status_code=status, headers=headers)
+
+
+def _is_admin_path(path: str) -> bool:
+    return path == "/api/admin" or path.startswith("/api/admin/")
+
+
+def _validation_fields(errors: list[Any]) -> dict[str, str]:
+    """Field name (as in the request) -> first problem. A model-level error names no field: it is keyed ``_form``."""
+    fields: dict[str, str] = {}
+    for err in errors:
+        loc = [str(p) for p in err.get("loc", ())]
+        if loc and loc[0] in ("body", "query", "path", "header", "cookie"):
+            loc = loc[1:]
+        fields.setdefault(".".join(loc) or "_form", str(err.get("msg", "invalid value")))
+    return fields
 
 
 def _not_found(what: str = "Track") -> ApiException:
@@ -398,6 +439,10 @@ def _install_error_handlers(app: FastAPI) -> None:
         first = errors[0] if errors else {}
         where = ".".join(str(p) for p in first.get("loc", ()) if p != "body")
         message = f"{where}: {first.get('msg', 'invalid value')}" if where else str(first.get("msg", "Invalid request"))
+        if _is_admin_path(request.url.path):
+            return error_response(
+                422, "invalid_value", f"Invalid request - {message}", details={"fields": _validation_fields(errors)}
+            )
         code: ErrorCode = "invalid_url" if request.url.path.rstrip("/") == "/api/jobs" else "internal"
         return error_response(422, code, f"Invalid request - {message}")
 
