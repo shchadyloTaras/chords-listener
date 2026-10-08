@@ -802,6 +802,214 @@
         "README.md",
         "docs/features/admin/spec.md"
       ]
+    },
+    {
+      "id": "T40",
+      "title": "Enforce the admin-set duration and upload limits at every check",
+      "layer": "app",
+      "deps": [
+        "T14",
+        "T23"
+      ],
+      "acs": [
+        "AC-24",
+        "AC-25"
+      ],
+      "dod": "Review S1-1. Tests show that after setDefaultLimits(maxDurationMin, maxUploadMb) a longer/larger input is refused with too_long / the upload-size error, and the deploy-time settings are the fallback only while adminConfig/settings is absent.",
+      "files_hint": [
+        "backend/app/jobs.py",
+        "backend/app/main.py",
+        "backend/app/admin/settings.py",
+        "backend/tests/admin/test_admission.py"
+      ]
+    },
+    {
+      "id": "T41",
+      "title": "Apply the YouTube switch to YouTube links only and filter the history by source type",
+      "layer": "app",
+      "deps": [
+        "T40"
+      ],
+      "acs": [
+        "AC-07",
+        "AC-27"
+      ],
+      "dod": "Review S1-2, S1-4. Tests show youtubeEnabled=off refuses YouTube links (incl. fragments) but not SoundCloud/direct URLs, and adminJobs gets a sourceType (youtube|other) that listJobHistory can filter by (openapi + data-model updated).",
+      "files_hint": [
+        "backend/app/admission.py",
+        "backend/app/jobs.py",
+        "backend/app/admin/history.py",
+        "backend/app/admin/router.py",
+        "contracts/openapi.yaml",
+        "frontend/src/admin/screens/Jobs.tsx"
+      ]
+    },
+    {
+      "id": "T42",
+      "title": "Mark quiet and pre-launch days as restored and omit empty days from /stats",
+      "layer": "app",
+      "deps": [
+        "T41"
+      ],
+      "acs": [
+        "AC-08"
+      ],
+      "dod": "Review S1-5, S1-9. Tests show a day with no live counters is shown as «відновлено з пісень» (not «триває»), and GET /stats omits the days the contract says are omitted.",
+      "files_hint": [
+        "backend/app/admin/router.py",
+        "frontend/src/admin/screens/Stats.tsx",
+        "backend/tests/admin/test_api_history.py"
+      ]
+    },
+    {
+      "id": "T43",
+      "title": "Make the list endpoints match the contract: before cursor, truncated, 422 cases",
+      "layer": "ports",
+      "deps": [
+        "T42"
+      ],
+      "acs": [
+        "AC-03",
+        "AC-06"
+      ],
+      "dod": "Review S1-10, S1-11, S1-12. Tests show listUserTracks honours `before`, truncated is true only when more than 50 match, and invalid track/audit cursors and q > 254 return the contract's error (or the contract lists the 422).",
+      "files_hint": [
+        "backend/app/admin/router.py",
+        "backend/app/admin/directory.py",
+        "contracts/openapi.yaml",
+        "backend/tests/admin/test_api_search_card.py"
+      ]
+    },
+    {
+      "id": "T44",
+      "title": "Seed the maintenance banner with valid non-empty texts",
+      "layer": "migration",
+      "deps": [
+        "T43"
+      ],
+      "acs": [
+        "AC-29"
+      ],
+      "dod": "Review S1-8. Tests show migration 04 builds the banner through validation (no model_construct bypass) so the seeded uk/en texts are non-empty and match the contract.",
+      "files_hint": [
+        "migrations/04_seed_runtime_config.up.py",
+        "backend/app/admin/settings.py"
+      ]
+    },
+    {
+      "id": "T45",
+      "title": "Harden account deletion: missing profile, purged-token reuse, buffered replay, cancel after purge",
+      "layer": "app",
+      "deps": [
+        "T44"
+      ],
+      "acs": [
+        "AC-16",
+        "AC-22",
+        "AC-23",
+        "AC-23b"
+      ],
+      "dod": "Review S2-1..S2-4. Tests show: admin actions work for a user whose users/{uid} is missing; a purged user's token cannot recreate the profile, uploads or email index entry; buffered history replay after purge does not restore the title; cancelDeletion reads the tombstone and refuses once purge began.",
+      "files_hint": [
+        "backend/app/admin/router.py",
+        "backend/app/admin/deletion.py",
+        "backend/app/admin/actions.py",
+        "backend/app/admin/history.py",
+        "backend/app/admin/directory.py",
+        "firestore.rules"
+      ]
+    },
+    {
+      "id": "T46",
+      "title": "Fix the admin UI: song flags, CSP hosts, frame guard, one language, shared classes",
+      "layer": "ui",
+      "deps": [
+        "T45"
+      ],
+      "acs": [
+        "AC-03",
+        "AC-06"
+      ],
+      "dod": "Review S1-6, S1-13, S2-8, S2-9, S2-10. Tests show the song list shows edited/vocals flags, admin.html connect-src lists only ADR-0002 hosts (or the ADR is amended), a framed admin page breaks out, the admin pins lang=uk (recorded in ADR-0002), and label/input classes come from one module.",
+      "files_hint": [
+        "frontend/src/admin/screens/UserCard.tsx",
+        "frontend/admin.html",
+        "frontend/src/admin/main.tsx",
+        "frontend/src/admin/useAdminRoute.ts",
+        "adr/0002-ship-admin-ui-as-separate-strict-csp-entry.md"
+      ]
+    },
+    {
+      "id": "T47",
+      "title": "Test the site's admission refusals and share one isAdminRefusal helper",
+      "layer": "ui",
+      "deps": [
+        "T46"
+      ],
+      "acs": [
+        "AC-18",
+        "AC-26",
+        "AC-28"
+      ],
+      "dod": "Review S1-7, S2-11. Tests show the toast action, the support email and the hidden vocals retry on refusal; the refusal-code list lives in one helper used by useJobs, LivePiano and ScoreView.",
+      "files_hint": [
+        "frontend/src/hooks/useJobs.ts",
+        "frontend/src/components/chords/piano/LivePiano.tsx",
+        "frontend/src/components/chords/ScoreView.tsx",
+        "frontend/src/lib/serviceStatus.ts"
+      ]
+    },
+    {
+      "id": "T48",
+      "title": "Stop leaking admin routes via OPTIONS and require a verified email in the grant script",
+      "layer": "app",
+      "deps": [
+        "T45"
+      ],
+      "acs": [
+        "AC-32"
+      ],
+      "dod": "Review S2-6, S2-7. Tests show an unauthenticated OPTIONS to admin/internal routes answers like an unknown route, and scripts/admin_grant.py refuses an account whose email is not verified.",
+      "files_hint": [
+        "backend/app/auth.py",
+        "backend/app/main.py",
+        "scripts/admin_grant.py"
+      ]
+    },
+    {
+      "id": "T49",
+      "title": "Consolidate the in-memory Firestore fakes and fix the AC-13b settings test",
+      "layer": "tests",
+      "deps": [
+        "T48"
+      ],
+      "acs": [
+        "AC-13b"
+      ],
+      "dod": "Review S2-13, S2-14. One MemDb in backend/tests/admin/fixtures.py replaces the 7 copies; test_actions_settings.py:150 seeds the right doc and asserts the behaviour.",
+      "files_hint": [
+        "backend/tests/admin/fixtures.py",
+        "backend/tests/test_cloud.py",
+        "backend/tests/test_vocals_api.py",
+        "backend/tests/admin/test_actions_settings.py"
+      ]
+    },
+    {
+      "id": "T50",
+      "title": "Run the emulator tests in CI and align the test plan with the levels used",
+      "layer": "tests",
+      "deps": [
+        "T49"
+      ],
+      "acs": [
+        "AC-36"
+      ],
+      "dod": "Review S2-5, S2-12. CI has a job running the backend emulator suite (README notes how to run it locally), and test-plan.md rows name the level each AC is actually tested at.",
+      "files_hint": [
+        "/.github/workflows/pages.yml",
+        "README.md",
+        "test-plan.md"
+      ]
     }
   ]
 }
