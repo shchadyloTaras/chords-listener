@@ -557,10 +557,10 @@ describe('promoted migrations 02 and 03 (firestore.indexes.json, firestore.rules
     assert.equal(readFileSync(new URL('./firestore.rules', import.meta.url), 'utf8'), staged('03_admin_rules.up.rules'))
   })
 
-  test('there are 8 composite indexes: 4 on adminJobs, 4 on adminAudit, newest first', () => {
-    assert.equal(indexes.indexes.length, 8)
+  test('there are 9 composite indexes: 5 on adminJobs, 4 on adminAudit, newest first', () => {
+    assert.equal(indexes.indexes.length, 9)
     const by = (group) => indexes.indexes.filter((i) => i.collectionGroup === group)
-    assert.equal(by('adminJobs').length, 4)
+    assert.equal(by('adminJobs').length, 5)
     assert.equal(by('adminAudit').length, 4)
     for (const index of indexes.indexes) {
       const last = index.fields.at(-1)

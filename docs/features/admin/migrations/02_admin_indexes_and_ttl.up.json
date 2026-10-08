@@ -28,6 +28,14 @@
       "collectionGroup": "adminJobs",
       "queryScope": "COLLECTION",
       "fields": [
+        { "fieldPath": "sourceType", "order": "ASCENDING" },
+        { "fieldPath": "acceptedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "adminJobs",
+      "queryScope": "COLLECTION",
+      "fields": [
         { "fieldPath": "uid", "order": "ASCENDING" },
         { "fieldPath": "acceptedAt", "order": "DESCENDING" }
       ]
