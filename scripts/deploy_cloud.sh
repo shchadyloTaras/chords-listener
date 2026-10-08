@@ -146,7 +146,7 @@ fi
 FETCH_SERVICE="${FETCH_SERVICE:-chords-fetch}"
 if FETCH_URL=$(gc run services describe "$FETCH_SERVICE" --region "$REGION" --format='value(status.url)' 2>"$TMP/fetch.err"); then
   :
-elif grep -qE 'NOT_FOUND|could not be found' "$TMP/fetch.err"; then
+elif grep -qE 'NOT_FOUND|could not be found|Cannot find service' "$TMP/fetch.err"; then
   FETCH_URL=""
 else
   cat "$TMP/fetch.err" >&2
