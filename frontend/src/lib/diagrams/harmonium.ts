@@ -1,7 +1,7 @@
 // The Indian hand harmonium's keyboard: 37 keys from C3 to C6 (three octaves and the top C, 22
 // white + 15 black keys, the black ones grouped 2-3-2-3-2-3), and which of them a chord lights —
-// one right-hand shape (the left hand pumps the bellows), exactly the notes its staff shows and the
-// chord sound plays.
+// one right-hand shape (the left hand pumps the bellows) kept in one spot by inversions, exactly
+// the notes its staff shows and the chord sound plays.
 
 import { QUALITY_INTERVALS, type ParsedChord } from '../music/chord'
 import { mod12 } from '../music/notes'
@@ -23,10 +23,16 @@ export interface HarmoniumVoicing {
   notes: number[]
 }
 
-/** The shape's lowest note sits in the octave from middle C (keys 12–23). */
-const HAND_LOW = 12
+/**
+ * Where the right hand rests: thumb on middle C (Sa), fingers over the notes up to G4 — every chord
+ * is the inversion whose notes centre nearest E4 (key 16), the middle of that hand.
+ */
+const HAND_CENTRE = 16
 /** At most this many notes in the hand; past it the perfect fifth is left out. */
 const HAND_NOTES = 4
+/** Lowest / highest key a chord shape takes (G3 / F#5): within the hand's reach, and on the treble staff. */
+export const HARMONIUM_SHAPE_LOW = 7
+export const HARMONIUM_SHAPE_HIGH = 30
 
 export function harmoniumKeyMidi(key: number): number {
   return HARMONIUM_LOW + key
@@ -55,18 +61,30 @@ export function harmoniumKeys(): { whites: number[]; blacks: number[] } {
 }
 
 /**
- * The chord as one hand plays it — on the hand harmonium the left hand pumps the bellows, so there
- * is no separate bass: the bass (slash bass, else root) is the shape's lowest note, in the octave
- * from middle C, and the other chord tones sit closest above it, all within an octave. A chord of
- * five tones (a 9th, a slash bass outside the chord) leaves out its perfect fifth.
+ * The chord as a harmonium player's right hand takes it (the left pumps the bellows, so there is no
+ * separate bass): the chord tones in close position — all within an octave, a triad under fingers
+ * 1-3-5 — and of its inversions the one that sits nearest the resting hand (HAND_CENTRE), so the hand
+ * barely moves from chord to chord: C = C E G, F = C F A, G = B D G, Am = C E A. Ties go to root
+ * position. A slash chord keeps its bass at the bottom (C/E = E G C). A chord of five tones (a 9th, a
+ * slash bass outside the chord) leaves out its perfect fifth.
  */
 export function harmoniumVoicing(chord: ParsedChord): HarmoniumVoicing {
-  const bassPc = chord.bassPc ?? chord.rootPc
-  const above = new Set(QUALITY_INTERVALS[chord.quality].map((i) => mod12(chord.rootPc + i - bassPc)))
-  above.delete(0)
-  if (above.size + 1 > HAND_NOTES) above.delete(mod12(chord.rootPc + 7 - bassPc))
-  const low = HAND_LOW + bassPc
-  return { notes: [low, ...[...above].sort((a, b) => a - b).map((d) => low + d)] }
+  const pcs = new Set(QUALITY_INTERVALS[chord.quality].map((i) => mod12(chord.rootPc + i)))
+  if (chord.bassPc != null) pcs.add(chord.bassPc)
+  const fifth = mod12(chord.rootPc + 7)
+  if (pcs.size > HAND_NOTES && fifth !== chord.bassPc) pcs.delete(fifth)
+  let best: { notes: number[]; dist: number; rooted: boolean } | null = null
+  for (const lowPc of chord.bassPc != null ? [chord.bassPc] : [...pcs]) {
+    const up = [...pcs].map((pc) => mod12(pc - lowPc)).sort((a, b) => a - b)
+    for (let low = lowPc; low + up[up.length - 1] <= HARMONIUM_SHAPE_HIGH; low += 12) {
+      if (low < HARMONIUM_SHAPE_LOW) continue
+      const notes = up.map((d) => low + d)
+      const dist = Math.abs(notes.reduce((a, b) => a + b, 0) / notes.length - HAND_CENTRE)
+      const rooted = lowPc === chord.rootPc
+      if (!best || dist < best.dist - 1e-9 || (Math.abs(dist - best.dist) < 1e-9 && rooted && !best.rooted)) best = { notes, dist, rooted }
+    }
+  }
+  return { notes: best!.notes }
 }
 
 /** The shape's notes as its staff writes them (treble clef alone), spelled by chord degree. */
