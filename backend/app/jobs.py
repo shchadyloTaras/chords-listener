@@ -45,6 +45,7 @@ from .users import current_uid
 
 if TYPE_CHECKING:
     from .admin.history import Projections
+    from .admission import Admission
     from .gcs import UploadBucket
 
 log = logging.getLogger("chords.jobs")
@@ -122,10 +123,13 @@ class JobManager:
         vocal_transcriber: Optional[VocalTranscriber] = None,
         projections: Optional["Projections"] = None,
         is_tombstoned: Optional[Callable[[str], bool]] = None,
+        admission: Optional["Admission"] = None,
     ) -> None:
         """``projections`` (admin job history, docs/features/admin) is told when a job is taken on and when it ends;
         ``is_tombstoned(uid)`` tells whether the user's account is being purged: the result of such a job is
-        discarded instead of written (ADR-0011). Both are optional and never fail a job."""
+        discarded instead of written (ADR-0011). Both are optional and never fail a job. ``admission`` (the gate of
+        ADR-0008) refuses a job before its quota unit is counted and supplies the effective limits; without it the
+        env limits apply and nothing is refused but by quota."""
         self.settings = settings
         self.store = store
         self.fetcher = fetcher
@@ -133,13 +137,14 @@ class JobManager:
         self.vocal_transcriber = vocal_transcriber  # None: app.vocals.transcribe when the extra is installed
         self.projections = projections
         self._is_tombstoned = is_tombstoned
+        self.admission = admission
         self._lock = threading.RLock()
         self._jobs: dict[str, JobRecord] = {}
         self._active: dict[str, str] = {}  # dedup key ("track:<id>" / "url:<url>") -> job id
         self._track_locks: dict[str, threading.Lock] = {}
         self._executor = ThreadPoolExecutor(max_workers=settings.max_workers, thread_name_prefix="chords-job")
         self._closed = False
-        self.quotas = Quotas(settings, store)
+        self.quotas = Quotas(settings, store, limits=admission)
 
     # ------------------------------------------------------------------ per-user helpers (cloud mode)
 
@@ -164,19 +169,31 @@ class JobManager:
             live = [r for r in self._jobs.values() if not r.finished and not r.cancel.is_set()]
         return sorted(live, key=lambda r: r.created_ts)
 
-    def admit(self, quota: Optional[str] = "analyses") -> None:
-        """Cloud mode: may the current user start one more job now? Checks the running-jobs limit, then
-        counts one unit of the daily ``quota`` ("analyses" | "vocals" | None). Raises QuotaExceeded (429).
-        Feature code that creates its own jobs (e.g. vocals) calls this right before submitting."""
+    def admit(self, quota: Optional[str] = "analyses", *, kind: Optional[str] = None, origin: str = "file") -> None:
+        """Cloud mode: may the current user start one more job now? The admission gate (restriction, switches,
+        effective limits) decides, then one unit of the daily ``quota`` ("analyses" | "vocals") is counted. Raises
+        ``SourceError`` (403 / 503 from the gate, 429 ``QuotaExceeded``); a refusal counts nothing.
+        ``kind`` ("analysis" | "reanalysis" | "vocals"; default from ``quota``) and ``origin`` ("link" | "file" |
+        "mic" | "tab") tell the gate what is being started. Feature code that creates its own jobs calls this right
+        before submitting."""
         if not self.settings.cloud:
             return
+        uid = current_uid()
+        if self.admission is not None and uid and quota is not None:
+            self.admission.prepare(uid)  # its database reads (a cache miss) happen before the lock below
         with self._lock:
-            if self.running_count() >= self.settings.max_user_jobs:
-                raise QuotaExceeded(
-                    f"You already have {self.settings.max_user_jobs} songs in progress - wait for one to finish"
+            running = self.running_count(uid)
+            if quota is None:  # a job outside the daily quotas: only the limit of parallel jobs applies
+                jobs = self.quotas.effective_limits(uid).jobs
+                if running >= jobs:
+                    raise QuotaExceeded(f"You already have {jobs} songs in progress - wait for one to finish")
+            elif self.admission is not None and uid:
+                self.admission.check(
+                    uid, kind or ("vocals" if quota == "vocals" else "analysis"), origin,
+                    running=running, quotas=self.quotas,
                 )
-            if quota:
-                self.quotas.consume(quota)
+            else:
+                self.quotas.admit(quota, running, uid)
 
     # ------------------------------------------------------------------ queries
 
@@ -210,7 +227,7 @@ class JobManager:
             running = self._find_active(keys)
             if running:
                 return running.to_model()
-            self.admit()
+            self.admit(origin="link")
             rec = self._new_record(
                 "url",
                 options,
@@ -237,8 +254,8 @@ class JobManager:
                 shutil.rmtree(upload.work_dir, ignore_errors=True)
                 return running.to_model()
             try:
-                self.admit()
-            except QuotaExceeded:
+                self.admit(origin=_upload_origin(origin))
+            except SourceError:
                 shutil.rmtree(upload.work_dir, ignore_errors=True)
                 raise
             rec = self._new_record(
@@ -259,7 +276,7 @@ class JobManager:
             running = self._find_active(keys)
             if running:
                 return running.to_model()
-            self.admit()
+            self.admit(kind="reanalysis", origin=_meta_origin(meta))
             rec = self._new_record(
                 "reanalyze",
                 options,
@@ -299,7 +316,7 @@ class JobManager:
             running = self._find_active(keys)
             if running:
                 return running.to_model()
-            self.admit()
+            self.admit(origin="tab" if video_id else _upload_origin(origin))
             rec = self._new_record(
                 "upload",
                 options,
@@ -331,7 +348,7 @@ class JobManager:
             running = self._find_active(keys)
             if running:
                 return running.to_model()
-            self.admit("vocals")
+            self.admit("vocals", origin=_meta_origin(meta))
             rec = self._new_record(
                 "vocals",
                 {},

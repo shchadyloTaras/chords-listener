@@ -33,7 +33,9 @@ from .admin.authz import ADMIN_PREFIX, AdminAuthz, HiddenFromCaller, ReauthRequi
 from .admin.directory import Directory
 from .admin.history import Projections, pending_path
 from .admin.router import router as admin_router_default
+from .admin.settings import RuntimeSettings
 from .admin.sweeps import Sweeper, internal_router
+from .admission import Admission
 from .auth import AuthMiddleware, FirebaseTokenVerifier, MediaSigner, SchedulerTokenVerifier
 from .firestore import FirestoreIndex
 from .gcs import UploadBucket, default_client
@@ -290,11 +292,16 @@ def create_app(
     # ``Projections``; the email index the admin routes search is the one the sweep rebuilds. None without a database.
     projections = Projections(admin_db, pending_path(settings.data_dir)) if admin_db is not None else None
     admin_directory = Directory(admin_db) if admin_db is not None else None
+    # the settings cache the admin routes edit and the admission gate reads (ADR-0008): one per app, falling back to
+    # this app's own ``Settings`` while ``adminConfig/settings`` does not exist
+    admin_settings = RuntimeSettings(admin_db, env=lambda: settings) if admin_db is not None else None
+    admission = Admission(admin_db, admin_settings) if admin_settings is not None else None
     jobs = JobManager(
         settings, store, fetcher or YtDlpFetcher(settings.max_upload_bytes), analyzer, vocal_transcriber=vocal_transcriber,
         # admin job history and the late-job discard of purged accounts (docs/features/admin): none without a database
         projections=projections,
         is_tombstoned=(lambda uid: admin_db.get(f"adminTombstones/{uid}") is not None) if admin_db is not None else None,
+        admission=admission,
     )
     bucket = (
         UploadBucket(settings.upload_bucket, project=settings.firebase_project, client_factory=gcs_client_factory)
@@ -357,6 +364,8 @@ def create_app(
     app.state.admin_db = admin_db
     app.state.admin_authz = admin_authz or AdminAuthz(admin_db)
     app.state.admin_directory = admin_directory  # the admin router's ``directory`` (app.admin.router)
+    app.state.admin_settings = admin_settings  # ... and its ``settings`` (None: built on first use)
+    app.state.admission = admission  # None without a database: no gate (local mode)
     if sweeper is _UNSET:
         sweeper = Sweeper(admin_db, projections, admin_directory) if admin_db is not None else None
     app.state.sweeper = sweeper
@@ -706,7 +715,7 @@ def _api_router(
                     "day": usage["day"],
                     "analyses": usage["analyses"],
                     "vocals": usage["vocals"],
-                    "jobs": {"used": jobs.running_count(uid), "limit": settings.max_user_jobs},
+                    "jobs": {"used": jobs.running_count(uid), "limit": usage["jobs"]["limit"]},
                 },
             }
         )
