@@ -1,16 +1,18 @@
 """06 up: rebuild ``adminStats/<day>`` with ``state: restored`` for the days before launch (AC-08; idempotent).
 
 Counts the tracks every user added per UTC day by ``source.type`` (``youtube`` | ``url`` | ``file``) from the
-library index ``users/*/tracks`` (``createdAt`` is an ISO string there). Only days before ``--before`` (the
-feature's launch day, YYYY-MM-DD) are written, each created with ``exists=false`` so a live, frozen or
-already restored day is never touched. The smoke-test account is left out (spec §8, resolved 2026-10-08).
+library index ``users/*/tracks`` (``createdAt`` is an ISO string there). Every UTC day from the first counted
+track's day up to ``--before`` (the feature's launch day, YYYY-MM-DD, not included) is written, a day nobody added
+a song on too (zero songs): the admin then reads every pre-launch day as «відновлено з пісень», never as an ordinary
+day of zeros. Each day is created with ``exists=false`` so a live, frozen or already restored day is never touched.
+The smoke-test account is left out (spec §8, resolved 2026-10-08).
 """
 from __future__ import annotations
 
 import argparse
 import re
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from _fsrest import Rest, already_exists
 from app.firestore import IndexError_
@@ -25,7 +27,11 @@ def main() -> int:
     parser.add_argument("--before", required=True, help="launch day, YYYY-MM-DD (UTC); earlier days are restored")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.before):
+    try:
+        launch = date.fromisoformat(args.before) if re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.before) else None
+    except ValueError:
+        launch = None
+    if launch is None:
         parser.error("--before must be YYYY-MM-DD")
     fs = Rest(Settings.from_env().firebase_project)
     days: dict[str, dict[str, int]] = defaultdict(lambda: dict.fromkeys(SOURCE_TYPES, 0))
@@ -38,6 +44,10 @@ def main() -> int:
         kind = (doc.get("source") or {}).get("type")
         if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) and day < args.before and kind in SOURCE_TYPES:
             days[day][kind] += 1
+    if days:  # the quiet days in between are restored too, with no songs
+        first = date.fromisoformat(min(days))
+        for n in range((launch - first).days):
+            days.setdefault((first + timedelta(days=n)).isoformat(), dict.fromkeys(SOURCE_TYPES, 0))
     now = datetime.now(timezone.utc)
     created = skipped = 0
     for day in sorted(days):

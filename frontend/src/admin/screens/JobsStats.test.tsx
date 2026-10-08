@@ -82,6 +82,13 @@ const page = (items: AdminJobHistoryItem[], over: Partial<AdminJobHistoryPage> =
 
 type JobsLoad = (filters: AdminJobFilters, paging: AdminPaging, signal: AbortSignal) => Promise<AdminJobHistoryPage>
 
+/** The «Джерело» cell of every row of the job table (not the filter's options). */
+function sourceCells(): string[] {
+  const column = [...host.querySelectorAll('thead th')].findIndex((th) => th.textContent === 'Джерело')
+  expect(column, 'the «Джерело» column').toBeGreaterThanOrEqual(0)
+  return [...host.querySelectorAll('tbody tr')].map((row) => row.children[column]?.textContent ?? '')
+}
+
 async function mountJobs(load: JobsLoad) {
   await act(async () => {
     root.render(createElement(Jobs, { load }))
@@ -115,7 +122,19 @@ describe('AC-07 job history screen', () => {
     await mountJobs(load)
     await change('Тип джерела', 'youtube')
     expect(load.mock.lastCall![0]).toEqual({ sourceType: 'youtube', from: '2026-10-02', to: '2026-10-08' })
-    expect(text()).toContain('YouTube')
+    expect(sourceCells()).toEqual(['Посилання · YouTube'])
+  })
+
+  it('names the source of every row: YouTube links say so, other links and files do not', async () => {
+    await mountJobs(async () =>
+      page([
+        job({ id: 'j1', sourceType: 'youtube' }),
+        job({ id: 'j2', sourceType: 'other' }),
+        job({ id: 'j3', origin: 'file', sourceType: 'other' }),
+        job({ id: 'j4', origin: 'tab', sourceType: 'other' }),
+      ]),
+    )
+    expect(sourceCells()).toEqual(['Посилання · YouTube', 'Посилання', 'Файл', 'Вкладка'])
   })
 
   it('shows the number of jobs per failure reason, labelled in plain words', async () => {

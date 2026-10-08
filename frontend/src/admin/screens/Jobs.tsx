@@ -41,6 +41,10 @@ function periodOk(d: Draft): boolean {
 /** "2026-10-08 09:00" in UTC, the same for every admin whatever their time zone. */
 const when = (iso: string) => iso.slice(0, 16).replace('T', ' ')
 
+/** Where the job came from: the origin, and «YouTube» for a YouTube link (AC-07 filters and shows it). */
+const sourceOf = (j: AdminJobHistoryItem) =>
+  j.sourceType === 'youtube' ? `${ORIGIN_LABEL[j.origin]} · ${SOURCE_TYPE_LABEL.youtube}` : ORIGIN_LABEL[j.origin]
+
 function Who({ item }: { item: AdminJobHistoryItem }) {
   if (item.userDeleted) return <span className="text-muted">Користувача видалено</span>
   if (item.service) return <span className="text-muted">Службова задача</span>
@@ -100,7 +104,7 @@ function Results({ filters, load }: { filters: AdminJobFilters; load: Load }) {
                         <Who item={j} />
                       </td>
                       <td className="whitespace-nowrap px-3 py-2 tabular-nums">{when(j.acceptedAt)}</td>
-                      <td className="px-3 py-2">{ORIGIN_LABEL[j.origin]}</td>
+                      <td className="px-3 py-2">{sourceOf(j)}</td>
                       <td className="px-3 py-2">{KIND_LABEL[j.kind]}</td>
                       <td className="px-3 py-2">{STATUS_LABEL[j.status]}</td>
                       <td className="px-3 py-2">{j.reason ? t(`admin.reason.${j.reason}`) : '—'}</td>

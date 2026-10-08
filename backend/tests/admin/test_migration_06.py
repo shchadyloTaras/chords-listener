@@ -25,6 +25,7 @@ pytestmark = pytest.mark.skipif(not EMULATOR_HOST, reason="needs the Firestore e
 
 MIGRATIONS = Path(__file__).resolve().parents[3] / "docs" / "features" / "admin" / "migrations"
 LAUNCH = "2026-10-10"
+PRE_LAUNCH = [f"2026-10-{d:02d}" for d in range(1, 10)]   # the first track's day up to the launch, quiet days too
 UP, DOWN = "06_restore_stats_from_tracks.up.py", "06_restore_stats_from_tracks.down.py"
 
 
@@ -94,12 +95,30 @@ def test_up_builds_restored_days_with_counts_by_source_type_only(db):
     assert run(UP, "--before", LAUNCH) == 0
 
     built = stats(db)
-    assert sorted(built) == ["2026-10-01", "2026-10-02", "2026-10-09"]          # only days before the launch day
+    assert sorted(built) == PRE_LAUNCH                                          # only days before the launch day
     day = built["2026-10-01"]
     assert day["state"] == "restored"
     assert day["restoredTracks"] == {"youtube": 2, "url": 1, "file": 1}        # raw source.type, all users summed
     assert built["2026-10-02"]["restoredTracks"] == {"youtube": 0, "url": 1, "file": 1}
     assert built["2026-10-09"]["restoredTracks"] == {"youtube": 0, "url": 0, "file": 1}
+
+
+def test_quiet_pre_launch_days_are_restored_with_no_songs(db):
+    """AC-08: every day before the launch reads «відновлено з пісень», a day nobody added a song on too (it would
+    otherwise show as an ordinary day of zeros)."""
+    seed(db)
+    run(UP, "--before", LAUNCH)
+
+    built = stats(db)
+    for day in ("2026-10-03", "2026-10-05", "2026-10-08"):
+        assert built[day]["state"] == "restored"
+        assert built[day]["restoredTracks"] == {"youtube": 0, "url": 0, "file": 0}
+    assert "2026-09-30" not in built                                            # nothing before the first song
+
+
+def test_no_tracks_restores_no_day(db):
+    assert run(UP, "--before", LAUNCH) == 0
+    assert stats(db) == {}
 
 
 def test_restored_days_have_no_failure_or_active_counters(db):
@@ -163,8 +182,9 @@ def test_the_smoke_test_account_and_malformed_tracks_are_ignored(db):
 
     run(UP, "--before", LAUNCH)
 
-    assert list(stats(db)) == ["2026-10-03"]
+    assert sorted(stats(db)) == PRE_LAUNCH[2:]                                  # from the first counted song (10-03)
     assert stats(db)["2026-10-03"]["restoredTracks"] == {"youtube": 1, "url": 0, "file": 0}
+    assert stats(db)["2026-10-04"]["restoredTracks"] == {"youtube": 0, "url": 0, "file": 0}
 
 
 def test_dry_run_writes_nothing(db):
@@ -178,6 +198,8 @@ def test_up_requires_a_valid_before_day(db):
         run(UP)
     with pytest.raises(SystemExit):
         run(UP, "--before", "10/10/2026")
+    with pytest.raises(SystemExit):
+        run(UP, "--before", "2026-13-45")                                       # shaped like a day, but none
     assert stats(db) == {}
 
 
@@ -190,7 +212,7 @@ def test_down_removes_only_restored_days(db):
     db.commit([db.update_op("adminStats/2026-10-11", {**base, "state": "live"}),
                db.update_op("adminStats/2026-10-08", {**base, "state": "frozen"})])
     run(UP, "--before", LAUNCH)
-    assert len(stats(db)) == 5
+    assert len(stats(db)) == 10                                                 # 8 restored days + the live and frozen ones
 
     assert run(DOWN) == 0
 
@@ -204,7 +226,7 @@ def test_down_dry_run_deletes_nothing(db):
     seed(db)
     run(UP, "--before", LAUNCH)
     assert run(DOWN, "--dry-run") == 0
-    assert len(stats(db)) == 3
+    assert len(stats(db)) == len(PRE_LAUNCH)
 
 
 def test_script_runs_as_documented_from_backend_with_the_migrations_dir_on_the_path(db, project):
@@ -218,5 +240,5 @@ def test_script_runs_as_documented_from_backend_with_the_migrations_dir_on_the_p
         assert res.returncode == 0, res.stderr
         return res.stdout
 
-    assert "3 day(s) found, 3 restored, 0 already present" in script(UP, "--before", LAUNCH)
-    assert "3 restored day(s) deleted" in script(DOWN)
+    assert "9 day(s) found, 9 restored, 0 already present" in script(UP, "--before", LAUNCH)
+    assert "9 restored day(s) deleted" in script(DOWN)

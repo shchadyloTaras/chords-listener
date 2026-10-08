@@ -8,7 +8,7 @@ files_hint: ["docs/features/admin/migrations/06_restore_stats_from_tracks.up.py"
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 10 — re-review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T52 — Label quiet pre-launch days as restored and show the YouTube source in job rows
@@ -19,4 +19,4 @@ status: "todo"
 
 **Re-review fixes 2, 3. Emulator tests show migration 06 writes a restored day (zero counts) for every UTC day from the first track's day up to --before, idempotent, and .down removes them all; a Jobs test asserts on the row cell that a YouTube job reads «Посилання · YouTube».**
 
-- [ ] lint + type-check clean (ruff / oxlint + tsc)
+- [x] lint + type-check clean (ruff / oxlint + tsc)
