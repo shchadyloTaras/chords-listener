@@ -28,8 +28,9 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from app.engine import engine_info
 
 from .auth import AuthMiddleware, FirebaseTokenVerifier, MediaSigner
+from .fetch_client import RemoteClipFetcher
 from .firestore import FirestoreIndex
-from .gcs import UploadBucket, default_client
+from .gcs import FETCH_GLOB, UPLOADS_GLOB, UploadBucket, default_client
 from .jobs import Analyzer, JobManager, too_long_message
 from .models import (
     AnalysisOptions,
@@ -52,6 +53,8 @@ from .models import (
 )
 from .publish import NullPublisher, Publisher
 from .sources import (
+    ClipFetcher,
+    LocalClipFetcher,
     SourceError,
     UrlFetcher,
     YtDlpFetcher,
@@ -68,6 +71,9 @@ from .users import current_uid
 log = logging.getLogger("chords.api")
 
 PUBLISH_SWEEP_INTERVAL_S = 600.0  # how often the pending publishes (publish-pending.json) are retried
+BUCKET_SWEEP_INTERVAL_S = 3600.0  # how often abandoned uploads and fragments are removed from the bucket
+UPLOAD_MAX_AGE_S = 24 * 3600.0
+FETCH_MAX_AGE_S = 3600.0  # fragments chords-fetch left that no job took (the API died meanwhile)
 
 STATUS_BY_CODE: dict[str, int] = {
     "invalid_url": 400,
@@ -187,6 +193,7 @@ def create_app(
     *,
     analyzer: Optional[Analyzer] = None,
     fetcher: Optional[UrlFetcher] = None,
+    clip_fetcher: Optional[ClipFetcher] = None,
     engine_info_fn: Optional[Callable[[], dict]] = None,
     token_verifier: Any = None,
     gcs_client_factory: Optional[Callable[[], Any]] = None,
@@ -196,7 +203,8 @@ def create_app(
     """``token_verifier`` (``.verify(token) -> uid``) and ``gcs_client_factory`` replace the Firebase token
     check and the google-cloud-storage client (tests); ``vocal_transcriber`` replaces app.vocals.transcribe;
     ``publisher_factory(store)`` replaces the ``Publisher`` that publishes track changes in cloud mode
-    (tests; ``CHORDS_PUBLISH`` off still wins)."""
+    (tests; ``CHORDS_PUBLISH`` off still wins); ``clip_fetcher`` replaces the YouTube fragment downloader (tests;
+    see ``_clip_fetcher``)."""
     settings = settings or Settings.from_env()
     ensure_tool_path()
     if not logging.getLogger().handlers:
@@ -209,13 +217,18 @@ def create_app(
             log.warning("CHORDS_SIGNING_KEY is not set: media links stop working when the server restarts")
             signer = MediaSigner.random(ttl_s=settings.media_url_ttl_s)
     store = TrackStore(settings, signer=signer)
-    jobs = JobManager(
-        settings, store, fetcher or YtDlpFetcher(settings.max_upload_bytes), analyzer, vocal_transcriber=vocal_transcriber
-    )
     bucket = (
         UploadBucket(settings.upload_bucket, project=settings.firebase_project, client_factory=gcs_client_factory)
         if settings.cloud and settings.upload_bucket
         else None
+    )
+    jobs = JobManager(
+        settings,
+        store,
+        fetcher or YtDlpFetcher(settings.max_upload_bytes),
+        analyzer,
+        vocal_transcriber=vocal_transcriber,
+        clip_fetcher=clip_fetcher or _clip_fetcher(settings, bucket),
     )
     get_engine_info = engine_info_fn or engine_info
     if not (settings.cloud and settings.publish):
@@ -303,6 +316,20 @@ def create_app(
     return app
 
 
+def _clip_fetcher(settings: Settings, bucket: Optional[UploadBucket]) -> Optional[ClipFetcher]:
+    """Who downloads YouTube fragments: chords-fetch when CHORDS_FETCH_URL is set (it hands files over through the
+    bucket); yt-dlp in this process on a local server; nobody on a cloud server without chords-fetch - YouTube
+    refuses Google Cloud addresses, so the API never tries itself (501, the client listens in the tab)."""
+    if settings.fetch_url:
+        if bucket is None:
+            log.error("CHORDS_FETCH_URL is set but CHORDS_UPLOAD_BUCKET is not: YouTube fragments are off")
+            return None
+        return RemoteClipFetcher(settings.fetch_url, bucket, max_bytes=settings.max_upload_bytes)
+    if settings.cloud:
+        return None
+    return LocalClipFetcher(YtDlpFetcher(settings.max_upload_bytes))
+
+
 def _warm_analysis(work_dir: Path) -> None:
     """Analyze 8 s of synthetic chords once, so every import, model and numba kernel is ready before the
     first real job (the kernels come from the image's cache when the CPU target matches)."""
@@ -333,8 +360,9 @@ def _start_cloud_background_tasks(
     stop: threading.Event,
 ) -> None:
     """Cloud start-up: load the chord models (and run one tiny analysis) while the first request is still
-    on its way, remove uploads abandoned by clients (older than a day) and retry the publishes that failed
-    earlier (``publisher``, unless None: now, then every ``PUBLISH_SWEEP_INTERVAL_S`` until ``stop`` is set)."""
+    on its way, remove uploads abandoned by clients (older than a day) and fragments that chords-fetch left
+    (older than an hour), and retry the publishes that failed earlier (``publisher``, unless None: now, then
+    every ``PUBLISH_SWEEP_INTERVAL_S`` until ``stop`` is set)."""
 
     def preload() -> None:
         try:
@@ -350,11 +378,16 @@ def _start_cloud_background_tasks(
             log.warning("engine preload failed", exc_info=True)
 
     def sweep() -> None:
-        try:
-            assert bucket is not None
-            bucket.sweep()
-        except Exception as exc:  # pragma: no cover - best effort
-            log.warning("stale upload sweep failed: %s", exc)
+        """Abandoned client uploads (a day old) and fragments chords-fetch left behind (an hour old), hourly."""
+        assert bucket is not None
+        while True:
+            for glob, max_age in ((UPLOADS_GLOB, UPLOAD_MAX_AGE_S), (FETCH_GLOB, FETCH_MAX_AGE_S)):
+                try:
+                    bucket.sweep(max_age_s=max_age, glob=glob)
+                except Exception as exc:  # pragma: no cover - best effort
+                    log.warning("stale object sweep (%s) failed: %s", glob, exc)
+            if stop.wait(BUCKET_SWEEP_INTERVAL_S):  # the app's shutdown ends the loop
+                return
 
     def sweep_publishes() -> None:
         while True:
@@ -484,10 +517,15 @@ def _api_router(
 
     # ------------------------------------------------------------------ jobs
 
-    @api.post("/jobs", response_model=Job, status_code=201)
+    @api.post(
+        "/jobs",
+        response_model=Job,
+        status_code=201,
+        responses={501: {"description": "A clip, and this server can't download YouTube fragments (code unavailable)"}},
+    )
     def create_job(body: CreateJobRequest) -> Job:
         url = normalize_url(body.url)
-        return jobs.submit_url(url, _options(body.options))
+        return jobs.submit_url(url, _options(body.options), clip_start=body.clip.start if body.clip else None)
 
     @api.post(
         "/jobs/upload",

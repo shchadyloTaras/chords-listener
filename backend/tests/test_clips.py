@@ -2,16 +2,22 @@
 fields, the clip download helpers, clip jobs. Offline: yt-dlp and the clip fetcher are fakes."""
 from __future__ import annotations
 
+import shutil
 import threading
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Optional
 
 import pytest
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app.jobs import JobRecord
+from app.main import create_app
 from app.models import ClipRange, CreateJobRequest, Settings, TrackSummary
 from app.sources import (
     Cancelled,
+    FetchedClip,
     LocalClipFetcher,
     NormalizedUrl,
     RemoteMedia,
@@ -22,8 +28,20 @@ from app.sources import (
     clip_track_key,
     is_bot_check,
     track_id_for,
+    youtube_thumbnail,
 )
 from app.storage import TrackStore
+from tests.test_api import (  # noqa: F401  (media is a fixture)
+    ENGINE_INFO,
+    LOCAL_HOSTS,
+    FakeEngine,
+    FakeFetcher,
+    assert_error,
+    media,
+    needs_ffmpeg,
+    wait_job,
+    work_leftovers,
+)
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
@@ -228,3 +246,141 @@ def test_download_is_unchanged_and_takes_no_range(tmp_path: Path, monkeypatch: p
     opts = FakeYDL.made[-1].opts
     assert "download_ranges" not in opts and "external_downloader_args" not in opts
     assert "force_keyframes_at_cuts" not in opts
+
+
+# --------------------------------------------------------------------------- clip jobs (local mode, fake fetcher)
+
+
+class FakeClipFetcher:
+    """Stands in for chords-fetch: 'downloads' a fragment by copying a local fixture."""
+
+    def __init__(self, audio: Path, duration: Optional[float] = 213.0) -> None:
+        self.audio, self.duration = audio, duration
+        self.calls: list[tuple[str, int, int]] = []
+        self.error: Optional[Exception] = None
+        self.gate: Optional[threading.Event] = None  # when set, fetch() waits for it
+
+    def fetch(self, video_id: str, start: int, length: int, dest_dir: Path, progress, cancel) -> FetchedClip:
+        self.calls.append((video_id, start, length))
+        if self.gate is not None:
+            self.gate.wait(10)
+        if self.error:
+            raise self.error
+        end = clip_end(start, length, self.duration)
+        dest = dest_dir / "source.mp3"
+        shutil.copy(self.audio, dest)
+        progress(1.0)
+        return FetchedClip(path=dest, title="Fake Song", artist="Fake Artist", duration=self.duration,
+                           thumbnail=youtube_thumbnail(video_id), start=float(start), end=end)
+
+
+@pytest.fixture
+def clip_env(tmp_path: Path, media: SimpleNamespace):  # noqa: F811
+    clients: list[TestClient] = []
+
+    def factory(**overrides: object) -> SimpleNamespace:
+        settings = Settings(data_dir=tmp_path / "data", frontend_dist=tmp_path / "no-dist", allowed_hosts=LOCAL_HOSTS,
+                            **overrides)  # type: ignore[arg-type]
+        engine, clips = FakeEngine(), FakeClipFetcher(media.tagged_mp3)
+        app = create_app(settings, analyzer=engine, fetcher=FakeFetcher(media.tagged_mp3), clip_fetcher=clips,
+                         engine_info_fn=lambda: ENGINE_INFO)
+        client = TestClient(app)
+        client.__enter__()
+        clients.append(client)
+        return SimpleNamespace(client=client, engine=engine, clips=clips, settings=settings)
+
+    yield factory
+    for c in clients:
+        c.__exit__(None, None, None)
+
+
+@needs_ffmpeg
+def test_clip_job_makes_a_video_linked_track(clip_env) -> None:
+    env = clip_env()
+    res = env.client.post("/api/jobs", json={"url": f"https://youtu.be/{VIDEO_ID}?t=5", "clip": {"start": 72}})
+    assert res.status_code == 201, res.text
+    job = res.json()
+    assert job["source"] == {"type": "youtube", "url": f"https://www.youtube.com/watch?v={VIDEO_ID}",
+                             "videoId": VIDEO_ID, "filename": None}
+    assert job["clip"] == {"start": 72.0, "end": 102.0}
+    done = wait_job(env.client, job["id"])
+    assert done["status"] == "done", done
+    assert done["trackId"] == track_id_for("youtube", f"{VIDEO_ID}@72") and done["title"] == "Fake Song"
+    assert env.clips.calls == [(VIDEO_ID, 72, 30)]
+    track = env.client.get(f"/api/tracks/{done['trackId']}").json()
+    assert track["clip"] == {"start": 72.0, "end": 102.0} and track["startOffset"] == 72
+    first = track["chords"][0]
+    assert (first["label"], first["start"], first["end"]) == ("N", 0, 72)
+    assert track["artist"] == "Fake Artist" and track["source"]["videoId"] == VIDEO_ID
+    assert [t["clip"] for t in env.client.get("/api/tracks").json()] == [{"start": 72.0, "end": 102.0}]
+    assert work_leftovers(env) == []
+
+
+@needs_ffmpeg
+def test_one_fragment_is_one_track(clip_env) -> None:
+    env = clip_env()
+
+    def post(start: int) -> dict:
+        return env.client.post("/api/jobs", json={"url": VIDEO_ID, "clip": {"start": start}}).json()
+
+    first = wait_job(env.client, post(72)["id"])
+    again = post(72)
+    assert again["status"] == "done" and again["trackId"] == first["trackId"]
+    assert again["clip"] == {"start": 72.0, "end": 102.0}
+    other = wait_job(env.client, post(0)["id"])
+    assert other["trackId"] not in (first["trackId"], track_id_for("youtube", VIDEO_ID))
+    assert env.client.get(f"/api/tracks/{other['trackId']}").json()["startOffset"] is None
+    assert len(env.clips.calls) == 2 and len(env.engine.calls) == 2
+
+
+@needs_ffmpeg
+def test_the_same_fragment_twice_at_once_is_one_job(clip_env) -> None:
+    env = clip_env()
+    env.clips.gate = threading.Event()
+    a = env.client.post("/api/jobs", json={"url": VIDEO_ID, "clip": {"start": 72}}).json()
+    b = env.client.post("/api/jobs", json={"url": f"https://youtu.be/{VIDEO_ID}", "clip": {"start": 72}}).json()
+    assert a["id"] == b["id"]
+    env.clips.gate.set()
+    assert wait_job(env.client, a["id"])["status"] == "done"
+    assert len(env.clips.calls) == 1
+
+
+@needs_ffmpeg
+def test_a_fragment_ignores_the_video_length_limit(clip_env) -> None:
+    env = clip_env(max_duration_min=1)
+    env.clips.duration = 3 * 3600.0
+    done = wait_job(env.client, env.client.post("/api/jobs", json={"url": VIDEO_ID, "clip": {"start": 3600}}).json()["id"])
+    assert done["status"] == "done", done
+
+
+def test_fragment_errors(clip_env) -> None:
+    env = clip_env()
+    assert_error(env.client.post("/api/jobs", json={"url": "https://soundcloud.com/a/b", "clip": {"start": 0}}), 400, "invalid_url")
+    assert_error(env.client.post("/api/jobs", json={"url": VIDEO_ID, "clip": {"start": -1}}), 422, "invalid_url")
+    env.clips.duration = 50.0
+    job = wait_job(env.client, env.client.post("/api/jobs", json={"url": VIDEO_ID, "clip": {"start": 60}}).json()["id"])
+    assert job["status"] == "error" and job["errorCode"] == "invalid_url"
+    env.clips.duration = 213.0
+    env.clips.error = SourceError("download_blocked", "YouTube refused the download from the server (bot check).")
+    job = wait_job(env.client, env.client.post("/api/jobs", json={"url": VIDEO_ID, "clip": {"start": 30}}).json()["id"])
+    assert job["errorCode"] == "download_blocked" and job["clip"] == {"start": 30.0, "end": 60.0}
+    assert job["source"]["videoId"] == VIDEO_ID
+    assert work_leftovers(env) == []
+
+
+def test_who_downloads_fragments(tmp_path: Path) -> None:
+    from app.fetch_client import RemoteClipFetcher
+
+    base = {"data_dir": tmp_path / "d", "frontend_dist": tmp_path / "x", "allowed_hosts": LOCAL_HOSTS}
+    cloud = {"auth": "firebase", "signing_key": "k" * 32, "publish": False}
+
+    def chosen(**kw: object):
+        app = create_app(Settings(**base, **kw), analyzer=FakeEngine(), engine_info_fn=lambda: ENGINE_INFO,  # type: ignore[arg-type]
+                         token_verifier=object())
+        return app.state.jobs.clip_fetcher
+
+    assert isinstance(chosen(), LocalClipFetcher)
+    assert chosen(**cloud, upload_bucket="b.firebasestorage.app") is None  # YouTube refuses Google Cloud: never try
+    remote = chosen(**cloud, upload_bucket="b.firebasestorage.app", fetch_url="https://chords-fetch-x-ew.a.run.app")
+    assert isinstance(remote, RemoteClipFetcher) and remote.base_url == "https://chords-fetch-x-ew.a.run.app"
+    assert chosen(**cloud, fetch_url="https://chords-fetch-x-ew.a.run.app") is None  # no bucket to hand files over

@@ -257,6 +257,7 @@ def make_cloud(tmp_path: Path, media: SimpleNamespace):
     clients: list[TestClient] = []
 
     def factory(data_dir: Optional[Path] = None, *, verifier: Any = None, cloud: bool = True, **overrides: Any) -> SimpleNamespace:
+        clip_fetcher = overrides.pop("clip_fetcher", None)
         defaults: dict[str, Any] = {
             "auth": "firebase" if cloud else "off",
             "signing_key": SIGNING_KEY,
@@ -269,7 +270,7 @@ def make_cloud(tmp_path: Path, media: SimpleNamespace):
         settings = Settings(data_dir=data_dir or tmp_path / "data", frontend_dist=tmp_path / "no-dist", **defaults)
         engine, fetcher, gcs, index = FakeEngine(), FakeFetcher(media.a), FakeGcs(), FakeIndex()
         app = create_app(
-            settings, analyzer=engine, fetcher=fetcher, engine_info_fn=lambda: ENGINE_INFO,
+            settings, analyzer=engine, fetcher=fetcher, clip_fetcher=clip_fetcher, engine_info_fn=lambda: ENGINE_INFO,
             token_verifier=verifier or FakeVerifier(), gcs_client_factory=lambda: gcs,
             publisher_factory=lambda store: Publisher(store, index, bucket=BUCKET, gcs_client_factory=lambda: gcs,
                                                       backoff_s=0),
@@ -1145,3 +1146,36 @@ def test_storage_helpers_need_a_user_in_cloud_mode(cloud: SimpleNamespace) -> No
         assert store.track_dir("0123456789ab") == cloud.settings.data_dir / "users" / "alice" / "tracks" / "0123456789ab"
         assert store.upload_prefix() == "users/alice/uploads/"
         assert store.media_url("0123456789ab", "stems/vocals").startswith("/api/tracks/0123456789ab/stems/vocals?u=alice&")
+
+
+# --------------------------------------------------------------------------- YouTube fragments
+
+
+def test_fragments_without_chords_fetch_are_unavailable(cloud: SimpleNamespace) -> None:
+    res = cloud.client.post("/api/jobs", json={"url": VIDEO_ID, "clip": {"start": 72}}, headers=H("alice"))
+    assert_error(res, 501, "unavailable")
+    assert cloud.client.get("/api/jobs", headers=H("alice")).json() == []
+    assert cloud.client.get("/api/me", headers=H("alice")).json()["quotas"]["analyses"]["used"] == 0
+
+
+@needs_ffmpeg
+def test_fragment_jobs_count_against_the_quota_and_stay_per_user(make_cloud, media: SimpleNamespace) -> None:
+    from tests.test_clips import FakeClipFetcher
+
+    env = make_cloud(clip_fetcher=FakeClipFetcher(media.a))
+    body = {"url": VIDEO_ID, "clip": {"start": 72}}
+    a = wait_job(env.client, env.client.post("/api/jobs", json=body, headers=H("alice")).json()["id"], H("alice"))
+    b = wait_job(env.client, env.client.post("/api/jobs", json=body, headers=H("bob")).json()["id"], H("bob"))
+    assert a["status"] == b["status"] == "done" and a["trackId"] == b["trackId"]  # same id, each in their own library
+    assert env.client.get("/api/me", headers=H("alice")).json()["quotas"]["analyses"]["used"] == 1
+    assert env.client.get(f"/api/tracks/{a['trackId']}", headers=H("bob")).json()["clip"] == {"start": 72.0, "end": 102.0}
+
+
+def test_stale_fragments_are_swept_after_an_hour(cloud: SimpleNamespace) -> None:
+    from app.gcs import FETCH_GLOB
+
+    cloud.gcs.put("fetch/0123456789abcdef/source.webm", b"1", age_s=2 * 3600)
+    cloud.gcs.put("fetch/fedcba9876543210/source.webm", b"2", age_s=60)
+    cloud.gcs.put("users/alice/uploads/u1/a.mp3", b"3", age_s=2 * 3600)
+    assert cloud.app.state.bucket.sweep(max_age_s=3600, glob=FETCH_GLOB) == 1
+    assert {n for (_, n) in cloud.gcs.objects} == {"fetch/fedcba9876543210/source.webm", "users/alice/uploads/u1/a.mp3"}
