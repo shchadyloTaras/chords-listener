@@ -1,6 +1,7 @@
 import { t } from '../../i18n'
 import { useApp, type PlayerController } from '../../store'
-import type { Track } from '../../types'
+import type { ClipRange, Track } from '../../types'
+import { clipRestart, pastClipEnd } from './clipBounds'
 import { AudioSource, type AudioMedia } from './sources/audioSource'
 import { ClockSource } from './sources/clockSource'
 import type { PlaybackSource, SourceEvents } from './sources/types'
@@ -23,9 +24,20 @@ export class PlaybackEngine {
   private timer = 0
   private disposed = false
   private unsubscribe: () => void
+  private readonly clip: ClipRange | null
 
   readonly controller: PlayerController = {
-    play: () => this.active?.play(),
+    play: () => {
+      const src = this.active
+      if (!src) return
+      // a fragment that has played to its end starts again (the video itself would run on)
+      const from = clipRestart(src.getTime(), this.clip)
+      if (from !== null) {
+        src.seek(from)
+        useApp.getState().setPlayback({ currentTime: from })
+      }
+      src.play()
+    },
     pause: () => this.active?.pause(),
     seek: (time) => this.active?.seek(time),
     setRate: (rate) => this.active?.setRate(rate),
@@ -35,6 +47,7 @@ export class PlaybackEngine {
 
   /** `media`: hooks for the track's audio (see AudioMedia), e.g. the cloud copy kept on this device. */
   constructor(track: Track, media?: AudioMedia) {
+    this.clip = track.clip ?? null
     this.base = this.create((events) =>
       track.audioUrl
         ? new AudioSource(track.audioUrl, events, track.startOffset ?? 0, media)
@@ -155,6 +168,13 @@ export class PlaybackEngine {
     if (loop && loop.end > loop.start && time >= loop.end && time < loop.end + LOOP_WINDOW) {
       src.seek(loop.start)
       time = loop.start
+    }
+    const clip = this.clip
+    if (clip && pastClipEnd(time, clip, loop)) {
+      src.pause()
+      this.stopLoop()
+      s.setPlayback({ isPlaying: false, currentTime: clip.end })
+      return
     }
     if (Math.abs(time - s.currentTime) > 0.0005) s.setPlayback({ currentTime: time })
     // rAF pauses in background tabs; a timer keeps A-B loops working there.

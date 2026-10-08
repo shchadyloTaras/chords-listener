@@ -153,7 +153,7 @@ export const useApp = create<AppState>()(
 
       track: null,
       setTrack: (track) =>
-        set({ track, currentTime: 0, isPlaying: false, loop: null, duration: track?.duration ?? 0 }),
+        set({ track, currentTime: track?.clip?.start ?? 0, isPlaying: false, loop: null, duration: track?.duration ?? 0 }),
 
       currentTime: 0,
       duration: 0,
