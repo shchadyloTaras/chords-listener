@@ -16,6 +16,8 @@ export interface TunerInput {
   readonly sampleRate: number
   /** Copies the newest FRAME_SIZE samples into `into`; returns their RMS level. */
   read(into: Float32Array<ArrayBuffer>): number
+  /** Is the context rendering? (iOS can hold it suspended until the next tap; read() is silence meanwhile) */
+  isRunning(): boolean
   /** Stops the microphone and closes the graph (again: nothing). */
   stop(): void
 }
@@ -26,16 +28,23 @@ export function startTuner(stream: MediaStream): TunerInput {
   const Ctor = audioContextCtor()
   if (!Ctor) throw new CaptureError('unsupported', 'this browser has no Web Audio')
   const ctx = new Ctor({ latencyHint: 'interactive' })
-  const source = ctx.createMediaStreamSource(stream)
-  const analyser = ctx.createAnalyser()
-  analyser.fftSize = FRAME_SIZE
-  analyser.smoothingTimeConstant = 0
-  // a muted path to the destination keeps the graph pulled in every browser (old Safari skips orphans)
-  const silent = ctx.createGain()
-  silent.gain.value = 0
-  source.connect(analyser)
-  analyser.connect(silent)
-  silent.connect(ctx.destination)
+  let source: MediaStreamAudioSourceNode
+  let analyser: AnalyserNode
+  try {
+    source = ctx.createMediaStreamSource(stream)
+    analyser = ctx.createAnalyser()
+    analyser.fftSize = FRAME_SIZE
+    analyser.smoothingTimeConstant = 0
+    // a muted path to the destination keeps the graph pulled in every browser (old Safari skips orphans)
+    const silent = ctx.createGain()
+    silent.gain.value = 0
+    source.connect(analyser)
+    analyser.connect(silent)
+    silent.connect(ctx.destination)
+  } catch (err) {
+    ctx.close().catch(() => undefined)
+    throw new CaptureError('failed', err instanceof Error ? err.message : String(err))
+  }
 
   // without a user activation left (iOS after the permission prompt) the context can stay suspended, and
   // Safari interrupts it for a call or Siri: resume it now, whenever it leaves "running", and on the next tap
@@ -60,6 +69,7 @@ export function startTuner(stream: MediaStream): TunerInput {
       for (let i = 0; i < into.length; i++) sum += into[i] * into[i]
       return Math.sqrt(sum / into.length)
     },
+    isRunning: () => ctx.state === 'running',
     stop() {
       if (stopped) return
       stopped = true

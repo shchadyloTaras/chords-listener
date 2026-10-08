@@ -30,7 +30,7 @@ function fakeInput() {
     into.set(A4_FRAME)
     return 0.35
   })
-  return { sampleRate: SR, read, stop: vi.fn() } satisfies TunerInput
+  return { sampleRate: SR, read, isRunning: vi.fn(() => true), stop: vi.fn() } satisfies TunerInput
 }
 
 let frames: FrameRequestCallback[] = []
@@ -112,6 +112,26 @@ describe('useTuner', () => {
     expect(seen.hook.state).toEqual({ phase: 'running', reading: null })
     step(10)
     expect(seen.hook.state).toMatchObject({ phase: 'running', reading: { midi: 69 } })
+  })
+
+  it('tells when the audio waits for a tap (iOS), but not for a blink at the start', async () => {
+    vi.mocked(captureMicrophone).mockResolvedValue(fakeMic().stream)
+    const input = fakeInput()
+    input.isRunning.mockReturnValue(false)
+    vi.mocked(startTuner).mockReturnValue(input)
+    await render()
+    await act(() => seen.hook.start())
+    step(10) // 160 ms
+    expect(seen.hook.waitingForTap).toBe(false)
+    step(15) // 400 ms
+    expect(seen.hook.waitingForTap).toBe(true)
+    input.isRunning.mockReturnValue(true)
+    step(1)
+    expect(seen.hook.waitingForTap).toBe(false)
+    input.isRunning.mockReturnValue(false)
+    step(25)
+    act(() => seen.hook.stop())
+    expect(seen.hook.waitingForTap).toBe(false)
   })
 
   it('a refused microphone is an error with its code', async () => {

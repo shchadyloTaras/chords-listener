@@ -112,6 +112,36 @@ describe('startTuner', () => {
     expect(ctx.onstatechange).toBeNull()
   })
 
+  it('isRunning() tells whether the context renders (iOS may hold it until a tap)', () => {
+    FakeContext.startState = 'suspended'
+    const input = startTuner(fakeStream().stream)
+    const ctx = FakeContext.last
+    ctx.state = 'suspended'
+    expect(input.isRunning()).toBe(false)
+    ctx.state = 'running'
+    expect(input.isRunning()).toBe(true)
+  })
+
+  it('a failure while building the graph closes the context and fails as failed', () => {
+    vi.stubGlobal(
+      'AudioContext',
+      class extends FakeContext {
+        createAnalyser(): FakeAnalyser {
+          throw new Error('no analyser')
+        }
+      },
+    )
+    let error: unknown
+    try {
+      startTuner(fakeStream().stream)
+    } catch (e) {
+      error = e
+    }
+    expect(error).toBeInstanceOf(CaptureError)
+    expect((error as CaptureError).code).toBe('failed')
+    expect(FakeContext.last.close).toHaveBeenCalledTimes(1)
+  })
+
   it('stop() releases the microphone and closes the context once', () => {
     const { stream, track } = fakeStream()
     const input = startTuner(stream)

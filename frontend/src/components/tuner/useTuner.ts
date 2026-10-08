@@ -19,6 +19,8 @@ export type TunerState =
 
 /** a reading is worth a render when the note changes or the needle moves this far */
 const REDRAW_CENTS = 0.5
+/** audio held this long (iOS after the permission prompt) is worth a "tap the screen" hint; shorter is a start-up blink */
+const WAIT_HINT_MS = 300
 
 export function sameReading(a: TunerReading | null, b: TunerReading | null): boolean {
   if (!a || !b) return a === b
@@ -34,6 +36,8 @@ export function useTuner({ a4, paused }: { a4: number; paused: boolean }) {
   const [state, setState] = useState<TunerState>({ phase: 'idle' })
   /** the last note heard this visit (the reference tone's picker starts there) */
   const [lastMidi, setLastMidi] = useState<number | null>(null)
+  /** the context is held until the next tap: the tuner hears nothing meanwhile */
+  const [waiting, setWaiting] = useState(false)
   const input = useRef<TunerInput | null>(null)
   const raf = useRef(0)
   /** bumped by every start and stop: a microphone granted to an abandoned start is released at once */
@@ -91,8 +95,17 @@ export function useTuner({ a4, paused }: { a4: number; paused: boolean }) {
     // after a pause the analyser window still holds the reference tone (the mic hears it): wait it out
     const toneTailMs = (FRAME_SIZE / tuner.sampleRate) * 1000 + 50
     let deafUntil = 0
+    let heldSince: number | null = null
+    let shownWaiting = false
     const tick = (now: number) => {
       if (input.current !== tuner) return
+      if (tuner.isRunning()) heldSince = null
+      else heldSince ??= now
+      const nowWaiting = heldSince !== null && now - heldSince >= WAIT_HINT_MS
+      if (nowWaiting !== shownWaiting) {
+        shownWaiting = nowWaiting
+        setWaiting(nowWaiting)
+      }
       let reading: TunerReading | null = null
       if (pausedRef.current) {
         stabilizer.reset()
@@ -109,6 +122,7 @@ export function useTuner({ a4, paused }: { a4: number; paused: boolean }) {
       raf.current = requestAnimationFrame(tick)
     }
     setState({ phase: 'running', reading: null })
+    setWaiting(false)
     raf.current = requestAnimationFrame(tick)
   }, [release])
 
@@ -127,5 +141,5 @@ export function useTuner({ a4, paused }: { a4: number; paused: boolean }) {
     [release],
   )
 
-  return { state, lastMidi, start, stop }
+  return { state, lastMidi, waitingForTap: state.phase === 'running' && waiting, start, stop }
 }
