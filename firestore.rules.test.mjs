@@ -1,6 +1,6 @@
 // Security-rules tests for /firestore.rules, run against the local emulators only:
 //
-//   PATH=/opt/homebrew/opt/openjdk/bin:$PATH npx -y firebase-tools@latest emulators:exec \
+//   PATH=/opt/homebrew/opt/openjdk/bin:$PATH npx -y firebase-tools@15 emulators:exec \
 //     --only auth,firestore --project build-chords-listener "node --test firestore.rules.test.mjs"
 //
 // No dependencies: users come from the Auth emulator REST API, reads/writes go through the

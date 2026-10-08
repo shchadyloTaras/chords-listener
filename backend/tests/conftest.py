@@ -9,6 +9,9 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 
+from strict_skips import pytest_runtest_makereport  # noqa: E402,F401  (CI: an ffmpeg / emulator skip fails)
+
+
 def pytest_configure(config) -> None:
     # starlette.testclient warns that it still uses httpx; irrelevant for these tests.
     config.addinivalue_line("filterwarnings", "ignore:Using `httpx` with `starlette.testclient`")

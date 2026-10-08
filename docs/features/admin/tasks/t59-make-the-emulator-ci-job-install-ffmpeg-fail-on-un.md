@@ -8,7 +8,7 @@ files_hint: [".github/workflows/backend-emulators.yml", "backend/tests/conftest.
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 10 — re-review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T59 — Make the emulator CI job install ffmpeg, fail on unexpected skips and pin firebase-tools
@@ -19,4 +19,4 @@ status: "todo"
 
 **Re-review fix 14. The workflow installs ffmpeg, runs the storage rules tests too, and sets a flag under which a test skipped for want of ffmpeg or an emulator fails the run (tested); firebase-tools is pinned to the current major in the workflow, README and docs/CLOUD.md.**
 
-- [ ] lint + type-check clean (ruff / oxlint + tsc)
+- [x] lint + type-check clean (ruff / oxlint + tsc)

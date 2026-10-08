@@ -87,7 +87,7 @@ Each step runs only with the owner's OK, so each is run on its own. A full `scri
 
 1. **The API with publishing** (it writes the index and `track.json`; current clients ignore them). Until step 2 its index writes fail and wait in `publish-pending.json` (retried at start-up and every 10 minutes while an instance is up; the backfill covers them anyway): `SKIP_SETUP=1 scripts/deploy_cloud.sh` (Cloud Build and `gcloud run deploy` with `CHORDS_PUBLISH=1`, no IAM / rules / CORS step).
 2. **IAM role** for the runtime service account: `gcloud projects add-iam-policy-binding build-chords-listener --member=serviceAccount:chords-api@build-chords-listener.iam.gserviceaccount.com --role=roles/datastore.user --condition=None`
-3. **Rules and bucket CORS**: `npx -y firebase-tools@latest deploy --only storage,firestore:rules --project build-chords-listener`, then `gcloud storage buckets update gs://build-chords-listener.firebasestorage.app --cors-file=storage-cors.json`. `storage.rules` reads Firestore (an upload is refused once the account's purge began: `adminTombstones/{uid}`), which needs the Cloud Storage for Firebase service agent (`service-<project number>@gcp-sa-firebasestorage.iam.gserviceaccount.com`) to hold the cross-service role `roles/firebaserules.firestoreServiceAgent`. The Firebase CLI offers to grant it on the first such deploy: answer yes (or grant it in the console); without it every client upload is refused.
+3. **Rules and bucket CORS**: `npx -y firebase-tools@15 deploy --only storage,firestore:rules --project build-chords-listener`, then `gcloud storage buckets update gs://build-chords-listener.firebasestorage.app --cors-file=storage-cors.json`. `storage.rules` reads Firestore (an upload is refused once the account's purge began: `adminTombstones/{uid}`), which needs the Cloud Storage for Firebase service agent (`service-<project number>@gcp-sa-firebasestorage.iam.gserviceaccount.com`) to hold the cross-service role `roles/firebaserules.firestoreServiceAgent`. The Firebase CLI offers to grant it on the first such deploy: answer yes (or grant it in the console); without it every client upload is refused.
 4. **Backfill, and verify it** (the job below). It prints `N track(s) published`. Every track has its `track.json` and nothing is pending: `gcloud storage ls 'gs://build-chords-listener.firebasestorage.app/users/*/tracks/*/meta.json' | wc -l` equals the same with `track.json`, and `gcloud storage ls 'gs://build-chords-listener.firebasestorage.app/users/*/publish-pending.json'` finds nothing. Look at a few index documents in the Firestore console (`users/<uid>/tracks`).
 5. **The site with the new read path** (a push to `main` runs `.github/workflows/pages.yml`) — only then: it lists what the index has, and without the backfill older tracks would be missing from the list.
 
@@ -215,8 +215,8 @@ The staged files in [`docs/features/admin/migrations/`](features/admin/migration
 | # | File | Run |
 |---|---|---|
 | 01 | `01_add_track_size.up.py` | adds `sizeBytes` to every published track; it measures the track files, so `CHORDS_DATA_DIR` must point at the mounted bucket (the same files the service sees at `/data`) |
-| 02 | `02_admin_indexes_and_ttl.up.json` | `npx -y firebase-tools@latest deploy --only firestore:indexes --project build-chords-listener`; wait until the indexes are built (Firebase console → Firestore → Indexes) |
-| 03 | `03_admin_rules.up.rules` | `npx -y firebase-tools@latest deploy --only firestore:rules,storage --project build-chords-listener` (`storage.rules` refuses a purged account's uploads by reading Firestore: accept the CLI's offer to grant the Storage service agent its cross-service Firestore role, step 3 of "Library in Firestore" above) |
+| 02 | `02_admin_indexes_and_ttl.up.json` | `npx -y firebase-tools@15 deploy --only firestore:indexes --project build-chords-listener`; wait until the indexes are built (Firebase console → Firestore → Indexes) |
+| 03 | `03_admin_rules.up.rules` | `npx -y firebase-tools@15 deploy --only firestore:rules,storage --project build-chords-listener` (`storage.rules` refuses a purged account's uploads by reading Firestore: accept the CLI's offer to grant the Storage service agent its cross-service Firestore role, step 3 of "Library in Firestore" above) |
 | 04 | `04_seed_runtime_config.up.py` | creates `adminConfig/settings` and `publicStatus/current` from the `CHORDS_*` values, only if absent |
 | 05 | `05_build_email_index.up.py` | builds the e-mail search index from `users` |
 | 06 | `06_restore_stats_from_tracks.up.py` | restores the daily statistics before the launch day: `--before YYYY-MM-DD` (the day the admin goes live) |
@@ -252,15 +252,15 @@ Without the Firebase emulators about 170 backend tests (admin integration + NFR,
 
 ```bash
 export PATH=/opt/homebrew/opt/openjdk/bin:$PATH   # macOS + Homebrew only
-npx -y firebase-tools@latest emulators:exec --only auth,firestore --project build-chords-listener \
+npx -y firebase-tools@15 emulators:exec --only auth,firestore --project build-chords-listener \
   "cd backend && uv run pytest -q -p no:cacheprovider"
-npx -y firebase-tools@latest emulators:exec --only auth,firestore --project build-chords-listener \
+npx -y firebase-tools@15 emulators:exec --only auth,firestore --project build-chords-listener \
   "node --test firestore.rules.test.mjs"
-npx -y firebase-tools@latest emulators:exec --only auth,firestore,storage --project build-chords-listener \
+npx -y firebase-tools@15 emulators:exec --only auth,firestore,storage --project build-chords-listener \
   "node --test storage.rules.test.mjs"   # the upload rule reads Firestore, so all three run
 ```
 
-`emulators:exec` sets `FIRESTORE_EMULATOR_HOST` and `FIREBASE_AUTH_EMULATOR_HOST` for the command, which is what un-skips the tests; the emulators are stopped afterwards. If a port is taken, an earlier emulator is still running — stop it first.
+`emulators:exec` sets `FIRESTORE_EMULATOR_HOST` and `FIREBASE_AUTH_EMULATOR_HOST` for the command, which is what un-skips the tests; the emulators are stopped afterwards. If a port is taken, an earlier emulator is still running — stop it first. `firebase-tools` is pinned to major version 15 here and in CI. CI also installs ffmpeg and sets `CHORDS_FAIL_ON_SKIP=1`, under which a test skipped for want of ffmpeg or an emulator fails instead (`backend/tests/strict_skips.py`); set it locally to check the same.
 
 ### Decisions taken at design (spec §8)
 

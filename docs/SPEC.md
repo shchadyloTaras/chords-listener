@@ -266,8 +266,8 @@ Emulators (need Java: `brew install openjdk`; run from the repo root):
 
 ```bash
 export PATH=/opt/homebrew/opt/openjdk/bin:$PATH
-npx -y firebase-tools@latest emulators:start --only auth,firestore --project build-chords-listener   # UI: http://localhost:4000
+npx -y firebase-tools@15 emulators:start --only auth,firestore --project build-chords-listener   # UI: http://localhost:4000
 cd frontend && VITE_FIREBASE_EMULATORS=true npx vite                                            # Auth → :9099, Firestore → :8080
-npx -y firebase-tools@latest emulators:exec --only auth,firestore --project build-chords-listener "node --test firestore.rules.test.mjs"   # rules tests
-npx -y firebase-tools@latest deploy --only firestore:rules --project build-chords-listener        # after editing the rules
+npx -y firebase-tools@15 emulators:exec --only auth,firestore --project build-chords-listener "node --test firestore.rules.test.mjs"   # rules tests
+npx -y firebase-tools@15 deploy --only firestore:rules --project build-chords-listener        # after editing the rules
 ```

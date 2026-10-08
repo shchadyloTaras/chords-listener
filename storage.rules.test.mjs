@@ -1,7 +1,7 @@
 // Security-rules tests for /storage.rules, run against the local emulators only (Firestore too: the upload rule reads
 // adminTombstones/{uid} across services):
 //
-//   PATH=/opt/homebrew/opt/openjdk/bin:$PATH npx -y firebase-tools@latest emulators:exec \
+//   PATH=/opt/homebrew/opt/openjdk/bin:$PATH npx -y firebase-tools@15 emulators:exec \
 //     --only auth,firestore,storage --project build-chords-listener "node --test storage.rules.test.mjs"
 //
 // No dependencies: users come from the Auth emulator REST API, client reads/writes go through the

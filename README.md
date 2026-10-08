@@ -116,7 +116,7 @@ VITE_BASE=/chords-listener/ npx vite preview --port 5184   # http://localhost:51
 
 ```bash
 export PATH=/opt/homebrew/opt/openjdk/bin:$PATH
-npx -y firebase-tools@latest emulators:start --only auth,storage --project build-chords-listener
+npx -y firebase-tools@15 emulators:start --only auth,firestore,storage --project build-chords-listener   # storage.rules читає Firestore
 cd backend && CHORDS_AUTH=firebase FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 STORAGE_EMULATOR_HOST=http://127.0.0.1:9199 \
   CHORDS_UPLOAD_BUCKET=build-chords-listener.firebasestorage.app CHORDS_DATA_DIR=/tmp/chords-cloud \
   uv run uvicorn app.main:app --port 8783
@@ -369,9 +369,12 @@ cd frontend && node scripts/eval-transcription.ts   # точність і шви
 
 ```bash
 export PATH=/opt/homebrew/opt/openjdk/bin:$PATH   # macOS + Homebrew; на Linux досить будь-якої Java 21+
-npx -y firebase-tools@latest emulators:exec --only auth,firestore --project build-chords-listener "cd backend && uv run pytest -q -p no:cacheprovider"
-npx -y firebase-tools@latest emulators:exec --only auth,firestore --project build-chords-listener "node --test firestore.rules.test.mjs"   # правила Firestore
+npx -y firebase-tools@15 emulators:exec --only auth,firestore --project build-chords-listener "cd backend && uv run pytest -q -p no:cacheprovider"
+npx -y firebase-tools@15 emulators:exec --only auth,firestore --project build-chords-listener "node --test firestore.rules.test.mjs"   # правила Firestore
+npx -y firebase-tools@15 emulators:exec --only auth,firestore,storage --project build-chords-listener "node --test storage.rules.test.mjs"   # правила Storage
 ```
+
+`firebase-tools` закріплено на мажорній версії 15 (так само в CI), щоб нова мажорна версія не змінила емулятори непомітно. У CI змінна `CHORDS_FAIL_ON_SKIP=1` перетворює тест, пропущений через відсутній ffmpeg чи емулятор, на помилку.
 
 Синтетичні пісні для оцінки: `cd backend && uv run python scripts/make_synthetic.py --out <папка>` (додай `--random 14` для випадкового набору).
 

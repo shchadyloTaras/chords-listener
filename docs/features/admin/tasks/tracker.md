@@ -65,7 +65,7 @@
 | [T56](./t56-refuse-uploads-from-a-purged-account-in-the-storag.md) | Refuse uploads from a purged account in the Storage rules | wiring | Тарас Щадило | S | T45 | done |
 | [T57](./t57-close-the-small-security-and-infra-gaps-sweep-401.md) | Close the small security and infra gaps: sweep 401, grant fails closed, tombstone reads, admin preflight | app | Тарас Щадило | S | T48 | done |
 | [T58](./t58-guard-the-query-shapes-the-in-memory-firestore-ser.md) | Guard the query shapes the in-memory Firestore serves | tests | Тарас Щадило | S | T49 | done |
-| [T59](./t59-make-the-emulator-ci-job-install-ffmpeg-fail-on-un.md) | Make the emulator CI job install ffmpeg, fail on unexpected skips and pin firebase-tools | tests | Тарас Щадило | S | T50 | todo |
+| [T59](./t59-make-the-emulator-ci-job-install-ffmpeg-fail-on-un.md) | Make the emulator CI job install ffmpeg, fail on unexpected skips and pin firebase-tools | tests | Тарас Щадило | S | T50 | done |
 | [T60](./t60-show-the-shared-dialogs-and-pages-of-the-admin-pag.md) | Show the shared dialogs and pages of the admin page in Ukrainian | ui | Тарас Щадило | S | T46 | todo |
 | [T61](./t61-use-one-label-per-status-and-switch-across-the-adm.md) | Use one label per status and switch across the admin screens | ui | Тарас Щадило | S | T52 | todo |
 | [T62](./t62-make-the-test-plan-say-what-is-tested-where-today.md) | Make the test plan say what is tested where today | docs | Тарас Щадило | S | T50 | todo |
