@@ -1,22 +1,24 @@
-// Tiny tempo-over-time chart with the playhead. Dashed line = overall tempo.
+// Tiny tempo-over-time chart with the playhead. Dashed line = overall tempo. Spans the track's view window
+// (a fragment of a video: lib/viewWindow).
 
 import { useId, useMemo, useRef } from 'react'
 import { useT } from '../../../i18n'
 import { tempoCurve } from '../../../lib/tempo'
+import { windowPct, type ViewWindow } from '../../../lib/viewWindow'
 import { useClockEffect } from '../clock'
 
 const W = 300
 const H = 52
 const PAD = 5
 
-export function TempoSparkline({ beats, duration, global }: { beats: readonly number[]; duration: number; global: number | null }) {
+export function TempoSparkline({ beats, view, global }: { beats: readonly number[]; view: ViewWindow; global: number | null }) {
   const t = useT()
   const line = useRef<SVGLineElement>(null)
   const dot = useRef<HTMLSpanElement>(null)
   const fillId = `tp-spark-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
 
   const chart = useMemo(() => {
-    const curve = tempoCurve(beats, duration, 72)
+    const curve = tempoCurve(beats, view.end, 72, view.start)
     if (curve.length < 2) return null
     const vals = curve.map((p) => p.bpm)
     const ref = global ?? vals.reduce((a, b) => a + b, 0) / vals.length
@@ -24,19 +26,19 @@ export function TempoSparkline({ beats, duration, global }: { beats: readonly nu
     const lo = Math.min(...vals, ref * 0.94)
     const hi = Math.max(...vals, ref * 1.06)
     const y = (v: number) => PAD + (1 - (v - lo) / (hi - lo)) * (H - PAD * 2)
-    const x = (time: number) => (time / duration) * W
+    const x = (time: number) => (windowPct(time, view) / 100) * W
     const pts = curve.map((p) => `${x(p.t).toFixed(1)},${y(p.bpm).toFixed(1)}`)
     const path = `M${pts.join('L')}`
     const area = `${path}L${W},${H}L0,${H}Z`
     const min = Math.round(Math.min(...vals))
     const max = Math.round(Math.max(...vals))
     return { curve, path, area, refY: y(ref), y, min, max, steady: (max - min) / ref < 0.03 }
-  }, [beats, duration, global])
+  }, [beats, view, global])
 
   useClockEffect(
     (time) => {
       if (!chart) return
-      const p = Math.min(1, Math.max(0, time / duration))
+      const p = windowPct(time, view) / 100
       const px = (p * W).toFixed(1)
       if (line.current) {
         line.current.setAttribute('x1', px)
@@ -51,7 +53,7 @@ export function TempoSparkline({ beats, duration, global }: { beats: readonly nu
         dot.current.style.top = `${(chart.y(v) / H) * 100}%`
       }
     },
-    [chart, duration],
+    [chart, view],
   )
 
   if (!chart) {

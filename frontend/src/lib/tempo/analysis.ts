@@ -116,15 +116,15 @@ export interface TempoPoint {
   bpm: number
 }
 
-/** Local tempo sampled at `points` evenly spaced times over 0..duration (for a sparkline). */
-export function tempoCurve(beats: readonly number[], duration: number, points = 64): TempoPoint[] {
-  if (beats.length < 3 || !(duration > 0)) return []
+/** Local tempo sampled at `points` evenly spaced times over start..duration (for a sparkline). */
+export function tempoCurve(beats: readonly number[], duration: number, points = 64, start = 0): TempoPoint[] {
+  if (beats.length < 3 || !(duration > start)) return []
   const n = Math.max(2, Math.round(points))
   const first = beats[0]
   const last = beats[beats.length - 1]
   const out: TempoPoint[] = []
   for (let i = 0; i < n; i++) {
-    const t = (duration * i) / (n - 1)
+    const t = start + ((duration - start) * i) / (n - 1)
     const bpm = localTempo(beats, Math.min(last, Math.max(first, t)))
     if (bpm != null) out.push({ t, bpm })
   }

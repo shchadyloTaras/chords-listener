@@ -92,6 +92,16 @@ export class NoteIndex {
     return out
   }
 
+  /**
+   * The same notes `offset` seconds later: transcriptions are in audio time, and a recording linked to a video
+   * (`track.startOffset`, e.g. a YouTube fragment) plays them in track time = audio time + offset.
+   */
+  shifted(offset: number): NoteIndex {
+    if (!offset) return this
+    const { count, start, end, midi, velocity } = this.notes
+    return new NoteIndex({ count, start: start.map((t) => t + offset), end: end.map((t) => t + offset), midi, velocity })
+  }
+
   /** Duration-weighted note presence per MIDI pitch (index = MIDI number, 0..127). */
   pitchWeights(): Float64Array {
     const w = new Float64Array(128)

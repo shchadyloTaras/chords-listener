@@ -103,6 +103,42 @@ describe('song sections', () => {
     expect(s.filter((x) => x.group === groups[1]).every((x) => x.kind === 'chorus')).toBe(true)
   })
 
+  it('finds the same parts in a fragment of a long video (bars from its start, waveform padded before it)', () => {
+    const blocks: [string[], number][] = [
+      [['C', 'C', 'C', 'C'], -6],
+      [VERSE, -6],
+      [CHORUS, 0],
+      [BRIDGE, -3],
+      [VERSE, -6],
+      [CHORUS, 0],
+      [VERSE, -6],
+      [CHORUS, 0],
+      [['C', 'C', 'C', 'C'], -9],
+    ]
+    const plain = song(blocks)
+    const at = 1000
+    const labels = blocks.flatMap(([chords]) => chords)
+    const chords: ChordSegment[] = [
+      { start: 0, end: at, label: 'N', root: null, quality: null, confidence: 1 },
+      ...labels.map((label, i) => {
+        const p = parseChord(label)
+        return { start: at + i * BAR, end: at + (i + 1) * BAR, label, root: p ? label.replace(/m.*$|7.*$/, '') : null, quality: p?.quality ?? null, confidence: 0.9 }
+      }),
+    ]
+    const beats = Array.from({ length: labels.length * 4 }, (_, i) => at + i * (BAR / 4))
+    const duration = at + plain.duration
+    const bars = fillBars(
+      buildBarGrid({ start: at, duration, beats, downbeats: beats.filter((_, i) => i % 4 === 0), tempo: 120, timeSignature: 4 }),
+      buildDisplayChords(chords, { transpose: 0, simplify: false, spelling: 'sharp' }),
+    )
+    const waveform = [...new Array<number>(at * 10).fill(0), ...plain.waveform]
+    const s = detectSections({ bars, waveform, duration, start: at })
+    expectCovers(s, bars)
+    const expected = detectSections(plain)
+    expect(kinds(s)).toEqual(kinds(expected))
+    expect(s.map((x) => [x.startBar, x.endBar])).toEqual(expected.map((x) => [x.startBar, x.endBar]))
+  })
+
   it('has no sections without chords', () => {
     expect(detectSections(song([[['N', 'N', 'N', 'N'], 0]]))).toEqual([])
   })

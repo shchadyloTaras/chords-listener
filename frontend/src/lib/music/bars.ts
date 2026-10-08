@@ -5,6 +5,9 @@ import type { ChordQuality } from '../../types'
 import { firstEndingAfter, LOW_CONFIDENCE, type DisplayChord } from './display'
 
 export interface GridInput {
+  /** where the bars start (a fragment of a video / a recording linked to one: lib/viewWindow); 0 by default */
+  start?: number
+  /** where the bars end: the track's duration */
   duration: number
   beats?: number[] | null
   downbeats?: number[] | null
@@ -86,9 +89,18 @@ function cleanTimes(xs: number[] | null | undefined, duration: number): number[]
 /**
  * Bar boundaries for the whole song. Priority: downbeats → every N-th beat → tempo grid →
  * a fixed 2-second grid. Gaps in tracker output are filled with interpolated bars, a short
- * lead-in becomes a pickup bar, and the tail is extended / absorbed so bars cover 0..duration.
+ * lead-in becomes a pickup bar, and the tail is extended / absorbed so bars cover start..duration.
  */
 export function buildBarGrid(input: GridInput): BarFrame[] {
+  const origin = input.start ?? 0
+  if (origin > 0) {
+    // the same grid as for a song starting at 0, moved to `origin`
+    const back = (xs: number[] | null | undefined) => xs?.map((x) => x - origin)
+    const shift = (t: number) => t + origin
+    return buildBarGrid({ ...input, start: 0, duration: input.duration - origin, beats: back(input.beats), downbeats: back(input.downbeats) }).map(
+      (f) => ({ ...f, start: shift(f.start), end: shift(f.end), boundaries: f.boundaries.map(shift) }),
+    )
+  }
   const duration = input.duration
   if (!(duration > 0)) return []
   const ts = Math.min(12, Math.max(2, Math.round(input.timeSignature || 4)))

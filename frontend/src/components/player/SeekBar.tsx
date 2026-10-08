@@ -2,13 +2,15 @@ import clsx from 'clsx'
 import { memo, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
 import { useT } from '../../i18n'
 import { useApp } from '../../store'
+import { sliceWaveform, windowPct, windowSpan, type ViewWindow } from '../../lib/viewWindow'
 import type { ChordSegment, Track } from '../../types'
 import { chordColorVar } from '../ui/chordColor'
 import { formatTime } from '../ui/format'
+import { useViewWindow } from './useViewWindow'
 
 const BAR_SLOT_PX = 4
 
-function buildWavePath(peaks: number[], bars: number): string {
+function buildWavePath(peaks: readonly number[], bars: number): string {
   if (bars <= 0) return ''
   let max = 0
   for (const p of peaks) if (p > max) max = p
@@ -49,30 +51,31 @@ function isMinorish(q: ChordSegment['quality']): boolean {
 /** Thin chord-colored ribbon under the waveform: where the harmony changes. */
 const ChordStrip = memo(function ChordStrip({
   chords,
-  duration,
+  view,
   transpose,
 }: {
   chords: ChordSegment[]
-  duration: number
+  view: ViewWindow
   transpose: number
 }) {
-  if (!duration) return null
+  if (!(view.end > view.start)) return null
   return (
     <div aria-hidden="true" className="absolute inset-x-0 bottom-0 h-1.5">
-      {chords.map((c) =>
-        c.label === 'N' || !c.root ? null : (
+      {chords.map((c) => {
+        const span = c.label === 'N' || !c.root ? null : windowSpan(c.start, c.end, view)
+        return span ? (
           <span
             key={c.start}
             className="absolute inset-y-0 rounded-[2px] bg-clip-content pr-px"
             style={{
-              left: `${(c.start / duration) * 100}%`,
-              width: `${((c.end - c.start) / duration) * 100}%`,
+              left: `${span.left}%`,
+              width: `${span.width}%`,
               backgroundColor: chordColorVar(c.root, transpose),
               opacity: isMinorish(c.quality) ? 0.6 : 0.95,
             }}
           />
-        ),
-      )}
+        ) : null
+      })}
     </div>
   )
 })
@@ -80,12 +83,15 @@ const ChordStrip = memo(function ChordStrip({
 /**
  * Waveform seek bar: played/unplayed coloring, loop region, chord ribbon,
  * hover time tooltip, click / drag to seek. Arrow keys are handled globally (±5 s).
+ * Spans the track's view window: a fragment of a video only (lib/viewWindow).
  */
 export function SeekBar({ track }: { track: Track }) {
   const t = useT()
   const ref = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(0)
-  const duration = useApp((s) => s.duration || track.duration)
+  const view = useViewWindow(track)
+  const len = view.end - view.start
+  const timeAt = (f: number) => view.start + f * len
   const currentTime = useApp((s) => s.currentTime)
   const loop = useApp((s) => s.loop)
   const transpose = useApp((s) => s.transpose)
@@ -105,7 +111,8 @@ export function SeekBar({ track }: { track: Track }) {
   }, [])
 
   const bars = Math.max(24, Math.floor(width / BAR_SLOT_PX))
-  const d = useMemo(() => buildWavePath(track.waveform ?? [], bars), [track.waveform, bars])
+  const peaks = useMemo(() => sliceWaveform(track.waveform ?? [], track.duration, view), [track.waveform, track.duration, view])
+  const d = useMemo(() => buildWavePath(peaks, bars), [peaks, bars])
 
   const fracAt = (clientX: number) => {
     const r = ref.current?.getBoundingClientRect()
@@ -124,37 +131,38 @@ export function SeekBar({ track }: { track: Track }) {
   }
 
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0 || !duration) return
+    if (e.button !== 0 || !(len > 0)) return
     e.currentTarget.setPointerCapture(e.pointerId)
     dragging.current = true
     const f = fracAt(e.clientX)
     setScrub(f)
-    useApp.getState().seek(f * duration)
+    useApp.getState().seek(timeAt(f))
   }
   const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
     const f = fracAt(e.clientX)
     if (e.pointerType === 'mouse') setHover(f)
     if (dragging.current) {
       setScrub(f)
-      seekSoon(f * duration)
+      seekSoon(timeAt(f))
     }
   }
   const endDrag = (e: PointerEvent<HTMLDivElement>, commit: boolean) => {
     if (!dragging.current) return
     dragging.current = false
-    if (commit) useApp.getState().seek(fracAt(e.clientX) * duration)
+    if (commit) useApp.getState().seek(timeAt(fracAt(e.clientX)))
     setScrub(null)
   }
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Home' || e.key === 'End') {
       e.preventDefault()
-      useApp.getState().seek(e.key === 'Home' ? 0 : Math.max(0, duration - 0.5))
+      useApp.getState().seek(e.key === 'Home' ? view.start : Math.max(view.start, view.end - 0.5))
     }
   }
 
-  const shown = scrub !== null ? scrub * duration : currentTime
-  const playedPct = duration ? Math.min(100, (shown / duration) * 100) : 0
+  const shown = scrub !== null ? timeAt(scrub) : currentTime
+  const playedPct = windowPct(shown, view)
   const tipFrac = scrub ?? hover
+  const loopSpan = loop ? windowSpan(loop.start, loop.end, view) : null
 
   return (
     <div
@@ -162,10 +170,10 @@ export function SeekBar({ track }: { track: Track }) {
       role="slider"
       tabIndex={0}
       aria-label={t('core.player.seek')}
-      aria-valuemin={0}
-      aria-valuemax={Math.round(duration)}
+      aria-valuemin={Math.round(view.start)}
+      aria-valuemax={Math.round(view.end)}
       aria-valuenow={Math.round(shown)}
-      aria-valuetext={t('core.player.timeOf', { time: formatTime(shown, duration), total: formatTime(duration) })}
+      aria-valuetext={t('core.player.timeOf', { time: formatTime(shown, view.end), total: formatTime(view.end) })}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={(e) => endDrag(e, true)}
@@ -175,14 +183,11 @@ export function SeekBar({ track }: { track: Track }) {
       className="group relative h-11 min-w-0 flex-1 cursor-pointer touch-none rounded-md select-none focus-visible:outline-offset-4"
     >
       <div className="absolute inset-x-0 top-1.5 bottom-0">
-        {loop && duration > 0 && (
+        {loopSpan && (
           <div
             aria-hidden="true"
             className="absolute top-0 h-8 rounded-sm border-x-2 border-accent bg-accent-soft"
-            style={{
-              left: `${(loop.start / duration) * 100}%`,
-              width: `${(Math.max(0, loop.end - loop.start) / duration) * 100}%`,
-            }}
+            style={{ left: `${loopSpan.left}%`, width: `${loopSpan.width}%` }}
           />
         )}
         <Wave d={d} bars={bars} className="text-border-strong" />
@@ -193,20 +198,20 @@ export function SeekBar({ track }: { track: Track }) {
         >
           <Wave d={d} bars={bars} className="" />
         </div>
-        <ChordStrip chords={track.chords} duration={duration} transpose={transpose} />
+        <ChordStrip chords={track.chords} view={view} transpose={transpose} />
         <div
           aria-hidden="true"
           className="absolute top-[-3px] h-[38px] w-0.5 -translate-x-1/2 rounded-full bg-playhead"
           style={{ left: `${playedPct}%` }}
         />
       </div>
-      {tipFrac !== null && duration > 0 && (
+      {tipFrac !== null && len > 0 && (
         <div
           aria-hidden="true"
           className="pointer-events-none absolute bottom-full mb-1.5 -translate-x-1/2 rounded-md border border-border-strong bg-surface-3 px-1.5 py-0.5 font-mono text-xs text-text tabular-nums shadow-lg"
           style={{ left: `clamp(24px, ${tipFrac * 100}%, calc(100% - 24px))` }}
         >
-          {formatTime(tipFrac * duration, duration)}
+          {formatTime(timeAt(tipFrac), view.end)}
         </div>
       )}
     </div>
