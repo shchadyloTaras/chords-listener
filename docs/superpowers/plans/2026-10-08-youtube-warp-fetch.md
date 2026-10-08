@@ -20,7 +20,7 @@
 - `chords-fetch` `POST /clip` body `{videoId, start, length}` with `length` `1..60`; anything else → HTTP 400 `{code: "invalid_url", message}`.
 - Only the existing error codes: `invalid_url`, `download_failed`, `download_blocked`, `too_large`, `unavailable` (+ the rest of `ErrorCode`). Busy message, verbatim: `The server is busy, try again in a minute`.
 - `chords-fetch` Cloud Run: `europe-west1`, gen2, 1 vCPU / 1 GiB, request-based billing, concurrency 1, min 0 / max `FETCH_MAX_INSTANCES` (default 3), timeout 300 s, `--no-allow-unauthenticated`, Direct VPC egress `all-traffic` on network `default` / subnet `default`.
-- wireproxy: `github.com/windtf/wireproxy/cmd/wireproxy@v1.1.3` (the spike's build); SOCKS5 `127.0.0.1:40000`; yt-dlp proxy `socks5h://127.0.0.1:40000`; readiness = `https://www.cloudflare.com/cdn-cgi/trace` contains `warp=on`.
+- wireproxy: `github.com/windtf/wireproxy/cmd/wireproxy@v1.1.3` (the spike's build); SOCKS5 `127.0.0.1:40000` and HTTP (CONNECT) `127.0.0.1:40001`; yt-dlp proxy `socks5h://127.0.0.1:40000`; ffmpeg (which cuts the fragment and cannot use SOCKS) gets `-http_proxy http://127.0.0.1:40001` via yt-dlp's `external_downloader_args={"ffmpeg_i": [...]}`; readiness = `https://www.cloudflare.com/cdn-cgi/trace` contains `warp=on` (through the SOCKS proxy).
 - yt-dlp in the fetch image = the version `backend/uv.lock` locks (2026.8.19); a test enforces it.
 - One WARP profile, secret `warp-profile` in Secret Manager. Never print it, never write it into the repo, never commit `.cloud.env`.
 - `chords-fetch` logs one line per request (videoId, start, length, outcome, attempts, seconds) and never a user id or the egress IP.
@@ -262,7 +262,7 @@ EOF
   - `clip_end(start: int, length: int, duration: Optional[float]) -> float` (raises `SourceError("invalid_url")` when `start >= duration`)
   - `@dataclass FetchedClip(path: Path, title: str, artist: Optional[str], duration: Optional[float], thumbnail: Optional[str], start: float, end: float)`
   - `class ClipFetcher(Protocol): fetch(video_id: str, start: int, length: int, dest_dir: Path, progress: ProgressCb, cancel: threading.Event) -> FetchedClip`
-  - `YtDlpFetcher(max_bytes: int, proxy: Optional[str] = None)`; `YtDlpFetcher.download_clip(media: RemoteMedia, start: float, end: float, dest_dir: Path, progress: ProgressCb, cancel: threading.Event) -> Path`
+  - `YtDlpFetcher(max_bytes: int, proxy: Optional[str] = None, ffmpeg_proxy: Optional[str] = None)` (controller ruling after review: `download_clip` passes `external_downloader_args={"ffmpeg_i": ["-http_proxy", ffmpeg_proxy]}` when set — ffmpeg cuts the range and can't use SOCKS); `YtDlpFetcher.download_clip(media: RemoteMedia, start: float, end: float, dest_dir: Path, progress: ProgressCb, cancel: threading.Event) -> Path`
   - `LocalClipFetcher(ytdlp: YtDlpFetcher)` implementing `ClipFetcher`
 
 - [ ] **Step 1: Write the failing tests**
@@ -1454,7 +1454,7 @@ EOF
 - Test: `backend/tests/test_warp.py` (new)
 
 **Interfaces:**
-- Produces: `class WarpError(Exception)`; `cloudflare_trace(proxy: str, timeout: float = 8.0) -> str`; `class Warp(profile: Path, *, port=40000, binary="wireproxy", ready_timeout_s=30.0, trace=cloudflare_trace, popen=subprocess.Popen, sleep=time.sleep, clock=time.monotonic, work_dir: Optional[Path] = None)` with `.proxy -> "socks5h://127.0.0.1:<port>"`, `.ready: bool`, `.sessions: int`, `start()`, `restart()`, `stop()` (all blocking; `start` raises `WarpError`).
+- Produces: `class WarpError(Exception)`; `cloudflare_trace(proxy: str, timeout: float = 8.0) -> str`; `class Warp(profile: Path, *, port=40000, http_port=40001, binary="wireproxy", ready_timeout_s=30.0, trace=cloudflare_trace, popen=subprocess.Popen, sleep=time.sleep, clock=time.monotonic, work_dir: Optional[Path] = None)` with `.proxy -> "socks5h://127.0.0.1:<port>"`, `.http_proxy -> "http://127.0.0.1:<http_port>"` (for ffmpeg), `.ready: bool`, `.sessions: int`, `start()`, `restart()`, `stop()` (all blocking; `start` raises `WarpError`).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1526,6 +1526,7 @@ def test_start_runs_wireproxy_on_the_profile_and_waits_for_warp_on(tmp_path: Pat
     assert proc.args[0] == "wireproxy" and proc.args[1] == "-c"
     conf = Path(proc.args[2]).read_text()
     assert f"WGConfig = {h.profile}" in conf and "[Socks5]\nBindAddress = 127.0.0.1:40000" in conf
+    assert "[http]\nBindAddress = 127.0.0.1:40001" in conf and h.warp.http_proxy == "http://127.0.0.1:40001"
     assert "secret" not in conf  # the profile is referenced, never copied
 
 
@@ -1612,6 +1613,7 @@ class Warp:
         profile: Path,
         *,
         port: int = 40000,
+        http_port: int = 40001,
         binary: str = "wireproxy",
         ready_timeout_s: float = 30.0,
         trace: Callable[[str], str] = cloudflare_trace,
@@ -1622,6 +1624,7 @@ class Warp:
     ) -> None:
         self.profile = profile
         self.port = port
+        self.http_port = http_port
         self.binary = binary
         self.ready_timeout_s = ready_timeout_s
         self._trace, self._popen, self._sleep, self._clock = trace, popen, sleep, clock
@@ -1634,12 +1637,20 @@ class Warp:
     def proxy(self) -> str:
         return f"socks5h://127.0.0.1:{self.port}"
 
+    @property
+    def http_proxy(self) -> str:
+        """The same tunnel as an HTTP (CONNECT) proxy: ffmpeg, which cuts the fragment, can't use SOCKS."""
+        return f"http://127.0.0.1:{self.http_port}"
+
     def start(self) -> None:
         if not self.profile.is_file():
             raise WarpError(f"WARP profile not found: {self.profile}")
         self._work.mkdir(parents=True, exist_ok=True)
         conf = self._work / "wireproxy.conf"
-        conf.write_text(f"WGConfig = {self.profile}\n\n[Socks5]\nBindAddress = 127.0.0.1:{self.port}\n")
+        conf.write_text(
+            f"WGConfig = {self.profile}\n\n[Socks5]\nBindAddress = 127.0.0.1:{self.port}\n\n"
+            f"[http]\nBindAddress = 127.0.0.1:{self.http_port}\n"
+        )
         self._proc = self._popen([self.binary, "-c", str(conf)], stdin=subprocess.DEVNULL)
         self.sessions += 1
         self._wait_ready()
@@ -1710,7 +1721,7 @@ EOF
 - Test: `backend/tests/test_fetch_service.py` (new), `backend/tests/test_cloud.py` (`FakeBlob.upload_from_filename` + 1 test)
 
 **Interfaces:**
-- Consumes: `LocalClipFetcher`, `YtDlpFetcher(proxy=)`, `FetchedClip`, `SourceError.detail`, `is_bot_check`, `YT_CLIP_MAX_S`, `safe_suffix` (Task 2); `FETCH_PREFIX` (Task 3); `Warp`, `WarpError` (Task 5).
+- Consumes: `LocalClipFetcher`, `YtDlpFetcher(proxy=, ffmpeg_proxy=)`, `FetchedClip`, `SourceError.detail`, `is_bot_check`, `YT_CLIP_MAX_S`, `safe_suffix` (Task 2); `FETCH_PREFIX` (Task 3); `Warp`, `WarpError` (Task 5).
 - Produces: `UploadBucket.upload(path: str, src: Path, content_type: Optional[str] = None) -> int`; `app.fetch_service.create_fetch_app(*, fetcher: ClipFetcher, bucket, warp: Optional[Warp], work_dir: Path, max_attempts: int = 3, attempt_timeout_s: float = 90.0) -> FastAPI`; `app.fetch_service.create_app_from_env() -> FastAPI` (env `FETCH_BUCKET` required, `WARP_PROFILE` optional, `FETCH_WORK_DIR` default `/tmp/chords-fetch`); `fetch_with_retries(...)`, `failure_kind(exc) -> "bot" | "retry" | "final"`. HTTP: `POST /clip` (contract in Task 3), `GET /healthz` → `{"ok": bool}`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -2156,7 +2167,9 @@ def create_app_from_env() -> FastAPI:
     profile = os.environ.get("WARP_PROFILE", "").strip()
     work_dir = Path(os.environ.get("FETCH_WORK_DIR", "").strip() or "/tmp/chords-fetch")
     warp = Warp(Path(profile), work_dir=work_dir / ".warp") if profile else None
-    fetcher = LocalClipFetcher(YtDlpFetcher(MAX_CLIP_BYTES, proxy=warp.proxy if warp else None))
+    fetcher = LocalClipFetcher(YtDlpFetcher(
+        MAX_CLIP_BYTES, proxy=warp.proxy if warp else None, ffmpeg_proxy=warp.http_proxy if warp else None
+    ))
     return create_fetch_app(fetcher=fetcher, bucket=UploadBucket(bucket_name), warp=warp, work_dir=work_dir)
 ```
 
@@ -4448,7 +4461,7 @@ Spec: `docs/superpowers/specs/2026-10-07-youtube-warp-fetch-design.md`. YouTube 
 
 - `POST /api/jobs {url, clip: {start}}` (chords-api, signed-in users): dedup by track key `youtube:<videoId>@<start>` → admit (quota "analyses") → `RemoteClipFetcher` calls `POST $CHORDS_FETCH_URL/clip {videoId, start, length: CHORDS_YT_CLIP_S}` with a Google ID token (audience = that URL); 429 / 503 / no connection are asked again with backoff for up to 60 s, then `download_failed` "The server is busy, try again in a minute". The answer names an object under `fetch/` (anything else is refused, nothing is deleted); the API downloads it, deletes it, and analyzes it with `startOffset = start`; the track gets `clip: {start, end}`. Without `CHORDS_FETCH_URL` a cloud server answers 501 `unavailable` (it never downloads YouTube itself); a local server downloads fragments in-process (`LocalClipFetcher`).
 - `chords-fetch` (`backend/app/fetch_service.py`, image `backend/fetch.Dockerfile`): FastAPI, `POST /clip {videoId, start, length}` (id `^[A-Za-z0-9_-]{11}$`, `start` ≥ 0 whole seconds, `length` 1..60; anything else 400 `invalid_url`; URLs are never accepted). It probes the video (live streams and a start past the end → `invalid_url`), downloads `[start, min(start + length, duration)]` with yt-dlp `download_ranges` through `socks5h://127.0.0.1:40000`, uploads `fetch/<requestId>/source.<ext>` to the Firebase bucket and answers `{title, artist, duration, thumbnail, start, end, path, size}`; errors `{code, message}`. Retries: a refused media URL (HTTP 403) or a stall → up to 3 fresh tries; a bot check → one WARP reconnect (new session) and one more try, then `download_blocked`; each try is cut off after 90 s. One log line per request (video, range, outcome, attempts, seconds), no user ids.
-- WARP: `wireproxy` (`github.com/windtf/wireproxy` v1.1.3) on the wgcf profile from Secret Manager (`warp-profile`, mounted at `/secrets/warp/wgcf-profile.conf`); the container listens only after `https://www.cloudflare.com/cdn-cgi/trace` shows `warp=on` through the proxy. One profile is shared by all containers.
+- WARP: `wireproxy` (`github.com/windtf/wireproxy` v1.1.3) on the wgcf profile from Secret Manager (`warp-profile`, mounted at `/secrets/warp/wgcf-profile.conf`), as SOCKS5 `127.0.0.1:40000` (yt-dlp) and HTTP CONNECT `127.0.0.1:40001` (ffmpeg, which fetches and cuts the range and can't use SOCKS: `-http_proxy` via `external_downloader_args`); the container listens only after `https://www.cloudflare.com/cdn-cgi/trace` shows `warp=on` through the proxy. One profile is shared by all containers.
 - Cloud Run (`scripts/deploy_fetch.sh`): `europe-west1`, gen2, 1 vCPU / 1 GiB, request-based billing, concurrency 1, min 0 / max `FETCH_MAX_INSTANCES` (3), timeout 300 s, `--no-allow-unauthenticated` (only `chords-api`'s service account has `roles/run.invoker`), Direct VPC egress `all-traffic` on `default`/`default`, service account `chords-fetch` with `roles/storage.objectUser` limited by an IAM condition to `objects/fetch/` and `roles/secretmanager.secretAccessor` on `warp-profile`. Cloud Router `chords-nat-router` + Cloud NAT `chords-nat` (auto IP, all subnet ranges); Private Google Access on subnet `default`.
 - Clean-up: the API deletes each fragment once read; its hourly bucket sweep removes `fetch/**` older than 1 h (and `users/*/uploads/**` older than a day).
 - Cost: Cloud NAT gateway + IP ≈ $4–5 / month whether used or not; NAT data ≈ $0.045 / GB (a fragment ≈ 0.5 MB); `chords-fetch` within Cloud Run's free tier at this scale; Secret Manager within its free tier.
