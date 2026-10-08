@@ -82,6 +82,12 @@ class Env:
             users_collection=self.users,
         )
 
+    @staticmethod
+    def groups(tag: str) -> dict[str, str]:
+        """This test's collections -> the real ones they stand for (whose indexes apply)."""
+        return {f"t24_sweeps_{tag}": "adminSweeps", f"t24_jobs_{tag}": "adminJobs", f"t24_stats_{tag}": "adminStats",
+                f"t24_users_{tag}": "users", f"t24_index_{tag}": "adminEmailIndex"}
+
     # ----- seeding and reading
     def put(self, collection: str, doc_id: str, data: dict[str, Any]) -> None:
         self.db.commit([self.db.update_op(f"{collection}/{doc_id}", data)])
@@ -129,8 +135,11 @@ class Env:
 @pytest.fixture(params=["fake", pytest.param("emulator", marks=pytest.mark.skipif(
     not EMULATOR_HOST, reason="needs the Firestore emulator (FIRESTORE_EMULATOR_HOST)"))])
 def env(request, tmp_path) -> Env:
-    db: FirestoreIndex = MemDb() if request.param == "fake" else FirestoreIndex(PROJECT, emulator_host=EMULATOR_HOST)
-    return Env(db, tmp_path, uuid.uuid4().hex[:10])
+    tag = uuid.uuid4().hex[:10]
+    # offline, every query and count the sweep makes must be one the deployed indexes serve (T58)
+    db: FirestoreIndex = (MemDb(indexed=True, aggregations=("count",), aliases=Env.groups(tag)) if request.param == "fake"
+                          else FirestoreIndex(PROJECT, emulator_host=EMULATOR_HOST))
+    return Env(db, tmp_path, tag)
 
 
 def records(caplog: pytest.LogCaptureFixture, text: str) -> list[logging.LogRecord]:
@@ -735,7 +744,7 @@ def test_the_sweep_endpoint_is_not_in_the_public_openapi_document(env, client):
 def test_create_app_builds_the_sweeper_from_the_admin_database(tmp_path):
     settings = Settings(data_dir=tmp_path / "data", frontend_dist=tmp_path / "no-dist", auth="firebase",
                         signing_key="test-signing-key-0123456789abcdef", publish=False)
-    app = create_app(settings, analyzer=lambda *_a, **_k: {}, token_verifier=FakeFirebase(), admin_db=MemDb())
+    app = create_app(settings, analyzer=lambda *_a, **_k: {}, token_verifier=FakeFirebase(), admin_db=MemDb(indexed=True))
     assert isinstance(app.state.sweeper, Sweeper)
     local = create_app(Settings(data_dir=tmp_path / "d2", frontend_dist=tmp_path / "no-dist", publish=False),
                        analyzer=lambda *_a, **_k: {})
@@ -747,7 +756,7 @@ def test_the_default_sweeper_shares_the_jobs_projections_and_the_admin_routes_di
 
     settings = Settings(data_dir=tmp_path / "data", frontend_dist=tmp_path / "no-dist", auth="firebase",
                         signing_key="test-signing-key-0123456789abcdef", publish=False)
-    app = create_app(settings, analyzer=lambda *_a, **_k: {}, token_verifier=FakeFirebase(), admin_db=MemDb())
+    app = create_app(settings, analyzer=lambda *_a, **_k: {}, token_verifier=FakeFirebase(), admin_db=MemDb(indexed=True))
     sweeper = app.state.sweeper
     assert app.state.jobs.projections is not None
     assert sweeper._projections is app.state.jobs.projections      # one owner of projections-pending.json

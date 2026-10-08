@@ -87,7 +87,7 @@ def tombstone(uid: str) -> Seed:
 
 @pytest.fixture
 def db() -> FakeDb:
-    d = FakeDb()
+    d = FakeDb(indexed=True)   # every list query must be one the deployed indexes serve (T58)
     d.put_all([
         make_admin(ADMIN),
         index_shard({VICTIM: "victim@example.test", "u-other": "other@example.test"}),

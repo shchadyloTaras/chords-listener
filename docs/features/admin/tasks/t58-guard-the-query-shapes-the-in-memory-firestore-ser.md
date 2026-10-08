@@ -8,7 +8,7 @@ files_hint: ["backend/tests/admin/fixtures.py", "backend/tests/admin/test_fixtur
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 10 — re-review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T58 — Guard the query shapes the in-memory Firestore serves
@@ -19,4 +19,4 @@ status: "todo"
 
 **Re-review fix 7. MemDb has an opt-in guard that refuses a query or aggregation whose filters and order no index in firestore.indexes.json (or a single-field index) can serve, and a sum where only count() is expected; the sweep and audit tests run with it on.**
 
-- [ ] lint + type-check clean (ruff / oxlint + tsc)
+- [x] lint + type-check clean (ruff / oxlint + tsc)

@@ -235,6 +235,50 @@ def test_read_counter_fixture_counts_reads_of_every_client(read_counter):
     assert read_counter.reads == 0
 
 
+# ----------------------------------------------------------------------------- the query guard of MemDb (T58)
+
+
+def test_the_guard_is_off_by_default():
+    db = fx.MemDb()
+    db.run_query("adminJobs", filters=[("uid", "==", "u1")], order_by=["title", "-acceptedAt"])   # no index: served all the same
+
+
+@pytest.mark.parametrize("filters, order_by", [
+    ([("status", "==", "error")], ["-acceptedAt"]),                                      # one composite index
+    ([("status", "==", "error"), ("reason", "==", "other")], ["-acceptedAt"]),           # two of them, merged
+    ([("status", "==", "error"), ("acceptedAt", ">=", T0)], ["-acceptedAt"]),            # the range on the ordered field
+    ([("uid", "==", "u1")], ["acceptedAt"]),                                             # an index read backwards
+    ([("status", "==", "running"), ("acceptedAt", "<", T0)], []),                        # the range orders implicitly
+    ([("day", "==", "2026-03-01")], []),                                                 # equalities: single-field indexes
+    ([], ["-acceptedAt"]),                                                               # one field: its single-field index
+])
+def test_the_guard_serves_what_an_index_serves(filters, order_by):
+    fx.MemDb(indexed=True).run_query("adminJobs", filters=filters, order_by=order_by)
+
+
+@pytest.mark.parametrize("collection, filters, order_by", [
+    ("adminJobs", [("uid", "==", "u1")], ["title"]),                                    # no composite index (uid, title)
+    ("adminJobs", [], ["acceptedAt", "status"]),                                        # two orders, no index of them
+    ("adminJobs", [("acceptedAt", ">=", T0)], ["status"]),                              # a range must be ordered first
+    ("adminJobs", [("acceptedAt", ">=", T0), ("finishedAt", "<", T0)], []),             # ranges on two fields
+    ("adminJobs", [("errorText", "==", "x")], []),                                      # exempt from indexing
+    ("adminAudit", [("adminUid", "==", "a"), ("status", "==", "x")], ["-at"]),          # no (status, at) index to merge
+])
+def test_the_guard_refuses_what_no_index_serves(collection, filters, order_by):
+    db = fx.MemDb(indexed=True)
+    with pytest.raises(AssertionError, match="firestore.indexes.json"):
+        db.run_query(collection, filters=filters, order_by=order_by)
+
+
+def test_the_guard_checks_aggregations_and_their_kinds():
+    db = fx.MemDb(indexed=True, aggregations=("count",))
+    assert db.count("users", filters=[("createdAt", ">=", T0), ("createdAt", "<", T0)]) == 0
+    with pytest.raises(AssertionError, match="sum"):
+        db.aggregate("users/u1/tracks", {"n": "count", "b": ("sum", "sizeBytes")})
+    with pytest.raises(AssertionError, match="firestore.indexes.json"):
+        db.count("adminJobs", filters=[("uid", "==", "u1"), ("finishedAt", "<", T0)])
+
+
 # ----------------------------------------------------------------------------- against the emulator
 
 

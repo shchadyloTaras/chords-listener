@@ -14,6 +14,7 @@ PII guard: every address is on ``example.test``; no real names or emails appear 
 from __future__ import annotations
 
 import copy
+import json
 import re
 import secrets
 import threading
@@ -21,6 +22,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from functools import cmp_to_key
+from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
 from app.firestore import Document, FirestoreIndex, PreconditionFailed, from_value, to_value
@@ -360,6 +362,62 @@ def decode(value: Any) -> Any:
 _FILTERS = {"==": lambda a, b: a == b, "<": lambda a, b: a < b, ">": lambda a, b: a > b,
             ">=": lambda a, b: a >= b, "<=": lambda a, b: a <= b}
 
+INDEXES_FILE = Path(__file__).resolve().parents[3] / "firestore.indexes.json"
+_RANGE_OPS = frozenset({"<", "<=", ">", ">=", "!=", "not-in"})
+
+Tail = tuple[tuple[str, bool], ...]  # the sort a query needs: (field, descending), ...
+
+
+class IndexGuard:
+    """Whether Firestore can serve a query with the indexes it has: the composite ones in ``firestore.indexes.json``
+    and the single-field ones it keeps for every field the file does not exempt (``"indexes": []``).
+
+    * Equality filters alone: merged single-field indexes.
+    * One field that is ranged and / or ordered, with no equality filter: its single-field index.
+    * Otherwise the sort (the orders, or the ranged field ascending when there are none) must close composite indexes
+      whose leading fields together are exactly the equality fields (one index, or several merged on that sort).
+      An index read backwards serves the reversed sort too.
+    A range must be on the first ordered field, and on one field only."""
+
+    def __init__(self, path: Path = INDEXES_FILE, *, aliases: Optional[dict[str, str]] = None) -> None:
+        self.aliases = dict(aliases or {})  # a collection a test renamed -> the collection group it stands for
+        spec = json.loads(path.read_text(encoding="utf-8"))
+        self.composites: dict[str, list[Tail]] = {}
+        for index in spec["indexes"]:
+            fields = tuple((f["fieldPath"], f["order"] == "DESCENDING") for f in index["fields"])
+            self.composites.setdefault(index["collectionGroup"], []).append(fields)
+        self.exempt = {(o["collectionGroup"], o["fieldPath"]) for o in spec.get("fieldOverrides", []) if o.get("indexes") == []}
+
+    def check(self, collection: str, filters: Any, order_by: Any) -> None:
+        group = collection.rsplit("/", 1)[-1]
+        group = self.aliases.get(group, group)
+        equal = {f for f, op, _ in filters or [] if op not in _RANGE_OPS}
+        ranged = {f for f, op, _ in filters or [] if op in _RANGE_OPS}
+        order: Tail = tuple((o.lstrip("-"), o.startswith("-")) for o in order_by or [])
+
+        def refuse(why: str) -> None:
+            raise AssertionError(f"{collection}: filters {filters or []}, order {list(order_by or [])}: {why} "
+                                 "(no index in firestore.indexes.json serves it)")
+
+        if len(ranged) > 1:
+            refuse("ranges on several fields")
+        if ranged and order and order[0][0] not in ranged:
+            refuse("a range must be on the first ordered field")
+        tail: Tail = order or tuple((f, False) for f in ranged)
+        single = all((group, f) not in self.exempt for f in equal | {f for f, _ in tail})
+        if single and (not tail or (len(tail) == 1 and not equal)):
+            return
+        flipped = tuple((f, not desc) for f, desc in tail)
+        covered: set[str] = set()
+        for fields in self.composites.get(group, []):
+            lead, end = fields[:len(fields) - len(tail)], fields[len(fields) - len(tail):]
+            if tail and end in (tail, flipped) and {f for f, _ in lead} <= equal:
+                covered |= {f for f, _ in lead}
+                if not equal:
+                    return
+        if not equal or covered != equal:
+            refuse("no single-field or composite index fits")
+
 
 class MemDb(FirestoreIndex):
     """In-memory ``FirestoreIndex``: documents by path (``docs``), decoded the way the real client returns them (a
@@ -375,10 +433,17 @@ class MemDb(FirestoreIndex):
     * Billing, as Firestore bills it: ``reads`` is documents returned per collection (``count:<collection>`` for an
       aggregation); ``total_reads`` sums it. ``bill_misses`` bills a missed ``get`` and an empty query 1 each.
       ``gets`` / ``queries`` / ``touched`` record what was asked; ``reset_counters()`` clears all of them.
+    * ``indexed=True`` refuses (``AssertionError``) a query or aggregation no index of ``firestore.indexes.json`` serves
+      (``IndexGuard``), so an offline test can't pass on a query production would reject; ``aggregations`` names the
+      kinds an aggregation may ask for (``("count",)`` refuses a sum); ``aliases`` maps a collection a test renamed to
+      the collection group whose indexes apply.
     """
 
-    def __init__(self, *, bill_misses: bool = False) -> None:
+    def __init__(self, *, bill_misses: bool = False, indexed: bool = False,
+                 aggregations: Iterable[str] = ("count", "sum"), aliases: Optional[dict[str, str]] = None) -> None:
         super().__init__("p1", session_factory=lambda: None)
+        self.guard: Optional[IndexGuard] = IndexGuard(aliases=aliases) if indexed else None
+        self.aggregations = frozenset(aggregations)
         self.docs: dict[str, dict[str, Any]] = {}
         self.commits = 0
         self.commit_log: list[list[dict[str, Any]]] = []
@@ -445,6 +510,8 @@ class MemDb(FirestoreIndex):
 
     def run_query(self, collection, *, filters=None, order_by=None, limit=None, start_after=None,
                   collection_group=False, transaction=None) -> list[Document]:
+        if self.guard is not None:
+            self.guard.check(collection, filters, order_by)
         self.queries.append((collection, list(filters or [])))
         self.touched.append(collection)
         specs = [(o.lstrip("-"), o.startswith("-")) for o in (order_by or [])]
@@ -471,6 +538,10 @@ class MemDb(FirestoreIndex):
         return [self._read(p) for p, _ in rows]
 
     def aggregate(self, collection, aggregations, *, filters=None, collection_group=False) -> dict[str, Any]:
+        kinds = {how if how == "count" else how[0] for how in aggregations.values()}
+        assert kinds <= self.aggregations, f"{collection}: asks for {sorted(kinds - self.aggregations)}, not expected here"
+        if self.guard is not None:
+            self.guard.check(collection, filters, None)
         rows = self._rows(collection, filters)
         self.touched.append(collection)
         self._bill("count:" + collection, 1)
