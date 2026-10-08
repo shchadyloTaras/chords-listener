@@ -157,6 +157,13 @@ class JobManager:
             # a job being cancelled stops at its next progress report: it no longer counts
             return sum(1 for r in self._jobs.values() if r.uid == uid and not r.finished and not r.cancel.is_set())
 
+    def running_records(self) -> list[JobRecord]:
+        """Every job accepted and not yet finished (queued or running; one being cancelled no longer counts), of all
+        users, oldest first. The admin overview lists them (docs/features/admin AC-01)."""
+        with self._lock:
+            live = [r for r in self._jobs.values() if not r.finished and not r.cancel.is_set()]
+        return sorted(live, key=lambda r: r.created_ts)
+
     def admit(self, quota: Optional[str] = "analyses") -> None:
         """Cloud mode: may the current user start one more job now? Checks the running-jobs limit, then
         counts one unit of the daily ``quota`` ("analyses" | "vocals" | None). Raises QuotaExceeded (429).
