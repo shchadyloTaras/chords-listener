@@ -50,7 +50,7 @@
 | [T41](./t41-apply-the-youtube-switch-to-youtube-links-only-and.md) | Apply the YouTube switch to YouTube links only and filter the history by source type | app | Тарас Щадило | S | T40 | done |
 | [T42](./t42-mark-quiet-and-pre-launch-days-as-restored-and-omi.md) | Mark quiet and pre-launch days as restored and omit empty days from /stats | app | Тарас Щадило | S | T41 | done |
 | [T43](./t43-make-the-list-endpoints-match-the-contract-before.md) | Make the list endpoints match the contract: before cursor, truncated, 422 cases | ports | Тарас Щадило | S | T42 | done |
-| [T44](./t44-seed-the-maintenance-banner-with-valid-non-empty-t.md) | Seed the maintenance banner with valid non-empty texts | migration | Тарас Щадило | S | T43 | todo |
+| [T44](./t44-seed-the-maintenance-banner-with-valid-non-empty-t.md) | Seed the maintenance banner with valid non-empty texts | migration | Тарас Щадило | S | T43 | done |
 | [T45](./t45-harden-account-deletion-missing-profile-purged-tok.md) | Harden account deletion: missing profile, purged-token reuse, buffered replay, cancel after purge | app | Тарас Щадило | S | T44 | todo |
 | [T46](./t46-fix-the-admin-ui-song-flags-csp-hosts-frame-guard.md) | Fix the admin UI: song flags, CSP hosts, frame guard, one language, shared classes | ui | Тарас Щадило | S | T45 | todo |
 | [T47](./t47-test-the-site-s-admission-refusals-and-share-one-i.md) | Test the site's admission refusals and share one isAdminRefusal helper | ui | Тарас Щадило | S | T46 | todo |

@@ -113,7 +113,8 @@ def test_04_seeds_settings_from_env_and_the_public_mirror_with_only_the_allowed_
 
     status = db.get("publicStatus/current").data
     assert set(status) == {"banner", "switches", "updatedAt"}                      # data-model: the allowlist, exactly
-    assert status["banner"] == {"enabled": False, "uk": "", "en": ""}              # AC-29: banner off until published
+    assert status["banner"]["enabled"] is False                                    # AC-29: banner off until published
+    assert status["banner"]["uk"] and status["banner"]["en"]                       # contract: texts non-empty even when off (S1-8)
     assert status["switches"] == settings["switches"]
 
 

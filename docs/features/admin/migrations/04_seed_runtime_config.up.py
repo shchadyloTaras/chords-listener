@@ -1,7 +1,7 @@
 """04 up: create ``adminConfig/settings`` and ``publicStatus/current`` from the env defaults, if absent.
 
 Bootstrap seed (ADR-0005): ``CHORDS_QUOTA_*`` / ``CHORDS_MAX_*`` become the first values of the documents;
-every switch starts in its current behaviour (no pause, YouTube and vocals enabled) and the banner is off.
+every switch starts in its current behaviour (no pause, YouTube and vocals enabled) and the banner is off (with valid placeholder texts).
 Each document is created with ``exists=false``, so a re-run never overwrites what an admin changed.
 """
 from __future__ import annotations
@@ -10,8 +10,15 @@ import argparse
 from datetime import datetime, timezone
 
 from _fsrest import Rest, already_exists
+from app.admin.models import BannerIn
 from app.firestore import IndexError_
 from app.models import Settings
+
+# Contract (openapi Banner): uk/en are 1-250 characters even while the banner is off, so the seed is a short
+# maintenance notice, validated through BannerIn (no model_construct bypass). It stays disabled until an admin publishes.
+BANNER = BannerIn.model_validate(
+    {"enabled": False, "uk": "Технічні роботи. Скоро повернемось.", "en": "Maintenance in progress. Back soon."}
+).model_dump()
 
 SWITCHES = {"analysesPaused": False, "youtubeEnabled": True, "vocalsEnabled": True}
 
@@ -41,7 +48,7 @@ def main() -> int:
             "updatedAt": now,
         },
         "publicStatus/current": {
-            "banner": {"enabled": False, "uk": "", "en": ""},
+            "banner": dict(BANNER),
             "switches": dict(SWITCHES),
             "updatedAt": now,
         },

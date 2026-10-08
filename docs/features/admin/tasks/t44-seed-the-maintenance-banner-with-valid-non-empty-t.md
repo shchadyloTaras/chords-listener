@@ -8,7 +8,7 @@ files_hint: ["migrations/04_seed_runtime_config.up.py", "backend/app/admin/setti
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 9 — review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T44 — Seed the maintenance banner with valid non-empty texts
@@ -19,4 +19,4 @@ status: "todo"
 
 **Review S1-8. Tests show migration 04 builds the banner through validation (no model_construct bypass) so the seeded uk/en texts are non-empty and match the contract.**
 
-- [ ] lint + type-check clean (ruff / oxlint + tsc)
+- [x] lint + type-check clean (ruff / oxlint + tsc)
