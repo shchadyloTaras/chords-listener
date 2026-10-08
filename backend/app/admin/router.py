@@ -14,6 +14,8 @@ Served here:
   user are metadata only, never audio, chords or edits (AC-06).
 * ``GET /jobs`` (job history, AC-07) and ``GET /stats`` (daily stats, AC-08, AC-09).
 * ``listAudit`` (``GET /audit``, AC-10, AC-10b, AC-11): the admin action journal, read-only.
+* ``setDefaultLimits``, ``setSwitch`` and ``setBanner`` (``PUT /settings/...``, AC-13b, AC-24..AC-30, AC-34): the
+  service settings, each written with its journal record in one commit (``actions.py``).
 """
 from __future__ import annotations
 
@@ -28,6 +30,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Any, Callable, Mapping, NoReturn, Optional
 
 from fastapi import APIRouter, FastAPI, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
@@ -37,7 +40,8 @@ from app.users import valid_uid
 from . import models, stats
 from .audit import COLLECTION as AUDIT_COLLECTION
 from .audit import Audit, AuditEntry
-from .authz import ADMIN_PREFIX, AdminRoute, current_admin_uid
+from . import actions
+from .authz import ADMIN_PREFIX, AdminRoute, current_admin_uid, require_fresh_login
 from .directory import MAX_RESULTS, USERS, Directory, parse_time
 from .history import JOBS, REASONS
 from .identity import AuthLookup
@@ -778,3 +782,37 @@ def list_audit(
         has_prev=has_prev,
         next_cursor=_audit_cursor(docs[-1]) if has_next and docs else None,
     )
+
+
+# --------------------------------------------------------------------------- settings: change them
+
+
+@router.put("/settings/limits", response_model=Settings, operation_id="setDefaultLimits")
+def set_default_limits(body: models.DefaultLimitsIn, request: Request) -> Settings:
+    svc = get_services(request.app)
+    admin_uid = current_admin_uid(request)
+    return actions.set_default_limits(
+        svc, admin_uid=admin_uid, admin_email=_admin_email(svc, admin_uid), limits=body
+    )
+
+
+@router.put("/settings/switches/{name}", response_model=Settings, operation_id="setSwitch")
+async def set_switch(name: models.SwitchName, body: models.SwitchChange, request: Request) -> Settings:
+    if name == "analysesPaused" and body.value:  # only pausing every new analysis asks for a fresh sign-in (AC-34)
+        await require_fresh_login(request)
+    svc = get_services(request.app)
+    admin_uid = current_admin_uid(request)
+
+    def apply() -> Settings:
+        return actions.set_switch(
+            svc, admin_uid=admin_uid, admin_email=_admin_email(svc, admin_uid), name=name, value=body.value
+        )
+
+    return await run_in_threadpool(apply)
+
+
+@router.put("/settings/banner", response_model=Settings, operation_id="setBanner")
+def set_banner(body: models.BannerIn, request: Request) -> Settings:
+    svc = get_services(request.app)
+    admin_uid = current_admin_uid(request)
+    return actions.set_banner(svc, admin_uid=admin_uid, admin_email=_admin_email(svc, admin_uid), banner=body)
