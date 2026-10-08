@@ -283,3 +283,20 @@ describe('browser mode recordings of a video', () => {
     expect(track.source).toMatchObject({ type: 'youtube', videoId: 'dQw4w9WgXcQ' })
   })
 })
+
+describe('YouTube fragments', () => {
+  it('ask the cloud for a fragment from a whole-second start', async () => {
+    fetchMock.mockResolvedValueOnce(json({ ...job, clip: { start: 72, end: 102 } }, 201))
+    const started = await api.createClipJob('dQw4w9WgXcQ', 72.8)
+    expect(started.clip).toEqual({ start: 72, end: 102 })
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(String(url)).toBe(`${CLOUD}/api/jobs`)
+    expect(init?.method).toBe('POST')
+    expect(JSON.parse(String(init?.body))).toEqual({ url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', clip: { start: 72 } })
+  })
+
+  it('report a cloud without the fragment service as unavailable', async () => {
+    fetchMock.mockResolvedValueOnce(json({ detail: "YouTube fragments can't be downloaded on this server", code: 'unavailable' }, 501))
+    await expect(api.createClipJob('dQw4w9WgXcQ', 0)).rejects.toMatchObject({ code: 'unavailable', status: 501 })
+  })
+})

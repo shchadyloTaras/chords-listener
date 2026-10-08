@@ -33,7 +33,7 @@ const QUIET: GateInput = {
 
 const home: Route = { name: 'home' }
 const listen: Route = { name: 'listen', source: null, title: null }
-const capture = (blocked: boolean): Route => ({ name: 'capture', videoId: 'dQw4w9WgXcQ', blocked })
+const capture = (blocked: boolean): Route => ({ name: 'capture', videoId: 'dQw4w9WgXcQ', blocked, start: null })
 const track: Route = { name: 'track', id: 't1' }
 const demo: Route = { name: 'demo' }
 const job: Route = { name: 'job', id: 'j1' }

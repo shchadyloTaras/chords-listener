@@ -245,6 +245,15 @@ export async function submitUrl(url: string, options?: JobOptions, signal?: Abor
   return job
 }
 
+/** Starts a YouTube fragment on the cloud and follows its job (navigates to it). Throws ApiError. */
+export async function submitClip(videoId: string, start: number, signal?: AbortSignal): Promise<Job> {
+  const fromPath = currentPath()
+  const job = await api.createClipJob(videoId, start, signal)
+  upsert(job)
+  follow(job, fromPath)
+  return job
+}
+
 let uploadSeq = 0
 
 export interface SubmitFileExtra {
