@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import type { SectionKind } from './lib/music/sections'
 import type { Track } from './types'
 
 /** Implemented by the Shell's player (HTML audio or YouTube iframe). */
@@ -18,6 +19,8 @@ export type Accidentals = 'auto' | 'sharp' | 'flat'
 export type ChordView = 'sheet' | 'timeline' | 'score'
 export type ThemePref = 'dark' | 'light' | 'system'
 export type Lang = 'uk' | 'en'
+/** live piano: the chords played along (both hands) or the song's own notes (transcribed) */
+export type LiveKeysSource = 'chords' | 'song'
 export type CopyFormat = 'bars' | 'timestamps' | 'chordpro' | 'unique'
 
 export interface Toast {
@@ -68,6 +71,12 @@ export interface Settings {
   liveKeys: boolean
   /** manual audio/visual sync correction for the live piano, ms (positive = keys light later) */
   syncOffsetMs: number
+  /** what the live piano shows: the chords as a pianist plays them along (default) or the recording's transcribed notes */
+  liveKeysSource: LiveKeysSource
+  /** the user's names for a track's song parts (track id → part key, lib/music/sections partKeys → kind); this device only */
+  sectionKinds: Record<string, Record<string, SectionKind>>
+  /** «Акорди в пісні» all together (default) or grouped by song part */
+  legendByParts: boolean
   /** the screen stays on while the app is open and visible (Screen Wake Lock, lib/wakeLock.ts); this device only */
   keepAwake: boolean
   /** the harmonium's drone: the song's tonic held while the song plays (lib/sound/drone.ts); this device only */
@@ -75,6 +84,8 @@ export interface Settings {
   /** the selected instrument plays along with the song in its own style (lib/sound/accompany.ts); this device only */
   playAlong: boolean
   playAlongVolume: number // 0..2 (PLAY_ALONG_MAX_VOLUME)
+  /** play-along timing correction, ms (positive = the instrument plays later), ±PLAY_ALONG_OFFSET_LIMIT */
+  playAlongOffsetMs: number
 }
 
 export interface AppState extends Settings {
@@ -132,10 +143,14 @@ const defaultSettings: Settings = {
   chordSoundVolume: 0.8,
   liveKeys: true,
   syncOffsetMs: 0,
+  liveKeysSource: 'chords',
+  sectionKinds: {},
+  legendByParts: false,
   keepAwake: true,
   harmoniumDrone: false,
   playAlong: false,
   playAlongVolume: 0.8,
+  playAlongOffsetMs: 0,
 }
 
 let toastSeq = 1
@@ -161,7 +176,7 @@ export const useApp = create<AppState>()(
 
       track: null,
       setTrack: (track) =>
-        set({ track, currentTime: 0, isPlaying: false, loop: null, duration: track?.duration ?? 0 }),
+        set({ track, currentTime: track?.clip?.start ?? 0, isPlaying: false, loop: null, duration: track?.duration ?? 0 }),
 
       currentTime: 0,
       duration: 0,
@@ -194,7 +209,9 @@ export const useApp = create<AppState>()(
     }),
     {
       name: 'chords-listener-settings',
-      version: 1,
+      version: 2,
+      // v1 saved legendByParts: true for everyone, so v2 resets it once to the new "Усі" default
+      migrate: (state, version) => (version < 2 ? { ...(state as Settings), legendByParts: false } : (state as Settings)),
       partialize: (s): Settings => ({
         transpose: s.transpose,
         simplify: s.simplify,
@@ -221,10 +238,14 @@ export const useApp = create<AppState>()(
         chordSoundVolume: s.chordSoundVolume,
         liveKeys: s.liveKeys,
         syncOffsetMs: s.syncOffsetMs,
+        liveKeysSource: s.liveKeysSource,
+        sectionKinds: s.sectionKinds,
+        legendByParts: s.legendByParts,
         keepAwake: s.keepAwake,
         harmoniumDrone: s.harmoniumDrone,
         playAlong: s.playAlong,
         playAlongVolume: s.playAlongVolume,
+        playAlongOffsetMs: s.playAlongOffsetMs,
       }),
     },
   ),

@@ -17,7 +17,7 @@ import { HandpanDiagram } from '../handpan/HandpanDiagram'
 import { useChordUi } from '../uiStore'
 import { FretChart } from './FretChart'
 import { HARMONIUM_ASPECT, HarmoniumChart } from './HarmoniumChart'
-import { PianoChart } from './PianoChart'
+import { PIANO_ASPECT, PianoChart } from './PianoChart'
 import { StaffChart } from './StaffChart'
 import { useChordDb } from './useChordDb'
 
@@ -25,7 +25,8 @@ const WIDTHS = {
   guitar: { sm: 64, md: 92, lg: 116 },
   bass: { sm: 56, md: 80, lg: 100 },
   ukulele: { sm: 52, md: 76, lg: 96 },
-  piano: { sm: 120, md: 168, lg: 210 },
+  // 37 keys (C2–C5, both hands): white keys as wide as the harmonium's
+  piano: { sm: 132, md: 240, lg: 264 },
   // 37 keys: ~5.7 px white keys in the legend (a tile as narrow as the piano's, two per row on a 360 px
   // phone), ~10.4 / ~11.5 px in the popover / hero
   harmonium: { sm: 132, md: 240, lg: 264 },
@@ -96,7 +97,7 @@ export const ChordDiagram = memo(function ChordDiagram({
     return (
       <div
         className={clsx('flex items-center justify-center rounded-lg border border-dashed border-border text-faint', className)}
-        style={{ width, height: instrument === 'harmonium' ? width * HARMONIUM_ASPECT : isKeyboard(instrument) ? width * 0.32 : width * 1.18 }}
+        style={{ width, height: instrument === 'harmonium' ? width * HARMONIUM_ASPECT : isKeyboard(instrument) ? width * PIANO_ASPECT : width * 1.18 }}
         aria-hidden
       >
         —
@@ -141,7 +142,8 @@ export const ChordDiagram = memo(function ChordDiagram({
           <PianoChart voicing={v} color={color} width={width} title={title} sounding={sounding} onKey={(k) => playPianoKey(label, k)} />
         )}
         <figcaption className="font-mono text-[11px] tracking-wide text-muted">
-          {parsed.bassPc != null && staff.bass && `${staff.bass.name} / `}
+          {/* the piano: the left hand's bass, then the right hand (which may leave the root to the left) */}
+          {staff.bass && `${staff.bass.name} / `}
           {staff.treble.map((n) => n.name).join('  ')}
         </figcaption>
       </figure>

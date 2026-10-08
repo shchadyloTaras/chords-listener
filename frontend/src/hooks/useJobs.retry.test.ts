@@ -1,5 +1,5 @@
 // Retrying an upload that the cloud refused for today's limit: the same file, analyzed in this browser. Retrying
-// a YouTube job on the cloud: the video is listened to here (the cloud is never sent YouTube links).
+// a YouTube job: signed in, the fragment picker opens at the job's fragment; a guest listens in the tab.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Job } from '../types'
 
@@ -32,7 +32,7 @@ vi.mock('../lib/api', () => ({
 }))
 
 import { useConnection, type ConnectionState } from '../lib/serverMode'
-import { retryJob, uploadAndFollow } from './useJobs'
+import { blockedPath, retryJob, uploadAndFollow } from './useJobs'
 import { navigate } from './useRoute'
 
 // done, so following it opens the track and starts no polling
@@ -84,18 +84,31 @@ describe('retryJob, a link', () => {
     useConnection.setState({ probing: false, failure: null, checkedAt: 1, health: null, permission: 'unsupported', ...patch })
   const cloud = () => connect({ status: 'server', backend: 'cloud', apiBase: 'https://api.example.run.app/api', remote: true })
 
-  it('a YouTube video on the cloud: opens it on the capture page, nothing is sent', async () => {
+  it('a YouTube fragment on the cloud: the picker opens at its start, nothing is sent', async () => {
+    cloud()
+    const job = { ...failed({ type: 'youtube', videoId: 'dQw4w9WgXcQ', url: VIDEO }), clip: { start: 72, end: 102 } }
+    expect(await retryJob(job)).toBe(true)
+    expect(navigate).toHaveBeenCalledWith('/youtube/dQw4w9WgXcQ?t=72')
+    expect(api.createJob).not.toHaveBeenCalled()
+  })
+
+  it('an older YouTube job on the cloud (no fragment): the picker from the beginning', async () => {
     cloud()
     expect(await retryJob(failed({ type: 'youtube', videoId: 'dQw4w9WgXcQ', url: VIDEO }))).toBe(true)
-    expect(navigate).toHaveBeenCalledWith('/listen/youtube/dQw4w9WgXcQ')
-    expect(api.createJob).not.toHaveBeenCalled()
+    expect(navigate).toHaveBeenCalledWith('/youtube/dQw4w9WgXcQ')
   })
 
   it('the video the job knows wins over what its link says', async () => {
     cloud()
     expect(await retryJob(failed({ type: 'youtube', videoId: 'dQw4w9WgXcQ', url: 'https://www.youtube.com/playlist?list=PL1' }))).toBe(true)
-    expect(navigate).toHaveBeenCalledWith('/listen/youtube/dQw4w9WgXcQ')
+    expect(navigate).toHaveBeenCalledWith('/youtube/dQw4w9WgXcQ')
     expect(api.createJob).not.toHaveBeenCalled()
+  })
+
+  it('a guest listens to the video in the tab', async () => {
+    connect({ status: 'browser', backend: null, apiBase: null, remote: false })
+    expect(await retryJob(failed({ type: 'youtube', videoId: 'dQw4w9WgXcQ', url: VIDEO }))).toBe(true)
+    expect(navigate).toHaveBeenCalledWith('/listen/youtube/dQw4w9WgXcQ')
   })
 
   it('a YouTube page that is not one video, on the cloud: nothing is sent, nothing to retry', async () => {
@@ -109,5 +122,21 @@ describe('retryJob, a link', () => {
     connect({ status: 'server', backend: 'local', apiBase: '/api', remote: false })
     expect(await retryJob(failed({ type: 'youtube', videoId: 'dQw4w9WgXcQ', url: VIDEO }))).toBe(true)
     expect(api.createJob).toHaveBeenCalledWith(VIDEO, undefined, undefined)
+  })
+})
+
+describe('blockedPath', () => {
+  const source = { type: 'youtube' as const, videoId: 'dQw4w9WgXcQ' }
+
+  it('a fragment YouTube refused: listen in the tab from the fragment’s start', () => {
+    expect(blockedPath({ status: 'error', errorCode: 'download_blocked', source, clip: { start: 72, end: 102 } })).toBe(
+      '/listen/youtube/dQw4w9WgXcQ?blocked=1&t=72',
+    )
+    expect(blockedPath({ status: 'error', errorCode: 'download_blocked', source })).toBe('/listen/youtube/dQw4w9WgXcQ?blocked=1')
+  })
+
+  it('nothing for other failures', () => {
+    expect(blockedPath({ status: 'error', errorCode: 'download_failed', source })).toBeNull()
+    expect(blockedPath({ status: 'done', source })).toBeNull()
   })
 })

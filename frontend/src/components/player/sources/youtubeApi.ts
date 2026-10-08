@@ -77,3 +77,16 @@ export function loadYouTubeApi(timeoutMs = 15_000): Promise<YTNamespace> {
 export function isEmbedBlockedError(code: number): boolean {
   return code === 101 || code === 150 || code === 153
 }
+
+/** The IFrame API also reports the loaded video's title (not in the typed surface). */
+type YTPlayerWithData = YTPlayer & { getVideoData?(): { title?: string; author?: string } }
+
+/** The loaded video's title, or null. */
+export function videoTitle(player: YTPlayer | null): string | null {
+  try {
+    const title = (player as YTPlayerWithData | null)?.getVideoData?.()?.title?.trim()
+    return title || null
+  } catch {
+    return null
+  }
+}

@@ -1,0 +1,27 @@
+# Cloud Build: backend/fetch.Dockerfile -> Artifact Registry. Run by scripts/deploy_fetch.sh:
+#   gcloud builds submit backend --config backend/fetch.cloudbuild.yaml --region europe-west1 --substitutions _IMAGE=<repo>/fetch,_TAG=<tag>
+# The previous :latest image seeds the layer cache, so code-only redeploys skip the Go and pip layers.
+steps:
+  - id: pull-cache
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args: ["-c", "docker pull ${_IMAGE}:latest || echo 'no cached image yet'"]
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --file=fetch.Dockerfile
+      - --build-arg=BUILDKIT_INLINE_CACHE=1
+      - --cache-from=${_IMAGE}:latest
+      - --tag=${_IMAGE}:${_TAG}
+      - --tag=${_IMAGE}:latest
+      - .
+images:
+  - ${_IMAGE}:${_TAG}
+  - ${_IMAGE}:latest
+substitutions:
+  _IMAGE: europe-west1-docker.pkg.dev/build-chords-listener/chords/fetch
+  _TAG: manual
+timeout: 1800s
+options:
+  logging: CLOUD_LOGGING_ONLY

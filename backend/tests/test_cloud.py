@@ -183,6 +183,12 @@ class FakeBlob:
         self._staged.clear()
         self.gcs.patched.append(self.name)
 
+    def upload_from_filename(self, filename: str, content_type: Optional[str] = None,
+                             if_generation_match: Optional[int] = None) -> None:
+        self.gcs.uploads.append({"name": self.name, "if_generation_match": if_generation_match})
+        self.gcs.put(self.name, Path(filename).read_bytes(), bucket=self.bucket_name,
+                     content_type=content_type or "application/octet-stream")
+
     def reload(self) -> None:
         """The fake always reads the stored object, so there is nothing to refresh."""
 
@@ -213,6 +219,7 @@ class FakeGcs:
         self.objects: dict[tuple[str, str], dict[str, Any]] = {}
         self.deleted: list[str] = []
         self.patched: list[str] = []
+        self.uploads: list[dict[str, Any]] = []  # upload_from_filename calls: the name and its generation precondition
 
     def put(self, name: str, data: bytes, *, bucket: str = BUCKET, age_s: float = 0, content_type: str = "audio/mpeg",
             metadata: Optional[dict[str, str]] = None) -> str:
@@ -261,6 +268,7 @@ def make_cloud(tmp_path: Path, media: SimpleNamespace):
 
     def factory(data_dir: Optional[Path] = None, *, verifier: Any = None, cloud: bool = True, admin_db: Any = None,
                 **overrides: Any) -> SimpleNamespace:
+        clip_fetcher = overrides.pop("clip_fetcher", None)
         defaults: dict[str, Any] = {
             "auth": "firebase" if cloud else "off",
             "signing_key": SIGNING_KEY,
@@ -274,7 +282,7 @@ def make_cloud(tmp_path: Path, media: SimpleNamespace):
         engine, fetcher, gcs, index = FakeEngine(), FakeFetcher(media.a), FakeGcs(), FakeIndex()
         admin_db = admin_db or MemDb()  # never the real Firestore: the lifecycle hooks write to it
         app = create_app(
-            settings, analyzer=engine, fetcher=fetcher, engine_info_fn=lambda: ENGINE_INFO,
+            settings, analyzer=engine, fetcher=fetcher, clip_fetcher=clip_fetcher, engine_info_fn=lambda: ENGINE_INFO,
             token_verifier=verifier or FakeVerifier(), gcs_client_factory=lambda: gcs, admin_db=admin_db,
             publisher_factory=lambda store: Publisher(store, index, bucket=BUCKET, gcs_client_factory=lambda: gcs,
                                                       backoff_s=0),
@@ -1016,14 +1024,17 @@ def test_pending_sweep_repeats_and_stops_with_the_app(tmp_path: Path, monkeypatc
             return 0
 
     monkeypatch.setattr(main_module, "PUBLISH_SWEEP_INTERVAL_S", 0.01)
+    gcs = FakeGcs()  # the bucket sweep thread of this app works on the fake, never on a real bucket
+    gcs.put("fetch/0123456789abcdef/source.webm", b"1", age_s=2 * 3600)
     settings = Settings(data_dir=tmp_path / "data", frontend_dist=tmp_path / "no-dist", auth="firebase",
                         signing_key=SIGNING_KEY, scratch_dir=tmp_path / "scratch", upload_bucket=BUCKET)
-    app = create_app(settings, analyzer=FakeEngine(), token_verifier=FakeVerifier(),
+    app = create_app(settings, analyzer=FakeEngine(), token_verifier=FakeVerifier(), gcs_client_factory=lambda: gcs,
                      publisher_factory=lambda store: CountingPublisher())
     wait_for(lambda: not sweep_threads())  # earlier tests' apps are shut down
     with TestClient(app):
         assert [t.daemon for t in sweep_threads()] == [True]
         wait_for(lambda: CountingPublisher.calls >= 4)
+        wait_for(lambda: not gcs.objects)  # the start-up pass of the bucket sweep took the stale fragment from the fake
     wait_for(lambda: not sweep_threads())  # the app's shutdown ends the loop
     stopped = CountingPublisher.calls
     time.sleep(0.1)
@@ -1326,3 +1337,75 @@ def test_a_tombstone_of_one_user_does_not_touch_another(admin_cloud: SimpleNames
     env.db.docs["adminTombstones/alice"] = {"status": "done"}
     job, _ = upload_and_wait(env, media.a, "bob")
     assert job["status"] == "done"
+
+
+# --------------------------------------------------------------------------- YouTube fragments
+
+
+def test_fragments_without_chords_fetch_are_unavailable(cloud: SimpleNamespace) -> None:
+    res = cloud.client.post("/api/jobs", json={"url": VIDEO_ID, "clip": {"start": 72}}, headers=H("alice"))
+    assert_error(res, 501, "unavailable")
+    assert cloud.client.get("/api/jobs", headers=H("alice")).json() == []
+    assert cloud.client.get("/api/me", headers=H("alice")).json()["quotas"]["analyses"]["used"] == 0
+
+
+@needs_ffmpeg
+def test_fragment_jobs_count_against_the_quota_and_stay_per_user(make_cloud, media: SimpleNamespace) -> None:
+    from tests.test_clips import FakeClipFetcher
+
+    env = make_cloud(clip_fetcher=FakeClipFetcher(media.a))
+    body = {"url": VIDEO_ID, "clip": {"start": 72}}
+    a = wait_job(env.client, env.client.post("/api/jobs", json=body, headers=H("alice")).json()["id"], H("alice"))
+    b = wait_job(env.client, env.client.post("/api/jobs", json=body, headers=H("bob")).json()["id"], H("bob"))
+    assert a["status"] == b["status"] == "done" and a["trackId"] == b["trackId"]  # same id, each in their own library
+    assert env.client.get("/api/me", headers=H("alice")).json()["quotas"]["analyses"]["used"] == 1
+    assert env.client.get(f"/api/tracks/{a['trackId']}", headers=H("bob")).json()["clip"] == {"start": 72.0, "end": 102.0}
+
+
+def test_bucket_sweep_glob_for_fragments(cloud: SimpleNamespace) -> None:
+    from app.gcs import FETCH_GLOB
+
+    cloud.gcs.put("fetch/0123456789abcdef/source.webm", b"1", age_s=2 * 3600)
+    cloud.gcs.put("fetch/fedcba9876543210/source.webm", b"2", age_s=60)
+    cloud.gcs.put("users/alice/uploads/u1/a.mp3", b"3", age_s=2 * 3600)
+    assert cloud.app.state.bucket.sweep(max_age_s=3600, glob=FETCH_GLOB) == 1
+    assert {n for (_, n) in cloud.gcs.objects} == {"fetch/fedcba9876543210/source.webm", "users/alice/uploads/u1/a.mp3"}
+
+
+def test_the_hourly_sweep_removes_old_uploads_and_fragments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.main as main_module
+
+    def upload_sweeps() -> list[threading.Thread]:
+        return [t for t in threading.enumerate() if t.name == "chords-upload-sweep"]
+
+    def left() -> set[str]:
+        return {n for (_, n) in gcs.objects}
+
+    gcs = FakeGcs()
+    gcs.put("fetch/0123456789abcdef/source.webm", b"1", age_s=2 * 3600)  # a fragment nobody took: over an hour
+    gcs.put("fetch/fedcba9876543210/source.webm", b"2", age_s=60)  # a fragment a job is about to take
+    gcs.put("users/alice/uploads/u1/a.mp3", b"3", age_s=2 * 3600)  # an upload: kept for a day
+    gcs.put("users/alice/uploads/u2/b.mp3", b"4", age_s=2 * 86400)
+    monkeypatch.setattr(main_module, "BUCKET_SWEEP_INTERVAL_S", 0.01)
+    settings = Settings(data_dir=tmp_path / "data", frontend_dist=tmp_path / "no-dist", auth="firebase",
+                        signing_key=SIGNING_KEY, scratch_dir=tmp_path / "scratch", upload_bucket=BUCKET, publish=False)
+    app = create_app(settings, analyzer=FakeEngine(), token_verifier=FakeVerifier(), gcs_client_factory=lambda: gcs)
+    others = upload_sweeps()  # earlier tests' apps may still have one winding down (a real GCS client times out)
+    with TestClient(app):
+        wait_for(lambda: left() == {"fetch/fedcba9876543210/source.webm", "users/alice/uploads/u1/a.mp3"})
+        gcs.put("fetch/aaaaaaaaaaaaaaaa/source.webm", b"5", age_s=3 * 3600)  # left behind after start-up: the next pass
+        wait_for(lambda: "fetch/aaaaaaaaaaaaaaaa/source.webm" not in left())
+        assert left() == {"fetch/fedcba9876543210/source.webm", "users/alice/uploads/u1/a.mp3"}
+        mine = [t for t in upload_sweeps() if t not in others]
+        assert [t.daemon for t in mine] == [True]
+    wait_for(lambda: not any(t.is_alive() for t in mine))  # the app's shutdown ends the loop
+
+
+def test_bucket_upload(cloud: SimpleNamespace, tmp_path: Path) -> None:
+    src = tmp_path / "source.webm"
+    src.write_bytes(b"abc")
+    assert cloud.app.state.bucket.upload("fetch/0123456789abcdef/source.webm", src, content_type="audio/webm") == 3
+    obj = cloud.gcs.objects[(BUCKET, "fetch/0123456789abcdef/source.webm")]
+    assert obj["data"] == b"abc" and obj["content_type"] == "audio/webm"
+    # the name is new: the precondition makes the create idempotent (a retried upload can never overwrite another object)
+    assert cloud.gcs.uploads == [{"name": "fetch/0123456789abcdef/source.webm", "if_generation_match": 0}]

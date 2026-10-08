@@ -44,6 +44,12 @@ export type ErrorCode =
   | 'not_applied'
   | 'audit_unavailable'
 
+/** A fragment of a YouTube video, in video seconds (docs/CLOUD.md → YouTube clips). */
+export interface ClipRange {
+  start: number
+  end: number
+}
+
 export interface Job {
   id: string
   /** 'analysis' (default): chords for a new/re-analyzed track; 'vocals': vocal separation + melody */
@@ -60,6 +66,8 @@ export interface Job {
   title?: string | null
   thumbnail?: string | null
   source?: TrackSource | null
+  /** a YouTube fragment job: the range asked for (exact once the fragment is downloaded) */
+  clip?: ClipRange | null
   createdAt: string
 }
 
@@ -113,6 +121,11 @@ export interface TrackSummary {
   vocals?: boolean
   /** separated stems available under /api/tracks/{id}/stems/{name}: 'vocals' | 'instruments' */
   stems?: string[]
+  /**
+   * A fragment of a YouTube video (the cloud downloaded only these seconds): the player starts the video at
+   * `clip.start` and stops at `clip.end`; the track is also a recording linked to the video (`startOffset`).
+   */
+  clip?: ClipRange | null
   createdAt: string
   /** cloud only: bumps with every change of the track, as published to the live library (lib/cloud/library) */
   version?: number

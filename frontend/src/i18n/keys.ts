@@ -9,6 +9,14 @@ export const keys: Dict = {
     'keys.canvas.harmonium':
       'Клавіші фісгармонії, 37 від «до» малої октави до «до» третьої: акорди пісні натискаються й тримаються до наступної зміни акорду',
     'keys.harmonium.hint': 'Права рука тримає кожен акорд до наступної зміни, як на діаграмі',
+    'keys.piano.hint': 'Ліва рука — бас, права — акорд біля першої октави, у ритмі пісні, як на діаграмі',
+    'keys.canvas.chords':
+      'Клавіатура фортепіано: акорди пісні в ритмі — бас лівою рукою внизу, акорд правою біля першої октави',
+    'keys.source.title': 'Що показувати на клавішах',
+    'keys.source.chords': 'Акорди',
+    'keys.source.chords.title': 'Як грати пісню за акордами: бас лівою рукою, акорд правою, у ритмі',
+    'keys.source.song': 'Ноти пісні',
+    'keys.source.song.title': 'Ноти, розпізнані з запису: що звучить у пісні',
     'keys.sounding': 'Звучить: {notes}',
     'keys.silence': 'Ноти не звучать',
 
@@ -70,6 +78,13 @@ export const keys: Dict = {
     'keys.canvas': 'Piano keyboard: keys go down and light up as the matching notes sound in the song',
     'keys.canvas.harmonium': 'Harmonium keyboard, 37 keys from C3 to C6: the song’s chords go down and are held until the chord changes',
     'keys.harmonium.hint': 'The right hand holds each chord until it changes, as on the diagram',
+    'keys.piano.hint': 'Left hand: the bass; right hand: the chord around middle C, in time, as on the diagram',
+    'keys.canvas.chords': 'Piano keyboard: the song’s chords in time — the bass in the left hand, the chord in the right around middle C',
+    'keys.source.title': 'What the keys show',
+    'keys.source.chords': 'Chords',
+    'keys.source.chords.title': 'How to play the song from its chords: the bass in the left hand, the chord in the right, in time',
+    'keys.source.song': 'Song notes',
+    'keys.source.song.title': 'The notes recognised in the recording: what the song plays',
     'keys.sounding': 'Sounding: {notes}',
     'keys.silence': 'No notes sounding',
 

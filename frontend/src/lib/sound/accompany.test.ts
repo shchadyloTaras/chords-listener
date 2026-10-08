@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PulseGrid } from '../tempo'
-import { accompanySteps, BEAT_SNAP, HARMONIUM_LIFT, PIANO_STEP_HOLD, type AccompChord, type AccompStep } from './accompany'
+import { accompanySteps, BEAT_SNAP, clampAlongOffset, HARMONIUM_LIFT, PIANO_STEP_HOLD, PLAY_ALONG_OFFSET_LIMIT, type AccompChord, type AccompStep } from './accompany'
 import type { NoteEvent } from './chordNotes'
 
 /** 4/4 at 120 BPM: a beat every 0.5 s, 16 beats (4 bars). */
@@ -91,6 +91,22 @@ describe('play-along: piano', () => {
   })
 })
 
+describe('play-along: piano in three-four, a waltz', () => {
+  it('plays the bass alone on 1, the right hand on 2 and 3', () => {
+    const waltz = accompanySteps('piano', [{ start: 0, end: 3, label: 'C' }], grid(3, 6), shape(4))
+    expect(times(waltz)).toEqual([0, 0.5, 1, 1.5, 2, 2.5])
+    expect(at(waltz, 0)[0].notes.map((n) => n.midi)).toEqual([48]) // the bass
+    expect(at(waltz, 0.5)[0].notes.map((n) => n.midi)).toEqual([55, 60, 64])
+    expect(at(waltz, 1.5)[0].notes.map((n) => n.midi)).toEqual([48])
+  })
+
+  it('strikes the whole chord where it changes on beat 2 or 3', () => {
+    const waltz = accompanySteps('piano', [{ start: 0, end: 0.5, label: 'C' }, { start: 0.5, end: 3, label: 'F' }], grid(3, 6), shape(4))
+    expect(at(waltz, 0.5)[0].notes.map((n) => n.midi)).toEqual([53, 60, 65, 69])
+    expect(at(waltz, 0.5)[0].cut).toBe('all')
+  })
+})
+
 describe('play-along: harmonium', () => {
   const steps = accompanySteps('harmonium', song, grid(), shape(3))
 
@@ -124,5 +140,16 @@ describe('play-along: handpan', () => {
 
   it('plays nothing for a chord the handpan has no notes of', () => {
     expect(accompanySteps('handpan', [{ start: 0, end: 2, label: 'Dbm' }], grid(), shape(3))).toEqual([])
+  })
+})
+
+describe('play-along offset setting', () => {
+  it('keeps multiples of 5 ms within ±150 ms, 0 for anything odd', () => {
+    expect(clampAlongOffset(23)).toBe(25)
+    expect(clampAlongOffset(-12)).toBe(-10)
+    expect(clampAlongOffset(400)).toBe(PLAY_ALONG_OFFSET_LIMIT)
+    expect(clampAlongOffset(-400)).toBe(-PLAY_ALONG_OFFSET_LIMIT)
+    expect(clampAlongOffset(Number.NaN)).toBe(0)
+    expect(Object.is(clampAlongOffset(-1), 0)).toBe(true)
   })
 })

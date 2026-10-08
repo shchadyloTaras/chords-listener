@@ -58,6 +58,12 @@ export interface SegmentOption<T extends string | number> {
   dim?: boolean
 }
 
+const SEGMENT_SIZE = {
+  sm: 'h-7 px-2.5 text-xs',
+  md: 'h-8 px-3 text-sm',
+  lg: 'h-9 px-3.5 text-sm',
+} as const
+
 export function Segmented<T extends string | number>({
   value,
   options,
@@ -65,6 +71,7 @@ export function Segmented<T extends string | number>({
   label,
   className,
   size = 'md',
+  variant = 'quiet',
   tour,
 }: {
   value: T
@@ -72,12 +79,24 @@ export function Segmented<T extends string | number>({
   onChange(v: T): void
   label: string
   className?: string
-  size?: 'sm' | 'md'
+  size?: keyof typeof SEGMENT_SIZE
+  /** `strong`: a bordered group with an inverted active segment and full-contrast labels, for a switch the user must notice */
+  variant?: 'quiet' | 'strong'
   /** a guided-tour anchor (data-tour) */
   tour?: string
 }) {
+  const strong = variant === 'strong'
   return (
-    <div role="radiogroup" aria-label={label} data-tour={tour} className={clsx('inline-flex shrink-0 rounded-lg bg-surface-2 p-0.5', className)}>
+    <div
+      role="radiogroup"
+      aria-label={label}
+      data-tour={tour}
+      className={clsx(
+        'inline-flex shrink-0 rounded-lg',
+        strong ? 'border border-border-strong bg-surface p-1 shadow-sm' : 'bg-surface-2 p-0.5',
+        className,
+      )}
+    >
       {options.map((o) => {
         const on = o.value === value
         return (
@@ -90,8 +109,14 @@ export function Segmented<T extends string | number>({
             onClick={() => onChange(o.value)}
             className={clsx(
               'inline-flex items-center justify-center gap-1.5 rounded-md font-medium whitespace-nowrap transition-colors duration-150',
-              size === 'sm' ? 'h-7 px-2.5 text-xs' : 'h-8 px-3 text-sm',
-              on ? 'bg-surface-3 text-text shadow-[0_1px_0_rgb(255_255_255/0.04)_inset]' : 'text-muted hover:text-text',
+              SEGMENT_SIZE[size],
+              strong
+                ? on
+                  ? 'bg-text text-surface'
+                  : 'text-text hover:bg-surface-2'
+                : on
+                  ? 'bg-surface-3 text-text shadow-[0_1px_0_rgb(255_255_255/0.04)_inset]'
+                  : 'text-muted hover:text-text',
               o.dim && 'opacity-45',
             )}
           >

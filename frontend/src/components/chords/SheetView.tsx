@@ -2,12 +2,13 @@
 // bar/chord lit with a moving progress fill, follow-scroll, bar selection, per-line copy and
 // optional ×N folding of repeated lines.
 
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import clsx from 'clsx'
 import { Check, Copy } from 'lucide-react'
 import { useT } from '../../i18n'
 import { barIndexAt, buildLines, groupRepeats, type Bar, type BarSlot, type LineGroup } from '../../lib/music/bars'
 import { splitLabel } from '../../lib/music/chord'
+import { partKeys, songParts } from '../../lib/music/sections'
 import { chordTone } from '../../lib/music/color'
 import { formatTime } from '../../lib/music/formats'
 import { clickChordSound } from '../../lib/sound'
@@ -17,6 +18,7 @@ import { ChordName } from './ChordName'
 import { useClockEffect, useClockValue } from './clock'
 import { isTypingTarget } from './hotkeys'
 import { useChordModel } from './model'
+import { SectionHeader } from './SongParts'
 import { selectionRange, useChordUi } from './uiStore'
 import { copyBars, useCopyFeedback } from './useCopy'
 
@@ -129,7 +131,7 @@ function keepInView(el: Element | null | undefined) {
 
 export const SheetView = memo(function SheetView() {
   const t = useT()
-  const { bars } = useChordModel()
+  const { bars, sections, track } = useChordModel()
   const setting = useApp((s) => s.barsPerLine)
   const follow = useApp((s) => s.follow)
   const collapse = useChordUi((s) => s.collapseRepeats)
@@ -144,10 +146,15 @@ export const SheetView = memo(function SheetView() {
     useChordUi.getState().setSheetFit(fit)
   }, [fit])
 
-  const lines = useMemo(() => buildLines(bars, perLine), [bars, perLine])
+  // every song part starts a line, under its name
+  const keys = useMemo(() => partKeys(sections), [sections])
+  const renamed = useApp((s) => s.sectionKinds?.[track.id])
+  const starts = useMemo(() => new Map(songParts(sections).length >= 2 ? sections.map((s) => [s.startBar, s]) : []), [sections])
+  const breaks = useMemo(() => new Set(starts.keys()), [starts])
+  const lines = useMemo(() => buildLines(bars, perLine, breaks), [bars, perLine, breaks])
   const groups = useMemo<LineGroup[]>(
-    () => (collapse ? groupRepeats(lines) : lines.map((line) => ({ line, lines: [line] }))),
-    [lines, collapse],
+    () => (collapse ? groupRepeats(lines, breaks) : lines.map((line) => ({ line, lines: [line] }))),
+    [lines, collapse, breaks],
   )
   const current = useClockValue(useCallback((time: number) => groupAt(groups, time), [groups]))
 
@@ -184,9 +191,17 @@ export const SheetView = memo(function SheetView() {
       className="flex flex-col gap-2.5"
       style={{ '--cw-name-scale': scale } as CSSProperties}
     >
-      {groups.map((g, gi) => (
-        <SheetLine key={`${g.line.index}:${perLine}`} group={g} gi={gi} perLine={perLine} />
-      ))}
+      {groups.map((g, gi) => {
+        const section = starts.get(g.line.bars[0].index)
+        return (
+          <Fragment key={`${g.line.index}:${perLine}`}>
+            {section && (
+              <SectionHeader trackId={track.id} partKey={keys.get(section.group)!} renamed={!!renamed?.[keys.get(section.group)!]} section={section} />
+            )}
+            <SheetLine group={g} gi={gi} perLine={perLine} />
+          </Fragment>
+        )
+      })}
     </div>
   )
 })

@@ -21,6 +21,8 @@ from .sources import Cancelled, SourceError
 log = logging.getLogger("chords.gcs")
 
 UPLOADS_GLOB = "users/*/uploads/**"
+FETCH_PREFIX = "fetch/"  # fragments chords-fetch leaves for the API (docs/CLOUD.md → YouTube clips)
+FETCH_GLOB = FETCH_PREFIX + "**"
 
 
 @dataclass
@@ -120,6 +122,17 @@ class UploadBucket:
                 raise _map_error(exc, "Couldn't download the upload") from exc
         progress(1.0)
         return writer.written
+
+    def upload(self, path: str, src: Path, content_type: Optional[str] = None) -> int:
+        """Store ``src`` as the object ``path`` (chords-fetch → ``fetch/...``); returns its size. Raises SourceError.
+        ``path`` is always new (a random request id), so the upload carries ``if_generation_match=0``: it makes
+        the create idempotent (a retried upload can never overwrite another object) and the object names are
+        unique, so a retry after a transient 503 is safe."""
+        try:
+            self._bucket().blob(path).upload_from_filename(str(src), content_type=content_type, if_generation_match=0)
+        except Exception as exc:
+            raise _map_error(exc, "Couldn't store the file") from exc
+        return src.stat().st_size
 
     def delete(self, path: str) -> bool:
         try:

@@ -5,6 +5,7 @@
 
 import { QUALITY_INTERVALS, type ParsedChord } from '../music/chord'
 import { mod12 } from '../music/notes'
+import { closeShape } from './hand'
 import { BLACK_PCS } from './piano'
 import { spellNotes, type SpelledNote } from './staff'
 
@@ -73,18 +74,14 @@ export function harmoniumVoicing(chord: ParsedChord): HarmoniumVoicing {
   if (chord.bassPc != null) pcs.add(chord.bassPc)
   const fifth = mod12(chord.rootPc + 7)
   if (pcs.size > HAND_NOTES && fifth !== chord.bassPc) pcs.delete(fifth)
-  let best: { notes: number[]; dist: number; rooted: boolean } | null = null
-  for (const lowPc of chord.bassPc != null ? [chord.bassPc] : [...pcs]) {
-    const up = [...pcs].map((pc) => mod12(pc - lowPc)).sort((a, b) => a - b)
-    for (let low = lowPc; low + up[up.length - 1] <= HARMONIUM_SHAPE_HIGH; low += 12) {
-      if (low < HARMONIUM_SHAPE_LOW) continue
-      const notes = up.map((d) => low + d)
-      const dist = Math.abs(notes.reduce((a, b) => a + b, 0) / notes.length - HAND_CENTRE)
-      const rooted = lowPc === chord.rootPc
-      if (!best || dist < best.dist - 1e-9 || (Math.abs(dist - best.dist) < 1e-9 && rooted && !best.rooted)) best = { notes, dist, rooted }
-    }
-  }
-  return { notes: best!.notes }
+  const notes = closeShape([...pcs], {
+    rootPc: chord.rootPc,
+    low: HARMONIUM_SHAPE_LOW,
+    high: HARMONIUM_SHAPE_HIGH,
+    centre: HAND_CENTRE,
+    lowest: chord.bassPc,
+  })
+  return { notes }
 }
 
 /** The shape's notes as its staff writes them (treble clef alone), spelled by chord degree. */

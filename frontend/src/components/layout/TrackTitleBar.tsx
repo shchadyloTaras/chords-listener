@@ -9,6 +9,7 @@ import { TrackCover } from '../history/TrackCover'
 import { errorText } from '../jobs/errorText'
 import { IconButton } from '../ui/IconButton'
 import { InlineEdit } from '../ui/InlineEdit'
+import { formatRange } from '../ui/format'
 
 /** Merge server-side metadata into the loaded track without resetting playback / chord edits. */
 function mergeMeta(updated: Pick<Track, 'id' | 'title' | 'artist' | 'edited'>) {
@@ -51,17 +52,22 @@ export function TrackTitleBar({ demo }: { demo: boolean }) {
             className="hidden size-9 rounded-lg sm:flex [&_span]:text-xs"
           />
           <div className="flex min-w-0 flex-1 flex-col items-start leading-tight">
-            <InlineEdit
-              value={track.title}
-              placeholder={t('core.track.untitled')}
-              label={t('core.track.rename')}
-              onSave={async (title) => {
-                await saveMeta(track, { title }, demo)
-                useApp.getState().toast(t('core.track.renamed'), 'success')
-              }}
-              className="font-display text-[15px] font-semibold tracking-tight sm:text-base"
-              inputClassName="h-6 font-display text-[15px] font-semibold"
-            />
+            <div className="flex w-full max-w-full min-w-0 items-baseline gap-1.5">
+              <InlineEdit
+                value={track.title}
+                placeholder={t('core.track.untitled')}
+                label={t('core.track.rename')}
+                onSave={async (title) => {
+                  await saveMeta(track, { title }, demo)
+                  useApp.getState().toast(t('core.track.renamed'), 'success')
+                }}
+                className="font-display text-[15px] font-semibold tracking-tight sm:text-base"
+                inputClassName="h-6 font-display text-[15px] font-semibold"
+              />
+              {track.clip && (
+                <span className="shrink-0 text-xs text-muted tabular-nums">· {formatRange(track.clip.start, track.clip.end)}</span>
+              )}
+            </div>
             <InlineEdit
               value={track.artist ?? ''}
               placeholder={t('core.track.addArtist')}

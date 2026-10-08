@@ -275,8 +275,11 @@ export function barSignature(bar: Bar): string {
   return `${bar.beats}:` + bar.slots.map((s) => `${s.label}@${s.beat}+${s.span}`).join(',')
 }
 
-/** Chunks bars into lines of `perLine`; a pickup bar gets its own first line so phrases stay aligned. */
-export function buildLines(bars: Bar[], perLine: number): Line[] {
+/**
+ * Chunks bars into lines of `perLine`; a pickup bar gets its own first line so phrases stay aligned,
+ * and a line also starts at every bar in `breaks` (a song section's first bar).
+ */
+export function buildLines(bars: Bar[], perLine: number, breaks?: ReadonlySet<number>): Line[] {
   const size = Math.max(1, Math.round(perLine))
   const lines: Line[] = []
   const push = (chunk: Bar[], pickup: boolean) =>
@@ -293,17 +296,23 @@ export function buildLines(bars: Bar[], perLine: number): Line[] {
     push([bars[0]], true)
     i = 1
   }
-  for (; i < bars.length; i += size) push(bars.slice(i, i + size), false)
+  while (i < bars.length) {
+    let end = Math.min(bars.length, i + size)
+    if (breaks) for (let k = i + 1; k < end; k++) if (breaks.has(k)) end = k
+    push(bars.slice(i, end), false)
+    i = end
+  }
   return lines
 }
 
-/** Folds consecutive identical lines (same chords on the same beats) into ×N groups. */
-export function groupRepeats(lines: Line[]): LineGroup[] {
+/** Folds consecutive identical lines (same chords on the same beats) into ×N groups; a line starting a song section (`breaks`) is never folded into the one before. */
+export function groupRepeats(lines: Line[], breaks?: ReadonlySet<number>): LineGroup[] {
   const groups: LineGroup[] = []
   for (const line of lines) {
     const g = groups[groups.length - 1]
     if (
       g &&
+      !breaks?.has(line.bars[0].index) &&
       !line.pickup &&
       !g.line.pickup &&
       g.line.signature === line.signature &&

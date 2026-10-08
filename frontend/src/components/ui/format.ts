@@ -8,6 +8,11 @@ export function formatTime(seconds: number, reference = seconds): string {
   return `${m}:${sec}`
 }
 
+/** "1:12–1:42": a fragment of a video (both ends in the longer one's format). */
+export function formatRange(start: number, end: number, sep = '–'): string {
+  return `${formatTime(start, end)}${sep}${formatTime(end, end)}`
+}
+
 export function formatSpeed(rate: number): string {
   return `${Number(rate.toFixed(2))}×`
 }

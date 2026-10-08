@@ -5,8 +5,7 @@
 #   SKIP_SETUP=1 scripts/deploy_cloud.sh     code-only redeploy (no APIs/repo/bucket/IAM/rules/CORS steps)
 #   SKIP_BUILD=1 scripts/deploy_cloud.sh     redeploy the newest image (settings / env changes only)
 #
-# Credentials: a normal `gcloud auth login`, or - without one - an access token minted from the
-# firebase-tools login (scripts/gcloud_token.cjs, re-minted every 40 min, kept in a 0600 temp file).
+# Credentials and Cloud Build: scripts/gcloud_common.sh.
 # Secrets: CHORDS_SIGNING_KEY and CHORDS_SMOKE_KEY are generated once into .cloud.env (gitignored,
 # mode 600) and reused. Nothing secret is printed.
 #
@@ -177,9 +176,6 @@ if ops_dry; then # no credentials, no network: print what a deploy would do
   exit 0
 fi
 
-GCLOUD="${GCLOUD:-$(command -v gcloud || true)}"
-[[ -x "$GCLOUD" ]] || GCLOUD=/opt/homebrew/share/google-cloud-sdk/bin/gcloud
-[[ -x "$GCLOUD" ]] || { echo "gcloud not found (set GCLOUD=/path/to/gcloud)" >&2; exit 1; }
 for tool in node curl openssl python3; do
   command -v "$tool" >/dev/null || { echo "$tool is required" >&2; exit 1; }
 done
@@ -187,52 +183,8 @@ done
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/chords-deploy.XXXXXX")"
 chmod 700 "$TMP"
 trap 'rm -rf "$TMP"' EXIT
-export CLOUDSDK_CORE_PROJECT="$PROJECT" CLOUDSDK_CORE_DISABLE_PROMPTS=1
-
-STARTED=$(date +%s)
-log() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
-elapsed() { echo "$(( $(date +%s) - STARTED ))s"; }
-
-# ------------------------------------------------------------------------------ credentials
-TOKEN_FILE="$TMP/token"
-TOKEN_AT=0
-if [[ -n "${CLOUDSDK_AUTH_ACCESS_TOKEN_FILE:-}" ]]; then
-  AUTH_MODE=file # the caller manages the token
-  cp "$CLOUDSDK_AUTH_ACCESS_TOKEN_FILE" "$TOKEN_FILE"
-elif "$GCLOUD" auth print-access-token >/dev/null 2>&1; then
-  AUTH_MODE=gcloud
-else
-  AUTH_MODE=mint
-fi
-
-refresh_token() { # keeps $TOKEN_FILE fresh (tokens live ~60 min)
-  local now
-  now=$(date +%s)
-  if (( now - TOKEN_AT < 2400 )); then return; fi
-  case "$AUTH_MODE" in
-    mint)
-      node "$ROOT/scripts/gcloud_token.cjs" "$TOKEN_FILE" >/dev/null
-      export CLOUDSDK_AUTH_ACCESS_TOKEN_FILE="$TOKEN_FILE" ;;
-    gcloud)
-      (umask 077; "$GCLOUD" auth print-access-token > "$TOKEN_FILE") ;;
-    file)
-      cp "$CLOUDSDK_AUTH_ACCESS_TOKEN_FILE" "$TOKEN_FILE" ;;
-  esac
-  TOKEN_AT=$now
-}
-refresh_token
-gc() { refresh_token; "$GCLOUD" "$@"; }
-
-# REST call with the access token (header read from a 0600 file, never on a command line).
-# Usage: api METHOD URL [JSON]; sets API_STATUS, body in $TMP/api.out
-api() {
-  refresh_token
-  (umask 077; printf 'Authorization: Bearer %s\nx-goog-user-project: %s\n' "$(cat "$TOKEN_FILE")" "$PROJECT" > "$TMP/auth.hdr")
-  local data=()
-  if [[ $# -ge 3 ]]; then data=(-H 'Content-Type: application/json' --data "$3"); fi
-  API_STATUS=$(curl -sS -o "$TMP/api.out" -w '%{http_code}' -X "$1" -H @"$TMP/auth.hdr" ${data[@]+"${data[@]}"} "$2")
-  rm -f "$TMP/auth.hdr"
-}
+# shellcheck source=scripts/gcloud_common.sh
+source "$ROOT/scripts/gcloud_common.sh"
 
 log "Project $PROJECT, region $REGION, service $SERVICE (auth: $AUTH_MODE)"
 
@@ -287,7 +239,7 @@ JSON
   fi
   for attempt in 1 2 3 4 5 6; do # a new service account takes a moment to become usable in IAM
     if gc storage buckets add-iam-policy-binding "gs://$BUCKET" --member="serviceAccount:$RUNTIME_SA" \
-        --role=roles/storage.objectUser >/dev/null 2>"$TMP/iam.err"; then
+        --role=roles/storage.objectUser --condition=None >/dev/null 2>"$TMP/iam.err"; then
       echo "roles/storage.objectUser on gs://$BUCKET"; break
     fi
     [[ $attempt == 6 ]] && { cat "$TMP/iam.err" >&2; exit 1; }
@@ -333,35 +285,26 @@ ALERT_EMAIL="${ALERT_EMAIL:-$(secret ALERT_EMAIL)}" # where the admin alerts go 
 if [[ -z "${SKIP_BUILD:-}" ]]; then
   TAG="${IMAGE_TAG:-$(date -u +%Y%m%d-%H%M%S)}"
   log "Cloud Build: $IMAGE:$TAG"
-  # the build runs in the image's region: the cache pull of the ~0.9 GB previous image stays inside
-  # it (from the global pool it was billed as intercontinental Artifact Registry egress)
-  BUILD_ID=$(gc builds submit "$ROOT/backend" --config "$ROOT/backend/cloudbuild.yaml" --region "$REGION" \
-    --substitutions "_IMAGE=$IMAGE,_TAG=$TAG" --async --format='value(id)')
-  echo "build $BUILD_ID: https://console.cloud.google.com/cloud-build/builds;region=$REGION/$BUILD_ID?project=$PROJECT"
-  while true; do
-    STATUS=$(gc builds describe "$BUILD_ID" --region "$REGION" --format='value(status)')
-    case "$STATUS" in
-      SUCCESS) break ;;
-      FAILURE|INTERNAL_ERROR|TIMEOUT|CANCELLED|EXPIRED)
-        echo "build $STATUS - last log lines:" >&2
-        gc logging read "resource.type=build AND resource.labels.build_id=$BUILD_ID" --limit 80 \
-          --format='value(textPayload)' --order=desc 2>/dev/null \
-          | awk '{ line[NR] = $0 } END { for (i = NR; i > 0; i--) print line[i] }' >&2 || true
-        exit 1 ;;
-    esac
-    printf '  %s (%s)\n' "$STATUS" "$(elapsed)"
-    sleep 20
-  done
-  echo "build finished ($(elapsed))"
-  # the uploaded source archive is no longer needed
-  SRC=$(gc builds describe "$BUILD_ID" --region "$REGION" --format='value(source.storageSource.bucket,source.storageSource.object)' | tr '\t' '/')
-  [[ -n "$SRC" && "$SRC" != "/" ]] && gc storage rm "gs://$SRC" >/dev/null 2>&1 || true
+  cloud_build "$ROOT/backend/cloudbuild.yaml" "$IMAGE" "$TAG"
   DEPLOY_IMAGE="$IMAGE:$TAG"
 else
   DEPLOY_IMAGE="$IMAGE:latest"
 fi
 
 # ------------------------------------------------------------------------------ deploy
+# YouTube fragments: chords-api calls chords-fetch (scripts/deploy_fetch.sh) when that service exists. Only "not found"
+# means it does not: --env-vars-file replaces every variable, so a failed lookup (permissions, network, API) must not
+# silently deploy the API without CHORDS_FETCH_URL.
+FETCH_SERVICE="${FETCH_SERVICE:-chords-fetch}"
+if FETCH_URL=$(gc run services describe "$FETCH_SERVICE" --region "$REGION" --format='value(status.url)' 2>"$TMP/fetch.err"); then
+  :
+elif grep -qE 'NOT_FOUND|could not be found|Cannot find service' "$TMP/fetch.err"; then
+  FETCH_URL=""
+else
+  cat "$TMP/fetch.err" >&2
+  echo "could not check whether $FETCH_SERVICE exists: not deploying $SERVICE without knowing (its env vars would lose CHORDS_FETCH_URL)" >&2
+  exit 1
+fi
 log "Deploying $SERVICE ($DEPLOY_IMAGE)"
 NUMBER=$(gc projects describe "$PROJECT" --format='value(projectNumber)')
 STABLE_URL="https://$SERVICE-$NUMBER.$REGION.run.app" # the sweep's URL and the OIDC audience the server checks
@@ -384,6 +327,8 @@ CHORDS_MAX_INSTANCES: "$MAX_INSTANCES"
 CHORDS_SCHEDULER_EMAIL: "$SCHEDULER_SA"
 CHORDS_SCHEDULER_AUDIENCE: "$STABLE_URL"
 EOF
+  echo "CHORDS_YT_CLIP_S: \"30\"" >> "$TMP/env.yaml"
+  if [[ -n "$FETCH_URL" ]]; then echo "CHORDS_FETCH_URL: \"$FETCH_URL\"" >> "$TMP/env.yaml"; fi
 )
 gc run deploy "$SERVICE" \
   --image "$DEPLOY_IMAGE" \
@@ -425,4 +370,5 @@ fi
 log "Done in $(elapsed)"
 echo "Service URL:      $URL"
 echo "Stable URL:       $STABLE_URL"
+echo "YouTube fragments: ${FETCH_URL:-off (no chords-fetch: run scripts/deploy_fetch.sh, then this script again)}"
 echo "Health:           $(curl -fsS --max-time 120 "$URL/api/health" || echo 'not answering yet')"

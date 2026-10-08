@@ -10,17 +10,20 @@ import { STAGES, stepIndex, type StageKey } from './stages'
  */
 export function StageStepper({
   status,
+  progress,
   failedAt,
   steps = STAGES,
 }: {
   status: JobStatus
+  /** the job's overall progress: a queued job that already downloaded counts as past the download */
+  progress?: number
   failedAt?: number
   steps?: readonly StageKey[]
 }) {
   const t = useT()
   // a stage this job skips (an upload has no download) counts as its first shown one
   const first = steps.length ? STAGES.indexOf(steps[0]) : 0
-  const current = Math.max(first, status === 'error' ? (failedAt ?? 0) : stepIndex(status))
+  const current = Math.max(first, status === 'error' ? (failedAt ?? 0) : stepIndex(status, progress))
   return (
     <ol className={clsx('grid gap-2', steps.length === 2 ? 'grid-cols-2' : 'grid-cols-3')} aria-label={t('core.job.steps')}>
       {steps.map((step) => {

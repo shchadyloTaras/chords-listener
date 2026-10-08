@@ -12,8 +12,14 @@ const N_MELS = 64
 const TOP_DB = 80
 /** frames the envelope is delayed by to counter the centered-window framing */
 const ONSET_DELAY = 0
-/** calibrated on synthetic songs: flux peaks ~half a frame before the audible onset */
-const BEAT_OFFSET_FRAMES = 0.5
+/**
+ * Beat times are moved this many frames later (the onset flux leads the attack). Calibrated on six
+ * real recordings (pop / rock / electronic, mp3 and m4a) against their attacks, found by a spectral-
+ * flux detector that is itself calibrated on synthetic attacks: half a frame left the grid 6–14 ms
+ * (mean 9.5 ms) after the attacks; 0.1 frame centres it (−4…+5 ms). Clean synthetic tones read
+ * ~20 ms early with it — they are not what songs sound like.
+ */
+const BEAT_OFFSET_FRAMES = 0.1
 
 export const TEMPO_PRIOR_BPM = 110
 export const TEMPO_PRIOR_OCTAVES = 1.0

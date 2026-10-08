@@ -5,7 +5,7 @@ import { useT } from '../../i18n'
 import { toApiError, type ClientErrorCode } from '../../lib/api'
 import { openAuthDialog, useAuth } from '../../lib/auth'
 import type { Job } from '../../types'
-import { acknowledgeJob, blockedVideoId, canRetry, ensureJob, isActiveJob, retryJob, useJobs } from '../../hooks/useJobs'
+import { acknowledgeJob, blockedPath, canRetry, ensureJob, isActiveJob, retryJob, useJobs } from '../../hooks/useJobs'
 import { navigate, paths } from '../../hooks/useRoute'
 import { useDocumentTitle } from '../../hooks/useDocumentTitle'
 import { FILE_ACCEPT } from '../input/url'
@@ -84,13 +84,13 @@ export function JobPage({ id }: { id: string }) {
     return () => ctrl.abort()
   }, [id, attempt, uid])
 
-  // YouTube refused the server download: play the video here and listen to this tab instead
-  const blockedVideo = job ? blockedVideoId(job) : null
+  // YouTube refused the server download: play the video here and listen to this tab instead (from the fragment)
+  const blocked = job ? blockedPath(job) : null
   useEffect(() => {
     if (job?.status === 'done' && job.trackId) navigate(paths.track(job.trackId), { replace: true })
     if (job?.status === 'error') acknowledgeJob(job.id)
-    if (blockedVideo) navigate(paths.capture(blockedVideo, { blocked: true }), { replace: true })
-  }, [job?.status, job?.trackId, job?.id, blockedVideo])
+    if (blocked) navigate(blocked, { replace: true })
+  }, [job?.status, job?.trackId, job?.id, blocked])
 
   const running = !job || isActiveJob(job)
   const elapsed = useElapsed(job?.createdAt, running)
@@ -226,7 +226,7 @@ export function JobPage({ id }: { id: string }) {
           )}
 
           <div className="mt-7">
-            <StageStepper status={job?.status ?? 'queued'} steps={stepsFor(job ?? {})} />
+            <StageStepper status={job?.status ?? 'queued'} progress={job?.progress} steps={stepsFor(job ?? {})} />
           </div>
 
           <div className="mt-6">
