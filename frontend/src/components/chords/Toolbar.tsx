@@ -292,6 +292,7 @@ function SettingsMenu() {
 function LiveKeysSwitch() {
   const t = useT()
   const on = useApp((s) => s.liveKeys && isKeyboard(s.instrument))
+  const harmonium = useApp((s) => s.instrument === 'harmonium')
   const setSetting = useApp((s) => s.setSetting)
   return (
     <Switch
@@ -300,7 +301,7 @@ function LiveKeysSwitch() {
         setSetting('liveKeys', v)
         if (v) setSetting('instrument', liveKeysInstrument(useApp.getState().instrument))
       }}
-      label={t('keys.settings.toggle')}
+      label={t(harmonium ? 'keys.settings.toggle.harmonium' : 'keys.settings.toggle')}
       hint={t('keys.settings.hint')}
     />
   )
