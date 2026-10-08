@@ -21,6 +21,8 @@ from .sources import Cancelled, SourceError
 log = logging.getLogger("chords.gcs")
 
 UPLOADS_GLOB = "users/*/uploads/**"
+FETCH_PREFIX = "fetch/"  # fragments chords-fetch leaves for the API (docs/CLOUD.md → YouTube clips)
+FETCH_GLOB = FETCH_PREFIX + "**"
 
 
 @dataclass
