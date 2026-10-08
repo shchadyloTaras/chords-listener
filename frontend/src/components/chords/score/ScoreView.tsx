@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import clsx from 'clsx'
-import { AudioLines, CloudUpload, Download, FileMusic, FileText, Hash, LoaderCircle, Mic, Music2, Piano, RotateCcw } from 'lucide-react'
+import { AudioLines, CloudUpload, Download, FileMusic, FileText, Hash, LoaderCircle, Mic, Music2, Piano, RotateCcw, X } from 'lucide-react'
 import { useT } from '../../../i18n'
 import { navigate, paths } from '../../../hooks/useRoute'
 import { moveToCloud, onTransferDone, transferLabel, useTransfers } from '../../../lib/cloud/transfer'
@@ -16,7 +16,7 @@ import { baseOptions, configureRules, fracAt, measureLayout, OpenSheetMusicDispl
 import { SCORE_LEVELS, type Score, type ScoreLevel } from '../../../lib/score/types'
 import { useConnection } from '../../../lib/serverMode'
 import { requestNotes, type NotesState } from '../../../lib/transcription'
-import { loadVocals, startVocals, vocalsSupport, type VocalsState } from '../../../lib/vocals'
+import { cancelVocals, loadVocals, startVocals, vocalsSupport, type VocalsState } from '../../../lib/vocals'
 import { useApp } from '../../../store'
 import { AccountButtons } from '../../account/AccountCta'
 import { useCloudInvite } from '../../account/cloudInvite'
@@ -248,6 +248,18 @@ function VocalsCard({ state }: { state: VocalsState }) {
   const cloud = useConnection((s) => s.backend === 'cloud')
   // a song kept on this device: the cloud transcribes its vocals once it is moved there
   const local = isLocalId(track.id)
+  const [cancelling, setCancelling] = useState(false)
+  const cancel = async () => {
+    setCancelling(true)
+    try {
+      await cancelVocals(track)
+    } catch (err) {
+      console.warn('[vocals] cancel failed:', err)
+      useApp.getState().toast(t('score.vocals.cancelError'), 'error')
+    } finally {
+      setCancelling(false)
+    }
+  }
   const transfer = useTransfers((s) => (local ? s[track.id] : undefined))
   const moving = !!transfer && transfer.phase !== 'error'
   useEffect(() => {
@@ -299,6 +311,16 @@ function VocalsCard({ state }: { state: VocalsState }) {
                 </li>
               ))}
             </ol>
+            <button
+              type="button"
+              onClick={() => void cancel()}
+              disabled={cancelling || !state.jobId}
+              title={t('score.vocals.cancel.title')}
+              className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-sm font-medium text-muted hover:bg-surface-3 hover:text-text disabled:opacity-50"
+            >
+              {cancelling ? <LoaderCircle size={14} className="animate-spin" aria-hidden /> : <X size={14} aria-hidden />}
+              {t('score.vocals.cancel')}
+            </button>
           </div>
           <div className="h-1 w-full overflow-hidden rounded-full bg-surface-3" aria-hidden>
             <div className="h-full bg-accent transition-[width] duration-300" style={{ width: `${Math.max(2, Math.round(state.progress * 100))}%` }} />

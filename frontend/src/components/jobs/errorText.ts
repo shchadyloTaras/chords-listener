@@ -14,6 +14,7 @@ const KNOWN: ReadonlySet<string> = new Set<ClientErrorCode>([
   'analysis_failed',
   'not_found',
   'internal',
+  'cancelled',
   'network',
   'aborted',
   'http',
