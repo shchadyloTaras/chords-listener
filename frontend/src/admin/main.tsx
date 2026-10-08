@@ -8,8 +8,8 @@ import { breakOutOfFrame } from './frameGuard'
 // First thing: a framed admin page leaves the frame and renders nothing (S2-8).
 if (breakOutOfFrame()) {
   // Firebase sign-in: restores a saved session where this browser has signed in before (shared with the main site).
-  // The access check runs once the session is known (AdminApp), not here.
-  startAuth()
+  // The access check runs once the session is known (AdminApp), not here. No settings sync: no Firestore here (ADR-0002).
+  startAuth({ settingsSync: false })
 
   createRoot(document.getElementById('root')!).render(
     <StrictMode>

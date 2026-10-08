@@ -97,7 +97,7 @@ const CORS = {
 interface World {
   /** every request that reached the (stubbed) cloud server, preflights included: "METHOD /path" */
   server: string[]
-  /** every http(s) request the page made except those to Google (Firebase sign-in and Firestore are not our server) */
+  /** every http(s) request the page made except those to Google (Firebase sign-in is not our server) */
   ours: string[]
 }
 
@@ -120,7 +120,6 @@ async function open(context: BrowserContext, page: Page): Promise<World> {
   )
   // Firebase: the account lookup that confirms a restored session; anything else it asks gets an empty answer
   await context.route(/^https:\/\/([a-z]+\.)?googleapis\.com\//, (route: Route) => {
-    if (route.request().url().startsWith('https://firestore.')) return route.abort('failed') // settings sync: offline
     if (route.request().url().includes('accounts:lookup')) {
       return route.fulfill({
         json: {
@@ -164,8 +163,8 @@ test('hostile strings render as text and the CSP rejects an injected inline scri
     handlers: document.querySelectorAll('[onerror], [onload], [onclick], [onmouseover]').length,
     scriptUrls: document.querySelectorAll('a[href^="javascript:"], [src^="javascript:"]').length,
     inlineScripts: document.querySelectorAll('script:not([src])').length,
-    // (Firestore's connectivity probe for a channel that failed is an image from google.com: only our offline stub causes it)
-    csp: (window as unknown as { __csp: string[] }).__csp.filter((v) => !v.includes('/images/cleardot.gif')),
+    // nothing blocked either: the page asks only what its policy allows (no Firestore: startAuth without settings sync)
+    csp: (window as unknown as { __csp: string[] }).__csp,
   }))
   expect(page_).toEqual({ pwned: null, injected: 0, handlers: 0, scriptUrls: 0, inlineScripts: 0, csp: [] })
 

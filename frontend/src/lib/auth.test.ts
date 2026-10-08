@@ -41,7 +41,8 @@ vi.mock('firebase/auth', () => ({
   signOut: async () => fb.emit(null),
 }))
 
-vi.mock('./settingsSync', () => ({ startSettingsSync: () => () => undefined }))
+const sync = vi.hoisted(() => ({ startSettingsSync: vi.fn((_user: unknown) => () => undefined) }))
+vi.mock('./settingsSync', () => sync)
 
 // the cloud library kept on this device (lib/cloud/cache) belongs to the signed-in account alone
 const cache = vi.hoisted(() => ({ clearCloudCache: vi.fn(async () => undefined) }))
@@ -80,6 +81,7 @@ beforeEach(() => {
   fb.saved = null
   fb.listeners.clear()
   cache.clearCloudCache.mockClear()
+  sync.startSettingsSync.mockClear()
   stubStorage()
 })
 
@@ -184,6 +186,23 @@ describe('a browser that signed in before', () => {
     await vi.waitFor(() => expect(useAuth.getState()).toEqual({ user: { uid: 'uid42', email: 'listener@example.com' }, ready: true }))
     expect(fb.loads).toBe(1)
     expect(storage.get(MARKER)).toBe('1')
+  })
+
+  it('syncs the settings of the restored session', async () => {
+    fb.saved = { uid: 'uid42', email: 'listener@example.com' }
+    const { startAuth } = await boot()
+    stop = startAuth()
+    await vi.waitFor(() => expect(sync.startSettingsSync).toHaveBeenCalledWith(fb.saved))
+  })
+
+  it('the admin page restores and signs in without settings sync (ADR-0002: no Firestore there)', async () => {
+    fb.saved = { uid: 'uid42', email: 'admin@example.com' }
+    const { signIn, startAuth, useAuth } = await boot()
+    stop = startAuth({ settingsSync: false })
+    await vi.waitFor(() => expect(useAuth.getState().user?.uid).toBe('uid42'))
+    await signIn('admin@example.com', 'secret')
+    await settle()
+    expect(sync.startSettingsSync).not.toHaveBeenCalled()
   })
 
   it('forgets the flag when the saved session is gone', async () => {

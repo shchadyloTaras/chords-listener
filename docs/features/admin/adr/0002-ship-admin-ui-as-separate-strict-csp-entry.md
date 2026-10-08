@@ -35,7 +35,7 @@ ticket: "docs/features/admin/spec.md"
 
 ### Amendments (T46, review 2026-10-08)
 
-- **`connect-src` hosts** (pinned by `frontend/src/admin/adminEntry.test.ts`): `'self'`, the cloud API `chords-api-84488579848.europe-west1.run.app`, and the Firebase Auth hosts `identitytoolkit.googleapis.com`, `securetoken.googleapis.com`, `www.googleapis.com` (token and provider calls of the Auth SDK). `firestore.googleapis.com` is **not** allowed: the admin reads everything through the API, and the settings sync that `startAuth` starts only degrades to a console warning.
+- **`connect-src` hosts** (pinned by `frontend/src/admin/adminEntry.test.ts`): `'self'`, the cloud API `chords-api-84488579848.europe-west1.run.app`, and the Firebase Auth hosts `identitytoolkit.googleapis.com`, `securetoken.googleapis.com`, `www.googleapis.com` (token and provider calls of the Auth SDK). `firestore.googleapis.com` is **not** allowed: the admin reads everything through the API, and `src/admin/main.tsx` starts auth with `startAuth({ settingsSync: false })`, so the page opens no Firestore listener (the browser e2e asserts no CSP violation at all).
 - **Framing:** a `<meta>` CSP ignores `frame-ancestors`, so `src/admin/main.tsx` runs a frame guard first (`frameGuard.ts`): a framed page navigates the top window to itself and renders nothing.
 - **Language:** the admin page is pinned to Ukrainian (`<html lang="uk">`, `useDocumentTheme(ADMIN_LANG)`, admin error texts and `useAdminT` always `uk`), regardless of the site language; the admin is the owner, so the screens are not translated.
 

@@ -55,6 +55,8 @@ function loadAuth() {
 }
 
 let stopMirror: (() => void) | null = null
+/** false on the admin page (startAuth): it reads everything through the API and its CSP allows no Firestore (ADR-0002) */
+let syncSettings = true
 
 /** How long startup waits for the on-device look for an older build's session (IndexedDB may hang). */
 export const LEGACY_LOOKUP_MS = 1500
@@ -80,7 +82,7 @@ function mirror({ auth, sdk }: LoadedAuth): void {
     stopSync?.()
     stopSync = undefined
     const current = ++session
-    if (!user) return
+    if (!user || !syncSettings) return
     import('./settingsSync')
       .then(({ startSettingsSync }) => {
         if (current === session) stopSync = startSettingsSync(user)
@@ -108,8 +110,10 @@ async function accountSdk(): Promise<LoadedAuth> {
  * Without the flag, `ready` waits for the on-device look for a session an older build saved (milliseconds,
  * bounded by LEGACY_LOOKUP_MS): such a user must not look like a guest meanwhile (the guest flows would
  * show, and the API would settle on browser mode before their session is back).
+ * `settingsSync: false` (the admin page) signs in without syncing the settings profile.
  */
-export function startAuth(): () => void {
+export function startAuth({ settingsSync = true }: { settingsSync?: boolean } = {}): () => void {
+  syncSettings = settingsSync
   let stopped = false
   let lookupTimer: ReturnType<typeof setTimeout> | undefined
   const restore = () =>
