@@ -47,6 +47,15 @@ const UP_GAP = 0.012
 const UP_STRINGS = 4
 /** How long the piano's keys stay down on a step (s): the next chord cuts it anyway. */
 export const PIANO_STEP_HOLD = 1.6
+/** The play-along offset setting's range and step (ms; positive = the instrument plays later). */
+export const PLAY_ALONG_OFFSET_LIMIT = 150
+export const ALONG_OFFSET_STEP = 5
+
+/** The offset setting as used: a multiple of the step within the range (0 for anything odd). */
+export function clampAlongOffset(ms: number): number {
+  if (!Number.isFinite(ms)) return 0
+  return Math.max(-PLAY_ALONG_OFFSET_LIMIT, Math.min(PLAY_ALONG_OFFSET_LIMIT, Math.round(ms / ALONG_OFFSET_STEP) * ALONG_OFFSET_STEP)) || 0
+}
 
 interface Beat {
   time: number
