@@ -1,6 +1,6 @@
-// Starting a link per mode: the cloud never downloads YouTube (YouTube refuses its servers), so on the
-// hosted site every YouTube link opens the capture page (guest or signed in); only a local server downloads
-// it. Other sites go to a server (cloud or local) or ask a guest for an account. Plus the link that waits
+// Starting a link per mode: a guest's YouTube link opens the capture page, a signed-in user's the fragment
+// picker (the cloud downloads 30 s through chords-fetch); only a local server downloads the whole video.
+// Other sites go to a server (cloud or local) or ask a guest for an account. Plus the link that waits
 // for an account and is sent after signing in.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Job } from '../../types'
@@ -29,7 +29,7 @@ vi.mock('../../hooks/useRoute', async (importOriginal) => ({
 
 import { useConnection, type ConnectionState } from '../../lib/serverMode'
 import { linkTarget, startLink, submitWhenConnected } from './startLink'
-import { parseYouTubeId } from './url'
+import { parseYouTubeId, parseYouTubeStart } from './url'
 
 const VIDEO = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
 const CLOUD = 'https://chords-api-abc123-ew.a.run.app'
@@ -60,7 +60,7 @@ describe('linkTarget', () => {
   const YT = 'https://youtu.be/dQw4w9WgXcQ'
   it.each([
     ['guest', { status: 'browser', backend: null }, YT, 'capture'],
-    ['cloud', { status: 'server', backend: 'cloud' }, YT, 'capture'],
+    ['cloud', { status: 'server', backend: 'cloud' }, YT, 'clip'],
     ['local server', { status: 'server', backend: 'local' }, YT, 'server'],
     ['cloud, other site', { status: 'server', backend: 'cloud' }, 'https://soundcloud.com/a/b', 'server'],
     ['guest, other site', { status: 'browser', backend: null }, 'https://soundcloud.com/a/b', 'account'],
@@ -91,9 +91,9 @@ describe('linkTarget', () => {
   const CLOUD_CONN = { status: 'server', backend: 'cloud' } as const
   const LOCAL = { status: 'server', backend: 'local' } as const
 
-  it.each(VIDEOS)('a video, %s: listened to here on the cloud and as a guest; a local server downloads it', (url) => {
+  it.each(VIDEOS)('a video, %s: a fragment on the cloud, listened to here as a guest; a local server downloads it', (url) => {
     expect(parseYouTubeId(url)).toBe('dQw4w9WgXcQ')
-    expect(linkTarget(url, CLOUD_CONN)).toBe('capture')
+    expect(linkTarget(url, CLOUD_CONN)).toBe('clip')
     expect(linkTarget(url, GUEST)).toBe('capture')
     expect(linkTarget(url, LOCAL)).toBe('server')
   })
@@ -133,11 +133,17 @@ describe('startLink', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('signed in on the cloud: YouTube is listened to here, nothing is sent', async () => {
+  it('signed in on the cloud: YouTube opens the fragment picker, nothing is sent yet', async () => {
     cloud()
-    expect(await startLink(VIDEO)).toEqual({ kind: 'capture', videoId: 'dQw4w9WgXcQ' })
-    expect(route.navigate).toHaveBeenCalledWith('/listen/youtube/dQw4w9WgXcQ')
+    expect(await startLink(VIDEO)).toEqual({ kind: 'clip', videoId: 'dQw4w9WgXcQ' })
+    expect(route.navigate).toHaveBeenCalledWith('/youtube/dQw4w9WgXcQ')
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('a link with its own start opens the picker there', async () => {
+    cloud()
+    await startLink('https://youtu.be/dQw4w9WgXcQ?t=1m12s')
+    expect(route.navigate).toHaveBeenCalledWith('/youtube/dQw4w9WgXcQ?t=72')
   })
 
   it('a playlist / channel / clip, on the cloud or as a guest: says so, nothing is sent or opened', async () => {
@@ -235,5 +241,22 @@ describe('submitWhenConnected (a link waiting for an account)', () => {
     const submit = vi.fn()
     submitWhenConnected(VIDEO, submit)
     expect(submit).toHaveBeenCalledExactlyOnceWith(VIDEO)
+  })
+})
+
+describe('parseYouTubeStart', () => {
+  it.each([
+    ['https://youtu.be/dQw4w9WgXcQ?t=72', 72],
+    ['https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=72s', 72],
+    ['https://youtu.be/dQw4w9WgXcQ?t=1m12s', 72],
+    ['https://youtu.be/dQw4w9WgXcQ?t=1h2m3s', 3723],
+    ['https://www.youtube.com/embed/dQw4w9WgXcQ?start=30', 30],
+    ['https://www.youtube.com/watch?v=dQw4w9WgXcQ#t=45', 45],
+    ['https://youtu.be/dQw4w9WgXcQ', null],
+    ['https://youtu.be/dQw4w9WgXcQ?t=0', null],
+    ['https://youtu.be/dQw4w9WgXcQ?t=abc', null],
+    ['https://soundcloud.com/a/b?t=72', null],
+  ] as const)('%s → %s', (url, start) => {
+    expect(parseYouTubeStart(url)).toBe(start)
   })
 })

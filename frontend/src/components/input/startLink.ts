@@ -3,13 +3,15 @@ import { useConnection, whenSettled } from '../../lib/serverMode'
 import { submitUrl } from '../../hooks/useJobs'
 import { navigate, paths } from '../../hooks/useRoute'
 import type { Job } from '../../types'
-import { linkTarget, parseYouTubeId } from './url'
+import { linkTarget, parseYouTubeId, parseYouTubeStart } from './url'
 
 export { linkTarget } from './url'
 
 export type LinkStart =
   /** a server took the link: its job page is open */
   | { kind: 'job'; job: Job }
+  /** signed in on the cloud: a YouTube video opens the fragment picker */
+  | { kind: 'clip'; videoId: string }
   /** a YouTube video: played and listened to on the capture page (tab, or the on-device ways) */
   | { kind: 'capture'; videoId: string }
   /** a YouTube page that is not one video (a playlist, a channel): nothing to listen to, nothing sent */
@@ -27,6 +29,10 @@ export async function startLink(url: string, signal?: AbortSignal): Promise<Link
   if (signal?.aborted) throw new ApiError('Request aborted', 'aborted')
   const target = linkTarget(url, conn)
   const videoId = parseYouTubeId(url)
+  if (target === 'clip' && videoId) {
+    navigate(paths.clip(videoId, { t: parseYouTubeStart(url) }))
+    return { kind: 'clip', videoId }
+  }
   if (target === 'capture' && videoId) {
     navigate(paths.capture(videoId))
     return { kind: 'capture', videoId }

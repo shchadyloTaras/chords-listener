@@ -338,12 +338,14 @@ export async function retryJob(job: Job, opts?: { inBrowser?: boolean }): Promis
   const file = retryFiles.get(job.id)
   if (job.source?.type !== 'file' && job.source?.url) {
     const { url } = job.source
-    const target = linkTarget(url, useConnection.getState())
-    // the cloud is never sent YouTube links: the video is listened to in the browser instead
-    if (target === 'capture' || target === 'notVideo') {
+    const conn = useConnection.getState()
+    const target = linkTarget(url, conn)
+    // a YouTube video: signed in, the fragment picker (at the fragment this job asked for); a guest listens in the tab
+    if (target === 'clip' || target === 'capture' || target === 'notVideo') {
       const videoId = job.source.videoId ?? parseYouTubeId(url)
       if (!videoId) return false
-      navigate(paths.capture(videoId))
+      const onCloud = conn.status === 'server' && conn.backend === 'cloud'
+      navigate(onCloud ? paths.clip(videoId, { t: job.clip?.start }) : paths.capture(videoId))
       return true
     }
     await submitUrl(url)
