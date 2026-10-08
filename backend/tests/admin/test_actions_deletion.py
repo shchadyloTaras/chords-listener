@@ -18,21 +18,30 @@ from typing import Any, Optional
 import pytest
 from fastapi.testclient import TestClient
 
-from admin.fixtures import ADMIN_EMAIL, make_account_state, make_admin, make_audit, make_user
-from admin.test_actions_restriction import (  # noqa: F401  (``world`` is a fixture)
+from admin.fixtures import (
+    ADMIN_EMAIL,
+    BOSS,
+    ENGINE_INFO,
     REASON,
     SCHEDULED,
     SINCE,
+    Clock,
+    FakeVerifier,
+    H,
     admit,
     counting,
     deletion,
     journal,
+    make_account_state,
+    make_admin,
+    make_audit,
+    make_user,
+    never,
     restriction,
-    seed,
+    seed_account,
+    settings_for,
     snapshot,
 )
-from admin.test_api_users import BOSS, H, world  # noqa: F401
-from admin.test_authz import ENGINE_INFO, Clock, FakeVerifier, never, settings_for
 from app.admin.actions import DELETION_CAP, emails_match
 from app.admin.router import get_services
 from app.firestore import Aborted, FirestoreIndex
@@ -83,7 +92,7 @@ def second_admin(w: SimpleNamespace) -> None:
 
 def test_schedule_sets_purge_after_seven_days_and_restricts_at_once_in_one_commit(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     commits = counting(w)
 
     res = schedule(w)
@@ -111,7 +120,7 @@ def test_schedule_sets_purge_after_seven_days_and_restricts_at_once_in_one_commi
 
 def test_the_card_shows_the_scheduled_deletion_with_its_date(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     assert schedule(w).status_code == 200
     account = w.client.get(f"/api/admin/users/{UID}", headers=H(BOSS)).json()["account"]
     assert account["status"] == "deletion_scheduled"
@@ -121,7 +130,7 @@ def test_the_card_shows_the_scheduled_deletion_with_its_date(world) -> None:
 def test_the_prior_restriction_is_kept_inside_the_deletion_and_replaced_by_the_fixed_one(world) -> None:
     w = world()
     held = restriction(reason="автоматичні масові запити", by="someone")
-    seed(w, restriction=held)
+    seed_account(w, restriction=held)
 
     res = schedule(w)
 
@@ -137,7 +146,7 @@ def test_the_prior_restriction_is_kept_inside_the_deletion_and_replaced_by_the_f
 
 def test_new_cloud_jobs_are_refused_at_once_on_this_server(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     admit(w)                                                      # the gate has cached "not restricted"
     assert schedule(w).status_code == 200
     for kind in ("analysis", "reanalysis", "vocals"):
@@ -148,8 +157,8 @@ def test_new_cloud_jobs_are_refused_at_once_on_this_server(world) -> None:
 
 def test_scheduling_touches_only_the_account_state_and_the_journal(world) -> None:
     w = world()
-    seed(w, personal_limit={"analyses": 7, "setAt": SINCE, "byAdminUid": "x"})
-    seed(w, "u2")
+    seed_account(w, personal_limit={"analyses": 7, "setAt": SINCE, "byAdminUid": "x"})
+    seed_account(w, "u2")
     before = state(w)
 
     assert schedule(w).status_code == 200
@@ -177,7 +186,7 @@ def test_the_email_rule_ignores_case_and_surrounding_spaces_and_nothing_else() -
 @pytest.mark.parametrize("typed", ["ivan.p@example.test", "IVAN.P@EXAMPLE.TEST", "  Ivan.P@example.test  "])
 def test_the_typed_email_is_compared_without_case_or_spaces(world, typed: str) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     res = schedule(w, typed)
     assert res.status_code == 200, res.text
 
@@ -185,7 +194,7 @@ def test_the_typed_email_is_compared_without_case_or_spaces(world, typed: str) -
 @pytest.mark.parametrize("typed", ["maria@example.test", "ivan@example.test", "ivan.p@example.test.", "u1", "Ivan P@example.test"])
 def test_a_mismatched_email_does_not_schedule_and_is_not_journaled(world, typed: str) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     before, commits = snapshot(w), counting(w)
 
     res = schedule(w, typed)
@@ -197,8 +206,8 @@ def test_a_mismatched_email_does_not_schedule_and_is_not_journaled(world, typed:
 
 def test_the_email_is_not_taken_from_another_user(world) -> None:
     w = world()
-    seed(w)
-    seed(w, "u2")
+    seed_account(w)
+    seed_account(w, "u2")
     w.db.put(make_user("u2", "other@example.test"))
     assert schedule(w, "other@example.test").status_code == 422
     assert f"adminAccounts/{UID}" not in w.db.docs or not w.db.docs[f"adminAccounts/{UID}"].get("deletion")
@@ -207,7 +216,7 @@ def test_the_email_is_not_taken_from_another_user(world) -> None:
 @pytest.mark.parametrize("body", [{}, {"confirmEmail": ""}, {"confirmEmail": "   "}, {"confirmEmail": 5}])
 def test_a_missing_or_blank_confirmation_is_an_invalid_form_not_journaled(world, body: dict) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     res = w.client.post(URL, json=body, headers=H(BOSS))
     assert res.status_code == 422 and res.json()["code"] == "invalid_value"
     assert not journal(w) and not w.db.docs.get(f"adminAccounts/{UID}")
@@ -241,7 +250,7 @@ def test_self_target_is_decided_before_the_email_is_looked_at(world) -> None:
 
 def test_an_already_scheduled_deletion_is_refused_and_journaled(world) -> None:
     w = world()
-    seed(w, restriction=restriction(reason=FIXED_REASON, since=SCHEDULED), deletion=deletion(None))
+    seed_account(w, restriction=restriction(reason=FIXED_REASON, since=SCHEDULED), deletion=deletion(None))
     before = state(w)
 
     res = schedule(w)
@@ -255,14 +264,14 @@ def test_an_already_scheduled_deletion_is_refused_and_journaled(world) -> None:
 
 def test_deletion_pending_is_decided_before_the_email(world) -> None:
     w = world()
-    seed(w, restriction=restriction(reason=FIXED_REASON, since=SCHEDULED), deletion=deletion(None))
+    seed_account(w, restriction=restriction(reason=FIXED_REASON, since=SCHEDULED), deletion=deletion(None))
     res = schedule(w, "wrong@example.test")
     assert res.status_code == 409 and res.json()["code"] == "deletion_pending"
 
 
 def test_a_deletion_scheduled_meanwhile_is_seen_when_the_transaction_runs_again(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     real = w.db.commit
     calls: list[int] = []
 
@@ -283,7 +292,7 @@ def test_a_deletion_scheduled_meanwhile_is_seen_when_the_transaction_runs_again(
 
 def test_an_aborted_commit_is_retried_and_journaled_once(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     real = w.db.commit
     calls: list[int] = []
 
@@ -305,7 +314,7 @@ def test_an_aborted_commit_is_retried_and_journaled_once(world) -> None:
 def test_a_stale_login_does_not_schedule_until_the_admin_signs_in_again(world) -> None:
     w = world()
     pin_clock(w)
-    seed(w)
+    seed_account(w)
     before, commits = snapshot(w), counting(w)
 
     res = schedule(w, age_s=15 * 60 + 1)
@@ -323,7 +332,7 @@ def test_a_stale_login_does_not_schedule_until_the_admin_signs_in_again(world) -
 def test_a_login_just_inside_15_minutes_is_fresh(world) -> None:
     w = world()
     pin_clock(w)
-    seed(w)
+    seed_account(w)
     assert schedule(w, age_s=14 * 60 + 59).status_code == 200
 
 
@@ -339,7 +348,7 @@ def test_the_fresh_login_is_checked_before_the_user_is_looked_at(world) -> None:
 def test_cancelling_needs_no_fresh_login(world) -> None:
     w = world()
     pin_clock(w)
-    seed(w, restriction=restriction(reason=FIXED_REASON, since=SCHEDULED), deletion=deletion(None))
+    seed_account(w, restriction=restriction(reason=FIXED_REASON, since=SCHEDULED), deletion=deletion(None))
     res = cancel(w, age_s=3 * 3600)
     assert res.status_code == 200, res.text
 
@@ -353,7 +362,7 @@ def test_the_cap_is_ten() -> None:
 
 def test_the_11th_deletion_in_60_minutes_is_refused_and_journaled(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     in_the_window(w, 10)
     before, commits = state(w), counting(w)
 
@@ -370,7 +379,7 @@ def test_the_11th_deletion_in_60_minutes_is_refused_and_journaled(world) -> None
 
 def test_the_tenth_is_accepted(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     in_the_window(w, 9)
     assert schedule(w).status_code == 200
 
@@ -379,9 +388,9 @@ def test_two_admins_together_fill_the_cap(world) -> None:
     w = world()
     second_admin(w)
     for i in range(10):
-        seed(w, f"v{i}")
+        seed_account(w, f"v{i}")
         w.db.put(make_user(f"v{i}", f"v{i}@example.test"))
-    seed(w)
+    seed_account(w)
     for i in range(5):
         assert schedule(w, f"v{i}@example.test", f"/api/admin/users/v{i}/deletion", who=BOSS).status_code == 200
         assert schedule(w, f"v{i + 5}@example.test", f"/api/admin/users/v{i + 5}/deletion", who=OTHER).status_code == 200
@@ -397,12 +406,12 @@ def test_two_admins_together_fill_the_cap(world) -> None:
 
 def test_the_oldest_leaving_the_window_frees_a_place(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     in_the_window(w, 9)
     in_the_window(w, 1, minutes_ago=59)                                    # the 10th is still inside the window
     assert schedule(w).status_code == 429
     w2 = world()
-    seed(w2)
+    seed_account(w2)
     in_the_window(w2, 9)
     in_the_window(w2, 1, minutes_ago=61)                                   # the 10th has left it
     assert schedule(w2).status_code == 200, "an old deletion must not count"
@@ -410,7 +419,7 @@ def test_the_oldest_leaving_the_window_frees_a_place(world) -> None:
 
 def test_only_applied_deletions_count(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     in_the_window(w, 10, outcome="rejected", rejectReason="deletion_pending")      # attempts are not deletions
     in_the_window(w, 3, outcome="not_applied", refId="x")
     w.db.put(*(make_audit("deletion_cancelled", admin_uid="x", target_uid=f"c{i}", at=datetime.now(timezone.utc)) for i in range(10)))
@@ -421,9 +430,9 @@ def test_only_applied_deletions_count(world) -> None:
 def test_refusals_before_the_cap_do_not_need_a_free_place(world) -> None:
     w = world()
     in_the_window(w, 10)
-    seed(w, restriction=restriction(reason=FIXED_REASON, since=SCHEDULED), deletion=deletion(None))
+    seed_account(w, restriction=restriction(reason=FIXED_REASON, since=SCHEDULED), deletion=deletion(None))
     assert schedule(w).json()["code"] == "deletion_pending"                # decided before the cap
-    seed(w, "u3")
+    seed_account(w, "u3")
     w.db.put(make_user("u3", "three@example.test"))
     res = schedule(w, "wrong@example.test", "/api/admin/users/u3/deletion")
     assert res.status_code == 422 and res.json()["code"] == "confirm_email_mismatch"
@@ -432,16 +441,16 @@ def test_refusals_before_the_cap_do_not_need_a_free_place(world) -> None:
 
 def test_a_refused_attempt_does_not_use_up_a_place(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     in_the_window(w, 8)
     for _ in range(5):
         assert schedule(w, "wrong@example.test").status_code == 422
     assert schedule(w, ADMIN_EMAIL, SELF_URL).status_code == 409
     assert schedule(w).status_code == 200                                  # 9th
-    seed(w, "u2")
+    seed_account(w, "u2")
     w.db.put(make_user("u2", "two@example.test"))
     assert schedule(w, "two@example.test", "/api/admin/users/u2/deletion").status_code == 200   # 10th
-    seed(w, "u4")
+    seed_account(w, "u4")
     w.db.put(make_user("u4", "four@example.test"))
     assert schedule(w, "four@example.test", "/api/admin/users/u4/deletion").status_code == 429
 
@@ -450,7 +459,7 @@ def test_concurrent_requests_cannot_both_take_the_last_place(world) -> None:
     w = world()
     in_the_window(w, 9)
     for i in range(6):
-        seed(w, f"c{i}")
+        seed_account(w, f"c{i}")
         w.db.put(make_user(f"c{i}", f"c{i}@example.test"))
     codes: list[int] = []
     start = threading.Barrier(6)
@@ -473,7 +482,7 @@ def test_concurrent_requests_cannot_both_take_the_last_place(world) -> None:
 
 def test_a_failed_journal_write_leaves_the_account_unchanged(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     before = snapshot(w)
     w.db.fail_audit = True
 
@@ -495,7 +504,7 @@ def test_a_refusal_that_cannot_be_journaled_is_not_applied(world) -> None:
 
 def test_a_database_that_fails_while_reading_is_not_applied(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     before = snapshot(w)
     from app.firestore import IndexError_
 
@@ -510,7 +519,7 @@ def test_a_database_that_fails_while_reading_is_not_applied(world) -> None:
 
 def test_a_non_admin_cannot_schedule_or_cancel(world) -> None:
     w = world()
-    seed(w, restriction=restriction(reason=FIXED_REASON, since=SCHEDULED), deletion=deletion(None))
+    seed_account(w, restriction=restriction(reason=FIXED_REASON, since=SCHEDULED), deletion=deletion(None))
     before = snapshot(w)
     assert schedule(w, who="mallory").status_code == 404
     assert cancel(w, who="mallory").status_code == 404
@@ -526,7 +535,7 @@ def test_an_unknown_user_is_a_404_and_leaves_no_record(world) -> None:
 
 def test_a_purged_user_is_a_404(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     w.db.docs[f"adminTombstones/{UID}"] = {"purgedAt": "2026-10-01T00:00:00Z"}
     assert schedule(w).status_code == 404 and cancel(w).status_code == 404
     assert not journal(w)
@@ -537,7 +546,7 @@ def test_a_purged_user_is_a_404(world) -> None:
 
 def test_cancelling_without_a_prior_restriction_returns_to_the_normal_state(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     assert schedule(w).status_code == 200
     commits = counting(w)
 
@@ -560,7 +569,7 @@ def test_cancelling_without_a_prior_restriction_returns_to_the_normal_state(worl
 def test_cancelling_restores_the_prior_restriction_exactly(world) -> None:
     w = world()
     held = restriction(reason="автоматичні масові запити", by="someone")
-    seed(w, restriction=held)
+    seed_account(w, restriction=held)
     before = w.db.docs[f"adminAccounts/{UID}"]["restriction"]
     assert schedule(w).status_code == 200
     assert w.db.docs[f"adminAccounts/{UID}"]["restriction"]["reason"] == FIXED_REASON
@@ -582,7 +591,7 @@ def test_cancelling_restores_the_prior_restriction_exactly(world) -> None:
 
 def test_a_restriction_put_on_through_the_api_comes_back_the_same(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     assert w.client.put(f"/api/admin/users/{UID}/restriction", json={"reason": REASON}, headers=H(BOSS)).status_code == 200
     before = w.db.docs[f"adminAccounts/{UID}"]["restriction"]
     assert schedule(w).status_code == 200 and cancel(w).status_code == 200
@@ -591,7 +600,7 @@ def test_a_restriction_put_on_through_the_api_comes_back_the_same(world) -> None
 
 def test_after_cancelling_the_restriction_can_be_changed_again(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     assert schedule(w).status_code == 200 and cancel(w).status_code == 200
     assert w.client.put(f"/api/admin/users/{UID}/restriction", json={"reason": "x"}, headers=H(BOSS)).status_code == 200
 
@@ -599,7 +608,7 @@ def test_after_cancelling_the_restriction_can_be_changed_again(world) -> None:
 def test_cancelling_keeps_the_personal_limit_and_the_counters_untouched(world) -> None:
     w = world()
     limit = {"analyses": 7, "setAt": SINCE, "byAdminUid": "x"}
-    seed(w, personal_limit=limit)
+    seed_account(w, personal_limit=limit)
     assert schedule(w).status_code == 200
     stored = w.db.docs[f"adminAccounts/{UID}"]["personalLimit"]
     assert cancel(w).status_code == 200
@@ -608,7 +617,7 @@ def test_cancelling_keeps_the_personal_limit_and_the_counters_untouched(world) -
 
 def test_nothing_to_cancel_is_not_scheduled_and_journaled(world) -> None:
     w = world()
-    seed(w, restriction=restriction())
+    seed_account(w, restriction=restriction())
     before = state(w)
 
     res = cancel(w)
@@ -622,7 +631,7 @@ def test_nothing_to_cancel_is_not_scheduled_and_journaled(world) -> None:
 
 def test_a_user_with_no_admin_state_at_all_is_not_scheduled(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     res = cancel(w)
     assert res.status_code == 409 and res.json()["code"] == "not_scheduled"
     assert [r["rejectReason"] for r in journal(w)] == ["not_scheduled"]
@@ -633,7 +642,7 @@ def test_cancelling_after_the_window_has_passed_is_not_scheduled(world) -> None:
     w = world()
     past = datetime.now(timezone.utc) - timedelta(minutes=1)
     held = {"scheduledAt": past - timedelta(days=7), "purgeAfter": past, "byAdminUid": "someone", "priorRestriction": None}
-    seed(w, restriction=restriction(reason=FIXED_REASON, since=past - timedelta(days=7)), deletion=held)
+    seed_account(w, restriction=restriction(reason=FIXED_REASON, since=past - timedelta(days=7)), deletion=held)
     before = state(w)
 
     res = cancel(w)
@@ -647,13 +656,13 @@ def test_cancelling_on_the_last_day_still_works(world) -> None:
     w = world()
     soon = datetime.now(timezone.utc) + timedelta(hours=1)
     held = {"scheduledAt": soon - timedelta(days=7), "purgeAfter": soon, "byAdminUid": "someone", "priorRestriction": None}
-    seed(w, restriction=restriction(reason=FIXED_REASON, since=soon - timedelta(days=7)), deletion=held)
+    seed_account(w, restriction=restriction(reason=FIXED_REASON, since=soon - timedelta(days=7)), deletion=held)
     assert cancel(w).status_code == 200
 
 
 def test_a_failed_journal_write_leaves_the_scheduled_deletion_in_place(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     assert schedule(w).status_code == 200
     before = snapshot(w)
     w.db.fail_audit = True
@@ -668,7 +677,7 @@ def test_a_failed_journal_write_leaves_the_scheduled_deletion_in_place(world) ->
 
 def test_cancelling_twice_the_second_time_is_not_scheduled(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     assert schedule(w).status_code == 200 and cancel(w).status_code == 200
     assert cancel(w).json()["code"] == "not_scheduled"
 
@@ -679,7 +688,7 @@ def test_cancelling_twice_the_second_time_is_not_scheduled(world) -> None:
 def test_s2_1_admin_actions_work_when_the_profile_document_is_missing(world) -> None:
     """The rules let a user delete their own ``users/{uid}``; the account is still known from ``adminAccounts``."""
     w = world()
-    seed(w, restriction=restriction(reason=FIXED_REASON), deletion=deletion())
+    seed_account(w, restriction=restriction(reason=FIXED_REASON), deletion=deletion())
     del w.db.docs[f"users/{UID}"]
     w.db.docs[f"adminAccounts/{UID}"]["deletion"]["purgeAfter"] = datetime.now(timezone.utc) + timedelta(days=3)
 
@@ -698,7 +707,7 @@ def test_s2_4_cancel_refuses_once_the_tombstone_exists_inside_the_transaction(wo
 
     w = world()
     soon = datetime.now(timezone.utc) + timedelta(days=1)
-    seed(w, restriction=restriction(reason=FIXED_REASON), deletion={**deletion(), "purgeAfter": soon})
+    seed_account(w, restriction=restriction(reason=FIXED_REASON), deletion={**deletion(), "purgeAfter": soon})
     w.db.docs[f"adminTombstones/{UID}"] = {"status": "purging"}              # the purge began after the request's check
     before = state(w)
 
@@ -715,7 +724,7 @@ def test_s2_4_cancel_uses_the_time_of_the_commit_not_the_time_of_the_request(wor
 
     w = world()
     past = datetime.now(timezone.utc) - timedelta(minutes=1)
-    seed(w, restriction=restriction(reason=FIXED_REASON), deletion={**deletion(), "purgeAfter": past})
+    seed_account(w, restriction=restriction(reason=FIXED_REASON), deletion={**deletion(), "purgeAfter": past})
     with pytest.raises(SourceError) as err:
         actions.cancel_deletion(w.services, admin_uid=BOSS, admin_email=ADMIN_EMAIL, uid=UID,
                                 now=past - timedelta(hours=1))               # a stale ``now``

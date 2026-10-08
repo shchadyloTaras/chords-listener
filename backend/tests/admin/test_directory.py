@@ -1,5 +1,5 @@
 """The email-index directory (ADR-0009, data-model Aggregate 5): shard load, incremental catch-up, full sync and
-in-memory substring search. Unit tests run against ``FakeDb``, an in-memory stand-in for ``FirestoreIndex`` that
+in-memory substring search. Unit tests run against ``DirectoryDb``, an in-memory stand-in for ``FirestoreIndex`` that
 applies the real REST write bodies; the tests at the bottom run the same flows on the Firestore emulator
 (only when FIRESTORE_EMULATOR_HOST is set)."""
 from __future__ import annotations
@@ -13,7 +13,7 @@ from typing import Any, Optional
 
 import pytest
 
-from admin.fixtures import MemDb
+from admin.fixtures import DirectoryDb
 from app.admin import directory as dirmod
 from app.admin.directory import Directory
 from app.firestore import FirestoreIndex
@@ -22,27 +22,8 @@ T0 = datetime(2026, 10, 7, 12, 0, 0, tzinfo=timezone.utc)
 INDEX = "adminEmailIndex"
 
 
-def iso(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
 def parse_ts(v: Any) -> datetime:
     return v if isinstance(v, datetime) else datetime.fromisoformat(v.replace("Z", "+00:00"))
-
-
-class FakeDb(MemDb):
-    """The shared ``MemDb`` plus the seeding helpers of the directory tests."""
-
-    def add_user(self, uid: str, email: Optional[str], created: Optional[datetime]) -> None:
-        data: dict[str, Any] = {"settings": {"theme": "dark"}}
-        if email is not None:
-            data["email"] = email
-        if created is not None:
-            data["createdAt"] = iso(created)
-        self.docs[f"users/{uid}"] = data
-
-    def shard_ids(self) -> list[str]:
-        return sorted(p.split("/")[1] for p in self.docs if p.startswith(f"{INDEX}/"))
 
 
 def email_of_user(i: int) -> str:
@@ -50,8 +31,8 @@ def email_of_user(i: int) -> str:
 
 
 @pytest.fixture
-def db() -> FakeDb:
-    return FakeDb()
+def db() -> DirectoryDb:
+    return DirectoryDb()
 
 
 @pytest.fixture
@@ -76,7 +57,7 @@ def make_dir(db, clock):
     return make
 
 
-def seed_ivans(db: FakeDb) -> None:
+def seed_ivans(db: DirectoryDb) -> None:
     db.add_user("u1", "Ivan.P@Example.Test", T0 - timedelta(days=3))
     db.add_user("u2", "John.Ivanov@example.test", T0 - timedelta(days=2))
     db.add_user("u3", "maria@example.test", T0 - timedelta(days=1))

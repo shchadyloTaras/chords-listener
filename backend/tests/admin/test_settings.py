@@ -1,7 +1,7 @@
 """Runtime settings (ADR-0005, data-model Aggregate 6): the 30 s lazy cache, the env fallback and the writers of
 ``adminConfig/settings`` and its public mirror ``publicStatus/current`` (AC-24, AC-27, AC-29).
 
-Unit tests run on ``FakeDb`` (it applies the real REST write bodies, update masks included); the last test runs the
+Unit tests run on ``MemDb`` (it applies the real REST write bodies, update masks included); the last test runs the
 same write -> read flow on the Firestore emulator (only when FIRESTORE_EMULATOR_HOST is set)."""
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from admin.test_directory import FakeDb
+from admin.fixtures import MemDb
 from app.admin import settings as settings_mod
 from app.admin.models import BannerIn, DefaultLimitsIn
 from app.admin.settings import CACHE_TTL_S, PUBLIC_FIELDS, PublicStatus, RuntimeSettings
@@ -38,8 +38,8 @@ class Clock:
 
 
 @pytest.fixture
-def db() -> FakeDb:
-    return FakeDb()
+def db() -> MemDb:
+    return MemDb()
 
 
 @pytest.fixture
@@ -57,21 +57,21 @@ def ps(db) -> PublicStatus:
     return PublicStatus(db)
 
 
-def seed_settings(db: FakeDb, **over: Any) -> None:
+def seed_settings(db: MemDb, **over: Any) -> None:
     db.docs[SETTINGS] = {"limits": dict(STORED_LIMITS), "switches": dict(OFF), "updatedBy": "admin-1",
                          "updatedAt": STAMP, **over}
 
 
-def seed_public(db: FakeDb, **over: Any) -> None:
+def seed_public(db: MemDb, **over: Any) -> None:
     db.docs[PUBLIC] = {"banner": {"enabled": False, "uk": "", "en": ""}, "switches": dict(OFF),
                        "updatedAt": STAMP, **over}
 
 
-def commit(db: FakeDb, *ops: dict) -> None:
+def commit(db: MemDb, *ops: dict) -> None:
     db.commit(list(ops))
 
 
-def reads(db: FakeDb) -> int:
+def reads(db: MemDb) -> int:
     return sum(db.reads.values())
 
 

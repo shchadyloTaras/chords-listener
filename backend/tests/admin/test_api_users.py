@@ -11,111 +11,46 @@ from __future__ import annotations
 import base64
 import json
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 import pytest
 from fastapi.testclient import TestClient
 
 from admin.fixtures import (
     ADMIN_EMAIL,
+    BOSS,
+    ENGINE_INFO,
     HOSTILE_STRINGS,
-    MemDb,
+    LOGIN_AT,
+    Clock,
+    FakeVerifier,
+    H,
     Seed,
+    encode_cursor,
+    iso,
     make_account_state,
     make_admin,
     make_job,
     make_tracks,
     make_user,
+    never,
+    settings_for,
+    utc_today,
+    write_quota,
 )
-from admin.test_authz import ENGINE_INFO, Clock, FakeVerifier, H, never, settings_for
 from app.admin.router import AdminServices, get_services
-from app.firestore import FirestoreIndex, IndexError_
+from app.firestore import FirestoreIndex
 from app.main import create_app
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
-
-BOSS = "boss"
-LOGIN_AT = datetime(2026, 10, 7, 18, 20, tzinfo=timezone.utc)
-DEFAULT_LIMITS = {"analyses": 40, "vocals": 15, "jobs": 2, "maxDurationMin": 15, "maxUploadMb": 50}
-def _iso(when: datetime) -> str:
-    return when.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-# --------------------------------------------------------------------------- the fake Firestore
-
-
-class UsersDb(MemDb):
-    """``MemDb`` whose commits that write the journal can be made to fail (``fail_audit``)."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.fail_audit = False
-
-    def audit_docs(self) -> list[dict[str, Any]]:
-        return sorted((d for p, d in self.docs.items() if p.startswith("adminAudit/")), key=lambda d: d["at"])
-
-    def commit(self, writes: list[dict[str, Any]], *, transaction: Optional[str] = None) -> None:
-        if self.fail_audit and any("/adminAudit/" in (w.get("update", {}).get("name", "")) for w in writes):
-            raise IndexError_("Firestore is down", retryable=True)
-        super().commit(writes, transaction=transaction)
-
-
-# --------------------------------------------------------------------------- the world
-
-
-@pytest.fixture
-def world(tmp_path: Path):
-    clients: list[TestClient] = []
-
-    def build(login: Callable[[str], Optional[datetime]] = lambda uid: LOGIN_AT) -> SimpleNamespace:
-        db = UsersDb()
-        db.put(make_admin(BOSS), make_user(BOSS, ADMIN_EMAIL))
-        db.docs["adminConfig/settings"] = {
-            "limits": dict(DEFAULT_LIMITS),
-            "switches": {"analysesPaused": False, "youtubeEnabled": True, "vocalsEnabled": True},
-            "updatedBy": None, "updatedAt": "2026-10-01T00:00:00Z",
-        }
-        app = create_app(
-            settings_for(tmp_path), analyzer=never, engine_info_fn=lambda: ENGINE_INFO,
-            token_verifier=FakeVerifier(Clock()), admin_db=db,
-        )
-        services = get_services(app)
-        services.last_login = login
-        client = TestClient(app)
-        client.__enter__()
-        clients.append(client)
-        return SimpleNamespace(
-            db=db, app=app, client=client, services=services, data=tmp_path / "data",
-            get=lambda path, who=BOSS, **kw: client.get(path, headers=H(who), **kw),
-        )
-
-    yield build
-    for c in clients:
-        c.__exit__(None, None, None)
-
-
-def write_quota(w: SimpleNamespace, uid: str, **counters: int) -> None:
-    folder = w.app.state.store.user_dir(uid)
-    folder.mkdir(parents=True, exist_ok=True)
-    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    (folder / "quota.json").write_text(json.dumps({"day": day, **counters}))
-
-
-def utc_today() -> date:
-    return datetime.now(timezone.utc).date()
 
 
 def ivans(w: SimpleNamespace) -> None:
     w.db.put(make_user("u1", "Ivan.P@example.test"), make_user("u2", "John.Ivanov@example.test"),
              make_user("u3", "maria@example.test"))
-
-
-def encode_cursor(created_at: str, track_id: str) -> str:
-    raw = json.dumps({"c": created_at, "i": track_id}, separators=(",", ":")).encode()
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
 # =========================================================================== AC-03 / AC-04 / AC-10b / AC-33b: search
@@ -573,7 +508,7 @@ def rich_track(uid: str, track_id: str, title: str, created: datetime) -> Seed:
         "id": track_id, "title": title, "artist": "Some Artist", "duration": 215.4, "thumbnail": "https://example.test/t.jpg",
         "source": {"type": "youtube", "url": "https://example.test/watch?v=abc", "videoId": "abc"},
         "key": {"root": "C", "mode": "major"}, "tempo": 120.0, "chordCount": 88, "edited": True, "vocals": True,
-        "stems": ["vocals", "instruments"], "createdAt": _iso(created), "version": 3, "publishedAt": created,
+        "stems": ["vocals", "instruments"], "createdAt": iso(created), "version": 3, "publishedAt": created,
         "sizeBytes": 7_340_032, "audioUrl": "https://example.test/audio.mp3", "chords": [{"start": 0, "chord": "C"}],
         "notes": "private notes",
     })

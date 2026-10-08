@@ -20,7 +20,7 @@ from app.models import AnalysisResult, Settings, TrackPatch, TrackSummary
 from app.publish import NullPublisher, Publisher
 from app.storage import TrackStore, read_json, write_json_atomic
 from app.users import user_context
-from tests.test_cloud import BUCKET, FakeGcs, FakeIndex
+from cloud_fixtures import BUCKET, FakeGcs, FakeIndex
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 

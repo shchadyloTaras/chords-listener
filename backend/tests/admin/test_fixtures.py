@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -277,6 +278,22 @@ def test_the_guard_checks_aggregations_and_their_kinds():
         db.aggregate("users/u1/tracks", {"n": "count", "b": ("sum", "sizeBytes")})
     with pytest.raises(AssertionError, match="firestore.indexes.json"):
         db.count("adminJobs", filters=[("uid", "==", "u1"), ("finishedAt", "<", T0)])
+
+
+# ----------------------------------------------------------------------------- where shared fakes live (T63)
+
+
+def test_no_admin_test_module_imports_another_test_module():
+    """The admin feature's shared fakes, helpers and fixtures live in ``fixtures`` modules and ``conftest.py``: a test
+    module that imports another one runs (and depends on) that module's setup, and a rename there breaks unrelated
+    tests. Checked over the admin tests, the admission and grant tests and the cloud fixtures they share."""
+    tests = Path(__file__).resolve().parents[1]
+    files = [*sorted((tests / "admin").glob("*.py")), tests / "test_admission.py", tests / "test_admin_grant.py",
+             tests / "cloud_fixtures.py"]
+    importing = re.compile(r"^\s*(?:from|import)\s+(?:tests\.)?(?:admin\.)?test_\w+", re.MULTILINE)
+    offenders = [f"{path.relative_to(tests)}: {m.group(0).strip()}"
+                 for path in files for m in importing.finditer(path.read_text(encoding="utf-8"))]
+    assert offenders == []
 
 
 # ----------------------------------------------------------------------------- against the emulator

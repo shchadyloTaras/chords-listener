@@ -1,7 +1,7 @@
 """GET /api/admin/overview and GET /api/admin/settings (AC-01, US-01; docs/features/admin/contracts/openapi.yaml).
 
-Unit tests run through the real app on ``FakeDb``, an in-memory stand-in for ``FirestoreIndex`` (the shared ``MemDb`` through
-``FakeDb``). The last test runs the same flow on the Firestore emulator (only when
+Unit tests run through the real app on ``DirectoryDb``, an in-memory stand-in for ``FirestoreIndex`` (the shared ``MemDb`` through
+``DirectoryDb``). The last test runs the same flow on the Firestore emulator (only when
 FIRESTORE_EMULATOR_HOST is set) and checks the read budget of the screen (NFR: at most 200 reads).
 """
 from __future__ import annotations
@@ -15,15 +15,18 @@ import pytest
 from fastapi.testclient import TestClient
 
 from admin.fixtures import (
+    ENGINE_INFO,
+    DirectoryDb,
+    Seed,
+    iso,
     make_admin,
     make_stats_day,
     make_user,
+    never,
     seed,
     seed_synthetic_users,
-    Seed,
+    settings_for,
 )
-from admin.test_authz import ENGINE_INFO, never, settings_for
-from admin.test_directory import FakeDb, iso
 from app.admin import router as router_mod
 from app.admin.authz import AdminAuthz
 from app.main import create_app
@@ -58,12 +61,12 @@ class Verifier:
         return self.verify_claims(token)[0]
 
 
-def put(db: FakeDb, s: Seed) -> None:
-    """Store a fixture document the way ``FakeDb`` holds one read back (timestamps as ISO strings)."""
+def put(db: DirectoryDb, s: Seed) -> None:
+    """Store a fixture document the way ``DirectoryDb`` holds one read back (timestamps as ISO strings)."""
     db.docs[s.path] = {k: iso(v) if isinstance(v, datetime) else v for k, v in s.data.items()}
 
 
-def seed_config(db: FakeDb, **switches: bool) -> None:
+def seed_config(db: DirectoryDb, **switches: bool) -> None:
     db.docs[SETTINGS] = {"limits": dict(LIMITS), "switches": {**SWITCHES, **switches}, "updatedBy": ADMIN, "updatedAt": STAMP}
     db.docs[PUBLIC] = {
         "banner": {"enabled": False, "uk": "Технічні роботи", "en": "Maintenance"},
@@ -103,8 +106,8 @@ def make_client(tmp_path: Path):
 
 
 @pytest.fixture
-def db() -> FakeDb:
-    d = FakeDb()
+def db() -> DirectoryDb:
+    d = DirectoryDb()
     put(d, make_admin(ADMIN))
     seed_config(d)
     return d

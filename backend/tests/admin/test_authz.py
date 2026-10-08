@@ -18,7 +18,16 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
-from admin.fixtures import MemDb
+from admin.fixtures import (
+    ENGINE_INFO,
+    SIGN_IN_T0,
+    Clock,
+    FakeVerifier,
+    H,
+    MemDb,
+    never,
+    settings_for,
+)
 from app.admin.authz import (
     FRESH_LOGIN_MAX_AGE_S,
     AdminAuthz,
@@ -30,31 +39,17 @@ from app.admin.authz import (
 )
 from app.admin.router import new_admin_router
 from app.admin.router import router as admin_router
-from app.auth import AuthError, FirebaseTokenVerifier, auth_time_of
+from app.auth import FirebaseTokenVerifier, auth_time_of
 from app.firestore import Document, IndexError_
 from app.main import create_app
-from app.models import Settings
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
-ENGINE_INFO = {"name": "fake", "version": "1.0", "features": {}}
 PROJECT = "build-chords-listener"
-SIGNING_KEY = "test-signing-key-0123456789abcdef"
-T0 = 1_800_000_000.0
+T0 = SIGN_IN_T0
 
 
 # --------------------------------------------------------------------------- fakes
-
-
-class Clock:
-    def __init__(self, now: float = T0) -> None:
-        self.now = now
-
-    def __call__(self) -> float:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
 
 
 class FakeDb(MemDb):
@@ -75,27 +70,6 @@ class FakeDb(MemDb):
         if uid in self.admins:
             self.docs[path] = {"grantedAt": "2026-10-01T00:00:00Z"}
         return super().get(path)
-
-
-class FakeVerifier:
-    """``tok-<uid>`` is a sign-in just now, ``tok-<uid>:<seconds>`` one that many seconds ago."""
-
-    def __init__(self, clock: Clock, *, with_auth_time: bool = True) -> None:
-        self.clock = clock
-        self.with_auth_time = with_auth_time
-
-    def verify_claims(self, token: str) -> tuple[str, Optional[float]]:
-        if not token.startswith("tok-") or len(token) <= 4:
-            raise AuthError("Invalid token")
-        uid, _, age = token[4:].partition(":")
-        return uid, (self.clock() - float(age or 0)) if self.with_auth_time else None
-
-    def verify(self, token: str) -> str:
-        return self.verify_claims(token)[0]
-
-
-def H(uid: str, age_s: Optional[float] = None) -> dict[str, str]:
-    return {"Authorization": f"Bearer tok-{uid}" + (f":{age_s}" if age_s is not None else "")}
 
 
 def build_router(calls: list[str]) -> APIRouter:
@@ -133,21 +107,6 @@ def build_router(calls: list[str]) -> APIRouter:
         return {"auth_time": auth_time_of(request)}
 
     return router
-
-
-def settings_for(tmp_path: Path, *, cloud: bool = True) -> Settings:
-    return Settings(
-        data_dir=tmp_path / "data",
-        frontend_dist=tmp_path / "no-dist",
-        auth="firebase" if cloud else "off",
-        signing_key=SIGNING_KEY,
-        publish=False,
-        allowed_hosts=("testserver", "localhost"),
-    )
-
-
-def never(*_: Any, **__: Any) -> dict:
-    raise AssertionError("the engine must not run in these tests")
 
 
 @pytest.fixture

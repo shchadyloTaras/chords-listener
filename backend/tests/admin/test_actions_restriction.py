@@ -9,68 +9,50 @@ commit abort (contention) to see the transaction read again. ``fail_audit`` make
 from __future__ import annotations
 
 import copy
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 import pytest
 from fastapi.testclient import TestClient
 
-from admin.fixtures import ADMIN_EMAIL, make_account_state, make_tracks, make_user
-from admin.test_api_users import BOSS, H, world, write_quota  # noqa: F401  (``world`` is a fixture)
-from admin.test_authz import ENGINE_INFO, Clock, FakeVerifier, never, settings_for
+from admin.fixtures import (
+    ACCOUNT_UID,
+    ADMIN_EMAIL,
+    BOSS,
+    ENGINE_INFO,
+    REASON,
+    SCHEDULED,
+    SINCE,
+    Clock,
+    FakeVerifier,
+    H,
+    admit,
+    counting,
+    deletion,
+    journal,
+    make_account_state,
+    make_tracks,
+    make_user,
+    never,
+    restriction,
+    seed_account,
+    settings_for,
+    snapshot,
+    write_quota,
+)
 from app.admission import STATE_TTL_S, Admission
 from app.admin.router import get_services
-from app.firestore import Aborted, FirestoreIndex, to_value
+from app.firestore import Aborted, FirestoreIndex
 from app.main import create_app
 from app.quotas import QuotaExceeded
 from app.sources import SourceError
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
-UID = "u1"
+UID = ACCOUNT_UID
 URL = f"/api/admin/users/{UID}/restriction"
 SELF_URL = f"/api/admin/users/{BOSS}/restriction"
-REASON = "автоматичні масові запити"
-SINCE = datetime(2026, 10, 1, 9, 0, tzinfo=timezone.utc)
-SCHEDULED = datetime(2026, 10, 5, 9, 0, tzinfo=timezone.utc)
-
-
-def seed(w: SimpleNamespace, uid: str = UID, **account: Any) -> None:
-    w.db.put(make_user(uid, "Ivan.P@example.test", created_at=datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc)))
-    if account:
-        w.db.put(make_account_state(uid, **account))
-    serve_transaction_reads(w.db)
-
-
-def serve_transaction_reads(db: Any) -> None:
-    """``Transaction.get`` reads through ``:batchGet``, which the shared fake does not serve: add it to this one."""
-    if getattr(db, "_batch_get_served", False):
-        return
-    plain = db._post
-
-    def post(path: str, body: dict) -> Any:
-        if path != ":batchGet":
-            return plain(path, body)
-        rows = []
-        for name in body["documents"]:
-            p = name.split("/documents/", 1)[1]
-            rows.append({"found": {"name": name, "fields": {k: to_value(v) for k, v in db.docs[p].items()}}}
-                        if p in db.docs else {"missing": name})
-        return rows
-
-    db._post = post
-    db._batch_get_served = True
-
-
-def restriction(since: datetime = SINCE, reason: str = REASON, by: str = "someone") -> dict[str, Any]:
-    return {"reason": reason, "since": since, "byAdminUid": by}
-
-
-def deletion(restricted_before: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    return {"scheduledAt": SCHEDULED, "purgeAfter": SCHEDULED + timedelta(days=7), "byAdminUid": "someone",
-            "priorRestriction": restricted_before}
 
 
 def restrict(w: SimpleNamespace, reason: Any = REASON, url: str = URL, who: str = BOSS):
@@ -81,37 +63,12 @@ def lift(w: SimpleNamespace, url: str = URL, who: str = BOSS):
     return w.client.delete(url, headers=H(who))
 
 
-def journal(w: SimpleNamespace) -> list[dict[str, Any]]:
-    return w.db.audit_docs()
-
-
-def snapshot(w: SimpleNamespace) -> dict[str, Any]:
-    return copy.deepcopy(w.db.docs)
-
-
-def counting(w: SimpleNamespace) -> list[int]:
-    """A one-element list that holds the number of commits made so far."""
-    n = [0]
-    real = w.db.commit
-
-    def commit(writes, *, transaction=None):
-        real(writes, transaction=transaction)
-        n[0] += 1
-
-    w.db.commit = commit  # type: ignore[method-assign]
-    return n
-
-
-def admit(w: SimpleNamespace, kind: str = "analysis", *, uid: str = UID) -> None:
-    w.app.state.admission.check(uid, kind, "file", running=0, quotas=w.app.state.jobs.quotas)
-
-
 # =========================================================================== AC-16: restrictUser
 
 
 def test_restriction_is_stored_with_reason_since_and_admin_and_journaled_in_one_commit(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     commits = counting(w)
 
     res = restrict(w)
@@ -133,7 +90,7 @@ def test_restriction_is_stored_with_reason_since_and_admin_and_journaled_in_one_
 
 def test_the_card_shows_the_restricted_state_with_reason_and_date(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     assert restrict(w).status_code == 200
     account = w.client.get(f"/api/admin/users/{UID}", headers=H(BOSS)).json()["account"]
     assert account["status"] == "restricted"
@@ -142,13 +99,13 @@ def test_the_card_shows_the_restricted_state_with_reason_and_date(world) -> None
 
 def test_the_reason_is_trimmed(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     assert restrict(w, f"  {REASON}\n").json()["restriction"]["reason"] == REASON
 
 
 def test_restricting_keeps_the_personal_limit_and_the_counters(world) -> None:
     w = world()
-    seed(w, personal_limit={"analyses": 100, "setAt": SINCE, "byAdminUid": "someone"})
+    seed_account(w, personal_limit={"analyses": 100, "setAt": SINCE, "byAdminUid": "someone"})
     write_quota(w, UID, analyses=12, vocals=3)
     assert restrict(w).status_code == 200
     assert w.db.docs[f"adminAccounts/{UID}"]["personalLimit"]["analyses"] == 100
@@ -158,7 +115,7 @@ def test_restricting_keeps_the_personal_limit_and_the_counters(world) -> None:
 
 def test_restricting_again_changes_the_reason_and_journals_the_old_one(world) -> None:
     w = world()
-    seed(w, restriction=restriction(reason="spam"))
+    seed_account(w, restriction=restriction(reason="spam"))
 
     res = restrict(w, "bots")
 
@@ -171,7 +128,7 @@ def test_restricting_again_changes_the_reason_and_journals_the_old_one(world) ->
 
 def test_a_restricted_users_new_cloud_jobs_are_refused_at_once_on_this_server(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     admit(w)                                                      # the gate has cached "not restricted"
     assert restrict(w).status_code == 200
     for kind in ("analysis", "reanalysis", "vocals"):
@@ -183,7 +140,7 @@ def test_a_restricted_users_new_cloud_jobs_are_refused_at_once_on_this_server(wo
 def test_another_server_instance_refuses_within_a_minute(world) -> None:
     """A second instance keeps its own cache of the account (60 s): it refuses by then, not before it must."""
     w = world()
-    seed(w)
+    seed_account(w)
     mono = [1000.0]
     other = Admission(w.db, w.services.settings, monotonic=lambda: mono[0])
     quotas = w.app.state.jobs.quotas
@@ -200,7 +157,7 @@ def test_another_server_instance_refuses_within_a_minute(world) -> None:
 def test_the_reason_never_reaches_the_user(world) -> None:
     w = world()
     secret = "secret-reason-for-admins-only"
-    seed(w)
+    seed_account(w)
     assert restrict(w, secret).status_code == 200
     with pytest.raises(SourceError) as info:
         admit(w)
@@ -220,7 +177,7 @@ def test_the_reason_never_reaches_the_user(world) -> None:
 def test_restricting_touches_only_the_account_state_and_the_journal(world) -> None:
     """Accepted jobs keep running: nothing about jobs, songs or counters is written or stopped by a restriction."""
     w = world()
-    seed(w)
+    seed_account(w)
     w.db.put(*make_tracks(UID, 3))
     before = snapshot(w)
     assert restrict(w).status_code == 200
@@ -232,7 +189,7 @@ def test_restricting_touches_only_the_account_state_and_the_journal(world) -> No
 
 def test_lifting_restores_cloud_analysis_and_loses_nothing(world) -> None:
     w = world()
-    seed(w, restriction=restriction())
+    seed_account(w, restriction=restriction())
     w.db.put(*make_tracks(UID, 3))
     library = {p: copy.deepcopy(d) for p, d in w.db.docs.items() if p.startswith(f"users/{UID}")}
     with pytest.raises(SourceError):
@@ -252,7 +209,7 @@ def test_lifting_restores_cloud_analysis_and_loses_nothing(world) -> None:
 
 def test_lifting_keeps_the_personal_limit(world) -> None:
     w = world()
-    seed(w, restriction=restriction(), personal_limit={"analyses": 100, "setAt": SINCE, "byAdminUid": "someone"})
+    seed_account(w, restriction=restriction(), personal_limit={"analyses": 100, "setAt": SINCE, "byAdminUid": "someone"})
     commits = counting(w)
     assert lift(w).status_code == 200
     assert commits[0] == 1
@@ -262,7 +219,7 @@ def test_lifting_keeps_the_personal_limit(world) -> None:
 def test_lifting_when_not_restricted_is_not_set_and_not_journaled(world) -> None:
     for account in ({}, {"restriction": None}):
         w = world()
-        seed(w, **account)
+        seed_account(w, **account)
         before, commits = snapshot(w), counting(w)
 
         res = lift(w)
@@ -292,7 +249,7 @@ def test_an_admin_cannot_restrict_their_own_account_and_the_attempt_is_journaled
 
 def test_the_journal_shows_the_search_the_card_view_and_the_refused_attempt(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     assert w.get("/api/admin/users", params={"q": "ivan"}).status_code == 200
     assert w.get(f"/api/admin/users/{UID}").status_code == 200
     assert restrict(w, url=SELF_URL).status_code == 409
@@ -313,7 +270,7 @@ def test_the_journal_shows_the_search_the_card_view_and_the_refused_attempt(worl
 def test_restriction_changes_are_refused_while_deletion_is_scheduled_and_journaled(world, call: Callable) -> None:
     w = world()
     held = restriction(reason="deletion scheduled", since=SCHEDULED)
-    seed(w, restriction=held, deletion=deletion(None))
+    seed_account(w, restriction=held, deletion=deletion(None))
     before, commits = snapshot(w), counting(w)
 
     res = call(w)
@@ -330,7 +287,7 @@ def test_restriction_changes_are_refused_while_deletion_is_scheduled_and_journal
 def test_a_deletion_scheduled_meanwhile_is_seen_when_the_transaction_runs_again(world) -> None:
     """Contention aborts the first commit; the retry reads the account again, finds the deletion and refuses."""
     w = world()
-    seed(w)
+    seed_account(w)
     real = w.db.commit
     calls: list[int] = []
 
@@ -352,7 +309,7 @@ def test_a_deletion_scheduled_meanwhile_is_seen_when_the_transaction_runs_again(
 
 def test_an_aborted_commit_is_retried_and_journaled_once(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     real = w.db.commit
     attempts: list[int] = []
 
@@ -378,7 +335,7 @@ def test_an_aborted_commit_is_retried_and_journaled_once(world) -> None:
 @pytest.mark.parametrize("body", [{}, {"reason": ""}, {"reason": "   "}, {"reason": "x" * 501}, {"reason": 5}, {"why": "x"}])
 def test_an_invalid_reason_is_not_saved_and_not_journaled(world, body: dict) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     before, commits = snapshot(w), counting(w)
 
     res = w.client.put(URL, json=body, headers=H(BOSS))
@@ -389,7 +346,7 @@ def test_an_invalid_reason_is_not_saved_and_not_journaled(world, body: dict) -> 
 
 def test_the_longest_reason_is_accepted(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     assert restrict(w, "я" * 500).status_code == 200
 
 
@@ -402,7 +359,7 @@ def test_the_longest_reason_is_accepted(world) -> None:
 ], ids=["restrict", "unrestrict"])
 def test_a_failed_journal_write_leaves_the_state_unchanged(world, account: dict, call: Callable) -> None:
     w = world()
-    seed(w, **account)
+    seed_account(w, **account)
     before = snapshot(w)
     w.db.fail_audit = True
 
@@ -416,7 +373,7 @@ def test_a_failed_journal_write_leaves_the_state_unchanged(world, account: dict,
 
 def test_a_user_the_admin_restricted_without_a_journal_is_still_admitted(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     w.db.fail_audit = True
     assert restrict(w).status_code == 503
     admit(w)                                                       # nothing changed: the user is not refused
@@ -432,7 +389,7 @@ def test_a_refused_attempt_that_cannot_be_journaled_is_not_applied(world) -> Non
 
 def test_a_database_that_fails_while_reading_is_not_applied(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     before = snapshot(w)
     from app.firestore import IndexError_
 
@@ -459,7 +416,7 @@ def test_an_unknown_user_is_a_404_and_leaves_no_record(world, call: Callable) ->
 @pytest.mark.parametrize("call", [restrict, lift], ids=["restrict", "unrestrict"])
 def test_a_non_admin_cannot_change_a_restriction(world, call: Callable) -> None:
     w = world()
-    seed(w, restriction=restriction())
+    seed_account(w, restriction=restriction())
     before = snapshot(w)
     res = call(w, who="mallory")
     assert res.status_code == 404
@@ -468,7 +425,7 @@ def test_a_non_admin_cannot_change_a_restriction(world, call: Callable) -> None:
 
 def test_a_purged_user_is_a_404(world) -> None:
     w = world()
-    seed(w)
+    seed_account(w)
     w.db.docs[f"adminTombstones/{UID}"] = {"purgedAt": "2026-10-01T00:00:00Z"}
     res = restrict(w)
     assert res.status_code == 404 and not journal(w)
@@ -476,8 +433,8 @@ def test_a_purged_user_is_a_404(world) -> None:
 
 def test_restricting_one_user_leaves_the_others_alone(world) -> None:
     w = world()
-    seed(w)
-    seed(w, "u2")
+    seed_account(w)
+    seed_account(w, "u2")
     assert restrict(w).status_code == 200
     admit(w, uid="u2")
     assert "restriction" not in (w.db.docs.get("adminAccounts/u2") or {})
@@ -485,7 +442,7 @@ def test_restricting_one_user_leaves_the_others_alone(world) -> None:
 
 def test_the_day_counters_are_not_touched_by_lifting(world) -> None:
     w = world()
-    seed(w, restriction=restriction())
+    seed_account(w, restriction=restriction())
     write_quota(w, UID, analyses=40, vocals=0)
     assert lift(w).status_code == 200
     with pytest.raises(QuotaExceeded):

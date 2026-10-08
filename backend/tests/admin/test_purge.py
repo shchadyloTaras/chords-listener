@@ -33,7 +33,7 @@ from app.firestore import FirestoreIndex, IndexError_
 from app.models import Settings
 from app.publish import Publisher
 from app.storage import TrackStore, write_json_atomic
-from tests.test_cloud import BUCKET, FakeGcs, FakeIndex
+from cloud_fixtures import BUCKET, FakeGcs, FakeIndex
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 

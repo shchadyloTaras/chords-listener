@@ -14,15 +14,15 @@ from typing import Any, Optional
 import pytest
 from fastapi.testclient import TestClient
 
-from admin.fixtures import ADMIN_EMAIL, MemDb, make_account_state, make_admin
-from admin.test_authz import ENGINE_INFO, never, settings_for
-from admin.test_projections import NOON
+from admin.fixtures import ADMIN_EMAIL, ENGINE_INFO, MemDb, make_account_state, make_admin, never, settings_for
 from app.admin.authz import AdminAuthz
 from app.admin.settings import CACHE_TTL_S, RuntimeSettings
 from app.firestore import IndexError_, to_value
 from app.main import create_app
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+
+NOON = datetime(2026, 10, 8, 12, 0, 0, tzinfo=timezone.utc)
 
 ADMIN = "admin-1"
 SETTINGS = "adminConfig/settings"

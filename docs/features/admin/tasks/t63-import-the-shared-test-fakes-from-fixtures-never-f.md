@@ -8,7 +8,7 @@ files_hint: ["backend/tests/admin/fixtures.py", "backend/tests/admin/conftest.py
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 10 — re-review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T63 — Import the shared test fakes from fixtures, never from another test module
@@ -19,4 +19,4 @@ status: "todo"
 
 **Re-review fix 18. FakeDb, FakeVerifier, Clock, settings_for, ENGINE_INFO, H, never and the world fixture live in tests/admin/fixtures.py or a conftest.py; no test module imports from another test module (a test checks it).**
 
-- [ ] lint + type-check clean (ruff / oxlint + tsc)
+- [x] lint + type-check clean (ruff / oxlint + tsc)

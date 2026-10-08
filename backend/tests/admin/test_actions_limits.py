@@ -16,8 +16,7 @@ from typing import Any
 
 import pytest
 
-from admin.fixtures import ADMIN_EMAIL, make_account_state, make_user
-from admin.test_api_users import BOSS, H, utc_today, world, write_quota  # noqa: F401  (``world`` is a fixture)
+from admin.fixtures import BOSS, ADMIN_EMAIL, H, make_account_state, make_user, utc_today, write_quota
 from app import quotas as quotas_module
 from app.admin import actions
 from app.quotas import QuotaExceeded

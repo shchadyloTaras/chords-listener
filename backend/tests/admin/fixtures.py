@@ -615,3 +615,177 @@ class MemDb(FirestoreIndex):
                     dst[parts[-1]] = self.request_time
         self.docs = staged
         self.commits += 1
+
+
+# --------------------------------------------------------------------------- the admin app under test (shared by the API tests)
+
+ENGINE_INFO = {"name": "fake", "version": "1.0", "features": {}}
+SIGNING_KEY = "test-signing-key-0123456789abcdef"
+SIGN_IN_T0 = 1_800_000_000.0     # the moment ``FakeVerifier`` signs everybody in (epoch seconds)
+BOSS = "boss"                    # the admin of the ``world`` fixture (``conftest.py``)
+LOGIN_AT = datetime(2026, 10, 7, 18, 20, tzinfo=timezone.utc)   # what the fake Firebase Auth says of the last sign-in
+DEFAULT_LIMITS = {"analyses": 40, "vocals": 15, "jobs": 2, "maxDurationMin": 15, "maxUploadMb": 50}
+
+
+class Clock:
+    """A clock in epoch seconds that only moves when told."""
+
+    def __init__(self, now: float = SIGN_IN_T0) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class FakeVerifier:
+    """``tok-<uid>`` is a sign-in just now, ``tok-<uid>:<seconds>`` one that many seconds ago."""
+
+    def __init__(self, clock: Clock, *, with_auth_time: bool = True) -> None:
+        self.clock = clock
+        self.with_auth_time = with_auth_time
+
+    def verify_claims(self, token: str) -> tuple[str, Optional[float]]:
+        from app.auth import AuthError
+
+        if not token.startswith("tok-") or len(token) <= 4:
+            raise AuthError("Invalid token")
+        uid, _, age = token[4:].partition(":")
+        return uid, (self.clock() - float(age or 0)) if self.with_auth_time else None
+
+    def verify(self, token: str) -> str:
+        return self.verify_claims(token)[0]
+
+
+def H(uid: str, age_s: Optional[float] = None) -> dict[str, str]:
+    """The headers of ``uid``'s request, signed in ``age_s`` seconds ago (just now by default)."""
+    return {"Authorization": f"Bearer tok-{uid}" + (f":{age_s}" if age_s is not None else "")}
+
+
+def settings_for(tmp_path: Path, *, cloud: bool = True) -> Any:
+    """The app's settings for a test: the cloud (Firebase sign-in) unless ``cloud=False``, nothing published."""
+    from app.models import Settings
+
+    return Settings(
+        data_dir=tmp_path / "data",
+        frontend_dist=tmp_path / "no-dist",
+        auth="firebase" if cloud else "off",
+        signing_key=SIGNING_KEY,
+        publish=False,
+        allowed_hosts=("testserver", "localhost"),
+    )
+
+
+def never(*_: Any, **__: Any) -> dict:
+    """The analysis engine of the admin tests: it must not run."""
+    raise AssertionError("the engine must not run in these tests")
+
+
+def iso(dt: datetime) -> str:
+    """A UTC timestamp the way Firestore reads it back."""
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+class DirectoryDb(MemDb):
+    """``MemDb`` plus the seeding helpers of the email-index (directory) tests."""
+
+    def add_user(self, uid: str, email: Optional[str], created: Optional[datetime]) -> None:
+        data: dict[str, Any] = {"settings": {"theme": "dark"}}
+        if email is not None:
+            data["email"] = email
+        if created is not None:
+            data["createdAt"] = iso(created)
+        self.docs[f"users/{uid}"] = data
+
+    def shard_ids(self) -> list[str]:
+        return sorted(p.split("/")[1] for p in self.docs if p.startswith("adminEmailIndex/"))
+
+
+class UsersDb(MemDb):
+    """``MemDb`` whose commits that write the journal can be made to fail (``fail_audit``)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_audit = False
+
+    def audit_docs(self) -> list[dict[str, Any]]:
+        return sorted((d for p, d in self.docs.items() if p.startswith("adminAudit/")), key=lambda d: d["at"])
+
+    def commit(self, writes: list[dict[str, Any]], *, transaction: Optional[str] = None) -> None:
+        from app.firestore import IndexError_
+
+        if self.fail_audit and any("/adminAudit/" in (w.get("update", {}).get("name", "")) for w in writes):
+            raise IndexError_("Firestore is down", retryable=True)
+        super().commit(writes, transaction=transaction)
+
+
+def write_quota(w: Any, uid: str, **counters: int) -> None:
+    """Today's quota counters of ``uid`` in the ``world``'s data directory."""
+    folder = w.app.state.store.user_dir(uid)
+    folder.mkdir(parents=True, exist_ok=True)
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    (folder / "quota.json").write_text(json.dumps({"day": day, **counters}))
+
+
+def utc_today() -> Any:
+    return datetime.now(timezone.utc).date()
+
+
+def encode_cursor(created_at: str, track_id: str) -> str:
+    """A song-list cursor the way the server packs one."""
+    import base64
+
+    raw = json.dumps({"c": created_at, "i": track_id}, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+# --------------------------------------------------------------------------- the account-action tests (restriction, deletion)
+
+ACCOUNT_UID = "u1"
+REASON = "автоматичні масові запити"
+SINCE = datetime(2026, 10, 1, 9, 0, tzinfo=timezone.utc)
+SCHEDULED = datetime(2026, 10, 5, 9, 0, tzinfo=timezone.utc)
+
+
+def seed_account(w: Any, uid: str = ACCOUNT_UID, **account: Any) -> None:
+    """``users/<uid>`` (Ivan.P@example.test) and, when given, its ``adminAccounts`` state."""
+    w.db.put(make_user(uid, "Ivan.P@example.test", created_at=datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc)))
+    if account:
+        w.db.put(make_account_state(uid, **account))
+
+
+def restriction(since: datetime = SINCE, reason: str = REASON, by: str = "someone") -> dict[str, Any]:
+    return {"reason": reason, "since": since, "byAdminUid": by}
+
+
+def deletion(restricted_before: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    return {"scheduledAt": SCHEDULED, "purgeAfter": SCHEDULED + timedelta(days=7), "byAdminUid": "someone",
+            "priorRestriction": restricted_before}
+
+
+def journal(w: Any) -> list[dict[str, Any]]:
+    return w.db.audit_docs()
+
+
+def snapshot(w: Any) -> dict[str, Any]:
+    return copy.deepcopy(w.db.docs)
+
+
+def counting(w: Any) -> list[int]:
+    """A one-element list that holds the number of commits made so far."""
+    n = [0]
+    real = w.db.commit
+
+    def commit(writes, *, transaction=None):
+        real(writes, transaction=transaction)
+        n[0] += 1
+
+    w.db.commit = commit  # type: ignore[method-assign]
+    return n
+
+
+def admit(w: Any, kind: str = "analysis", *, uid: str = ACCOUNT_UID) -> None:
+    """Ask the admission gate whether ``uid`` may start a ``kind`` job now (raises when refused)."""
+    w.app.state.admission.check(uid, kind, "file", running=0, quotas=w.app.state.jobs.quotas)

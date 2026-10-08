@@ -3,7 +3,7 @@
 nothing against the daily quota; the effective limit is the personal value of each set field over the default,
 until the end date inclusive (UTC); a reset and an admission never lose one another.
 
-The API tests run the real app in cloud mode over ``MemDb`` (the in-memory Firestore of the projection tests): the
+The API tests run the real app in cloud mode over ``MemDb`` (the shared in-memory Firestore): the
 five entries (link, upload, storage, re-analysis, vocals) are driven over HTTP. The unit tests drive ``Admission``
 and ``Quotas`` with fake clocks.
 """
@@ -24,14 +24,17 @@ from app.models import Settings
 from app.sources import SourceError
 from app.storage import TrackStore
 from app.users import user_context
-from test_cloud import (  # noqa: F401  (make_cloud, media: fixtures of the cloud tests)
+from cloud_fixtures import (  # noqa: F401  (make_cloud, media: fixtures of the cloud tests)
     BUCKET,
+    ENGINE_INFO,
     VIDEO_ID,
+    FakeEngine,
     H,
     assert_error,
     make_cloud,
     media,
     needs_ffmpeg,
+    run_ffmpeg,
     upload,
     upload_and_wait,
     wait_job,
@@ -633,7 +636,6 @@ def test_local_mode_has_no_gate(tmp_path: Path, media) -> None:
     from fastapi.testclient import TestClient
 
     from app.main import create_app
-    from test_cloud import ENGINE_INFO, FakeEngine
 
     settings = Settings(data_dir=tmp_path / "data", frontend_dist=tmp_path / "no-dist", scratch_dir=tmp_path / "s",
                         allowed_hosts=("testserver", "localhost"))
@@ -664,9 +666,8 @@ def test_quota_helpers_for_feature_code_still_work_without_the_gate(tmp_path: Pa
 
 @pytest.fixture(scope="module")
 def long_media(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    from test_cloud import _ffmpeg
     path = tmp_path_factory.mktemp("long-media") / "long.mp3"
-    _ffmpeg("-f", "lavfi", "-i", "sine=frequency=220:duration=90", "-c:a", "libmp3lame", "-b:a", "32k", str(path))
+    run_ffmpeg("-f", "lavfi", "-i", "sine=frequency=220:duration=90", "-c:a", "libmp3lame", "-b:a", "32k", str(path))
     return path
 
 
