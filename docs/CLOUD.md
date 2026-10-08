@@ -328,6 +328,8 @@ them. Repeat only when the banner's look changes on purpose (locally: `--update-
 ### Measuring the cold start
 
 NFR "admin overview from a sleeping server: p95 ≤ 15 s" needs the deployed service, so it is not part of CI.
+
+**Measured 2026-10-09** (chords-api-00012, `--verify-cold`, `/api/health`): 13.46, 12.59, 16.35, 11.44, 8.26 s — p95 16.35 s, **over the 15 s bound** (median 12.6 s). One start: GCSFuse mount ~2.6 s, Python imports ~3 s, the rest container start; the engine warm-up (~10.7 s of CPU) and the wake sweep start right after. Open in spec §8.
 After a deploy, from any machine (standard library only; `gcloud` with the owner's login for `--verify-cold`):
 
 ```bash
