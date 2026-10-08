@@ -91,6 +91,22 @@ describe('play-along: piano', () => {
   })
 })
 
+describe('play-along: piano in three-four, a waltz', () => {
+  it('plays the bass alone on 1, the right hand on 2 and 3', () => {
+    const waltz = accompanySteps('piano', [{ start: 0, end: 3, label: 'C' }], grid(3, 6), shape(4))
+    expect(times(waltz)).toEqual([0, 0.5, 1, 1.5, 2, 2.5])
+    expect(at(waltz, 0)[0].notes.map((n) => n.midi)).toEqual([48]) // the bass
+    expect(at(waltz, 0.5)[0].notes.map((n) => n.midi)).toEqual([55, 60, 64])
+    expect(at(waltz, 1.5)[0].notes.map((n) => n.midi)).toEqual([48])
+  })
+
+  it('strikes the whole chord where it changes on beat 2 or 3', () => {
+    const waltz = accompanySteps('piano', [{ start: 0, end: 0.5, label: 'C' }, { start: 0.5, end: 3, label: 'F' }], grid(3, 6), shape(4))
+    expect(at(waltz, 0.5)[0].notes.map((n) => n.midi)).toEqual([53, 60, 65, 69])
+    expect(at(waltz, 0.5)[0].cut).toBe('all')
+  })
+})
+
 describe('play-along: harmonium', () => {
   const steps = accompanySteps('harmonium', song, grid(), shape(3))
 

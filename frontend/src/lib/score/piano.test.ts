@@ -150,7 +150,7 @@ describe('chordPiano (the simple level)', () => {
   const strikes = (ns: ScoreNote[]) => ns.map((n) => [n.start, n.end, n.pitches])
   const slot = (label: string, beat: number, span: number) => ({ label, isNone: label === 'N', beat, span })
 
-  it('a chord over a 4/4 bar is one whole note: the diagram voicing in the right hand, the root below middle C in the left', () => {
+  it('a chord over a 4/4 bar is one whole note: the diagram’s right hand around middle C, its bass (E2–D#3) in the left', () => {
     const { bars, measures } = sheet([['C', 0, 4]], 1)
     const { rh, lh } = chordPiano(bars, measures)
     expect(strikes(rh)).toEqual([[0, 16, [60, 64, 67]]])
@@ -163,11 +163,11 @@ describe('chordPiano (the simple level)', () => {
     const { rh, lh } = chordPiano(bars, measures)
     expect(strikes(rh)).toEqual([
       [0, 8, [60, 64, 67]],
-      [8, 16, [67, 71, 74]],
+      [8, 16, [59, 62, 67]],
     ])
     expect(strikes(lh)).toEqual([
       [0, 8, [48]],
-      [8, 16, [55]],
+      [8, 16, [43]],
     ])
   })
 
@@ -175,12 +175,12 @@ describe('chordPiano (the simple level)', () => {
     const { bars, measures } = sheet([['Am', 0, 8]], 2)
     const { rh, lh } = chordPiano(bars, measures)
     expect(strikes(rh)).toEqual([
-      [0, 16, [69, 72, 76]],
-      [16, 32, [69, 72, 76]],
+      [0, 16, [60, 64, 69]],
+      [16, 32, [60, 64, 69]],
     ])
     expect(strikes(lh)).toEqual([
-      [0, 16, [57]],
-      [16, 32, [57]],
+      [0, 16, [45]],
+      [16, 32, [45]],
     ])
   })
 
@@ -192,11 +192,11 @@ describe('chordPiano (the simple level)', () => {
     const { rh, lh } = chordPiano(odd, measures)
     expect(strikes(rh)).toEqual([
       [0, 4, [60, 64, 67]],
-      [12, 16, [65, 69, 72]],
+      [12, 16, [60, 65, 69]],
     ])
     expect(strikes(lh)).toEqual([
       [0, 4, [48]],
-      [12, 16, [53]],
+      [12, 16, [41]],
     ])
   })
 
@@ -206,23 +206,23 @@ describe('chordPiano (the simple level)', () => {
     expect(strikes(rh)).toEqual([[0, 16, [62, 66, 69]]])
   })
 
-  it('a slash chord: the bass in the left hand, the chord above it without the bass key', () => {
+  it('a slash chord: the bass in the left hand, the plain chord in the right', () => {
     const { bars, measures } = sheet([['C/G', 0, 4]], 1)
     const { rh, lh } = chordPiano(bars, measures)
-    expect(strikes(rh)).toEqual([[0, 16, [72, 76, 79]]])
-    expect(strikes(lh)).toEqual([[0, 16, [55]]])
+    expect(strikes(rh)).toEqual([[0, 16, [60, 64, 67]]])
+    expect(strikes(lh)).toEqual([[0, 16, [43]]])
   })
 
   it('flat and sharp roots', () => {
     const { measures } = sheet([], 1)
     const bb = chordPiano([{ slots: [slot('Bb', 0, 2), slot('F#m', 2, 2)] }], measures)
     expect(strikes(bb.rh)).toEqual([
-      [0, 8, [70, 74, 77]],
-      [8, 16, [66, 69, 73]],
+      [0, 8, [62, 65, 70]],
+      [8, 16, [61, 66, 69]],
     ])
     expect(strikes(bb.lh)).toEqual([
-      [0, 8, [58]],
-      [8, 16, [54]],
+      [0, 8, [46]],
+      [8, 16, [42]],
     ])
   })
 
@@ -231,11 +231,11 @@ describe('chordPiano (the simple level)', () => {
     const { rh, lh } = chordPiano(bars, measures)
     expect(strikes(rh)).toEqual([
       [0, 12, [62, 66, 69]],
-      [12, 24, [64, 67, 71]],
+      [12, 24, [59, 64, 67]],
     ])
     expect(strikes(lh)).toEqual([
       [0, 12, [50]],
-      [12, 24, [52]],
+      [12, 24, [40]],
     ])
   })
 
@@ -250,19 +250,19 @@ describe('chordPiano (the simple level)', () => {
     expect(measures.map((m) => m.offset)).toEqual([0, 16, 32, 48, 64])
     const { rh, lh } = chordPiano(bars, measures)
     expect(strikes(rh).slice(3)).toEqual([
-      [48, 64, [65, 69, 72]],
-      [64, 68, [67, 71, 74]],
+      [48, 64, [60, 65, 69]],
+      [64, 68, [59, 62, 67]],
     ])
     expect(strikes(lh).slice(3)).toEqual([
-      [48, 64, [53]],
-      [64, 68, [55]],
+      [48, 64, [41]],
+      [64, 68, [43]],
     ])
   })
 
   it('a long last bar: a chord over all of it is struck again at the inner barline; a final no-chord is a rest', () => {
     const held = sheet([['G', 0, 4], ['C', 4, 5]], 2, 4, 1)
     expect(strikes(chordPiano(held.bars, held.measures).rh)).toEqual([
-      [0, 16, [67, 71, 74]],
+      [0, 16, [59, 62, 67]],
       [16, 32, [60, 64, 67]],
       [32, 36, [60, 64, 67]],
     ])
@@ -272,7 +272,7 @@ describe('chordPiano (the simple level)', () => {
       ['N', 4, 1],
     ])
     expect(strikes(chordPiano(ending.bars, ending.measures).rh)).toEqual([
-      [0, 16, [67, 71, 74]],
+      [0, 16, [59, 62, 67]],
       [16, 32, [60, 64, 67]],
     ])
   })
@@ -282,12 +282,12 @@ describe('chordPiano (the simple level)', () => {
     const { rh, lh } = chordPiano([{ slots: [slot('Gm', 0, 1), slot('Fm', 1, 1), slot('G#', 2, 1), slot('Db/Ab', 3, 1)] }], measures)
     const names = (n: ScoreNote) => n.spelling?.map((p) => `${p.step}${p.alter > 0 ? '#' : p.alter < 0 ? 'b' : ''}${p.octave}`)
     expect(rh.map(names)).toEqual([
-      ['G4', 'Bb4', 'D5'],
-      ['F4', 'Ab4', 'C5'],
-      ['G#4', 'B#4', 'D#5'],
-      ['Db5', 'F5', 'Ab5'],
+      ['Bb3', 'D4', 'G4'],
+      ['C4', 'F4', 'Ab4'],
+      ['B#3', 'D#4', 'G#4'],
+      ['Db4', 'F4', 'Ab4'],
     ])
-    expect(lh.map(names)).toEqual([['G3'], ['F3'], ['G#3'], ['Ab3']])
+    expect(lh.map(names)).toEqual([['G2'], ['F2'], ['G#2'], ['Ab2']])
     // the spelling sounds as the pitches
     for (const n of [...rh, ...lh]) expect(n.spelling?.map(midiOf)).toEqual(n.pitches)
   })

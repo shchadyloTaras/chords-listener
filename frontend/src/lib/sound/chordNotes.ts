@@ -6,7 +6,7 @@
 import { BASS_TUNING } from '../diagrams/bass'
 import type { DbInstrument, FretInstrument, Voicing } from '../diagrams/chordsDb'
 import { HARMONIUM_LOW, harmoniumVoicing } from '../diagrams/harmonium'
-import { pianoVoicing } from '../diagrams/piano'
+import { PIANO_LOW, pianoVoicing } from '../diagrams/piano'
 import { staffChord } from '../diagrams/staff'
 import { handpanMidis, playability, type HandpanScale } from '../handpan'
 import { parseChord, QUALITY_INTERVALS, type ParsedChord } from '../music/chord'
@@ -29,11 +29,11 @@ export interface NoteEvent {
 
 // ---------- piano ----------
 
-/** MIDI note of key 0 of the two-octave piano diagram (its right hand starts at middle C). */
-export const PIANO_DIAGRAM_C = 60
+/** MIDI note of key 0 of the piano diagram (C2: its keys run C2–C5, both hands). */
+export const PIANO_DIAGRAM_C = PIANO_LOW
 
 /**
- * The chord as the piano diagram and the staff show it: the left hand's bass note (C3 octave) a
+ * The chord as the piano diagram and the staff show it: the left hand's bass note (E2–D#3) a
  * hair earlier and stronger, like a pianist, then the right-hand notes rolled upwards in ~4 ms.
  */
 export function pianoChordNotes(label: string): NoteEvent[] {
