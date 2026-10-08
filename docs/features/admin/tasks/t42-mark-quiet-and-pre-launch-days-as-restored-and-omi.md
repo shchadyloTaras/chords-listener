@@ -8,7 +8,7 @@ files_hint: ["backend/app/admin/router.py", "frontend/src/admin/screens/Stats.ts
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 9 — review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T42 — Mark quiet and pre-launch days as restored and omit empty days from /stats

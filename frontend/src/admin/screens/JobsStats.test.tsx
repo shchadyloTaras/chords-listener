@@ -245,6 +245,14 @@ describe('AC-08 daily statistics', () => {
     expect(live.textContent).not.toContain('відновлено')
   })
 
+  it('shows an omitted (quiet) day as zeros, never as «триває»; only a live day is in progress', async () => {
+    await mountStats(async (from, to) => ({ from, to, days: [liveDay('2026-10-08', { state: 'live' }), restoredDay('2026-10-01')] }))
+    const rows = [...host.querySelectorAll('tbody tr')]
+    expect(rows.filter((r) => r.textContent?.includes('триває'))).toHaveLength(1)
+    expect(rows[1].textContent).toContain('2026-10-07')
+    expect(rows[1].textContent).not.toContain('триває')
+  })
+
   it('offers 7, 30 and 90 day presets', async () => {
     const load = vi.fn<StatsLoad>(async (from, to) => ({ from, to, days: [] }))
     await mountStats(load)

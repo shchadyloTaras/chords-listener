@@ -699,7 +699,7 @@ def _fill_new_users(db: FirestoreIndex, entry: StatsDay, stored: bool) -> None:
 @router.get("/stats", response_model=StatsRange)
 def get_stats(request: Request, from_: date = Query(alias="from"), to: date = Query()) -> StatsRange:
     """Daily stats of a period of at most 90 days: one ``adminStats/{day}`` read per day. A day without a document is
-    zeros; a restored day carries only its songs per source."""
+    omitted (today stays when it has new users); a restored day carries only its songs per source."""
     _period(from_, to)
     db = database(request)
     entries: list[StatsDay] = []
@@ -708,6 +708,8 @@ def get_stats(request: Request, from_: date = Query(alias="from"), to: date = Qu
         doc = db.get(stats.day_path(day))
         entry = _stats_day(day, doc)
         _fill_new_users(db, entry, doc is not None)
+        if doc is None and not entry.new_users:
+            continue  # a day with no document is omitted (the UI shows zeros); never a «live» row of zeros
         entries.append(entry)
     return StatsRange(from_=from_.isoformat(), to=to.isoformat(), days=entries)
 

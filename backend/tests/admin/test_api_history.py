@@ -421,8 +421,9 @@ def test_a_30_day_range_returns_one_entry_per_day_with_restored_days_flagged(env
     body = r.json()
     assert (body["from"], body["to"]) == ("2026-09-09", "2026-10-08")
     days = body["days"]
-    assert len(days) == 30
-    assert [d["day"] for d in days] == [(date(2026, 9, 9) + timedelta(days=n)).isoformat() for n in range(30)]
+    assert len(days) == 10  # the days without a document (quiet, pre-launch) are omitted: see the test below
+    assert [d["day"] for d in days] == [*[(date(2026, 9, 9) + timedelta(days=n)).isoformat() for n in range(7)],
+                                         "2026-09-20", "2026-10-07", "2026-10-08"]
     by_day = {d["day"]: d for d in days}
 
     restored = by_day["2026-09-12"]  # restored: only the songs per source, no failures
@@ -446,16 +447,24 @@ def test_a_30_day_range_returns_one_entry_per_day_with_restored_days_flagged(env
     assert today["state"] == "live" and today["newUsers"] == 2  # a live day counts its new users on read
 
 
-def test_a_day_without_activity_is_zeros(env: Env, mem: MemDb, monkeypatch: Any) -> None:
+def test_days_without_a_document_are_omitted_so_none_is_reported_as_live(env: Env, mem: MemDb, monkeypatch: Any) -> None:
     monkeypatch.setattr(models, "today_utc", lambda: date(2026, 10, 8))
     seed_month(mem)
 
-    quiet = {d["day"]: d for d in env.get("/api/admin/stats", **{"from": "2026-09-09", "to": "2026-10-08"}).json()["days"]}["2026-09-25"]
+    days = env.get("/api/admin/stats", **{"from": "2026-09-01", "to": "2026-10-08"}).json()["days"]
 
-    assert quiet == {
-        "day": "2026-09-25", "state": "live", "analyses": {"link": 0, "file": 0, "mic": 0, "tab": 0}, "vocals": 0,
-        "failed": 0, "failedByReason": {}, "active": 0, "newUsers": None, "restoredTracks": None, "frozenAt": None,
-    }
+    assert [d["day"] for d in days] == [
+        *[(date(2026, 9, 9) + timedelta(days=n)).isoformat() for n in range(7)], "2026-09-20", "2026-10-07", "2026-10-08",
+    ]  # pre-launch (09-01..08) and quiet days have no document: left out, not «live» zeros
+
+
+def test_a_quiet_today_with_new_users_is_still_reported(env: Env, mem: MemDb, monkeypatch: Any) -> None:
+    monkeypatch.setattr(models, "today_utc", lambda: date(2026, 10, 8))
+    mem.put(make_user("n1", created_at=at("2026-10-08", 7)))
+
+    days = env.get("/api/admin/stats", **{"from": "2026-10-07", "to": "2026-10-08"}).json()["days"]
+
+    assert [(d["day"], d["state"], d["newUsers"]) for d in days] == [("2026-10-08", "live", 1)]
 
 
 def test_stats_reads_one_document_per_day_and_never_more_than_90(env: Env, mem: MemDb) -> None:
