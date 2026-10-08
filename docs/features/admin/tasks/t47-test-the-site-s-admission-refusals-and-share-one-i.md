@@ -8,7 +8,7 @@ files_hint: ["frontend/src/hooks/useJobs.ts", "frontend/src/components/chords/pi
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 9 — review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T47 — Test the site's admission refusals and share one isAdminRefusal helper

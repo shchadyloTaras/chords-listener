@@ -20,6 +20,7 @@ import { onLiveNotes } from '../../../lib/liveNotes'
 import { isMinorQuality } from '../../../lib/music/chord'
 import { keysNotesReady } from '../../../lib/tour/trigger'
 import { useConnection } from '../../../lib/serverMode'
+import { isAdminRefusal } from '../../../lib/serviceStatus'
 import { requestNotes, type NotesState } from '../../../lib/transcription'
 import { fetchStem, startVocals, useVocals, vocalsSupport, type VocalsState } from '../../../lib/vocals'
 import { useApp, type LiveKeysSource } from '../../../store'
@@ -294,7 +295,7 @@ function Status({ state, onRetry }: { state: NotesState; onRetry(): void }) {
  * full mix, voice and instruments together (`offer`) — a one-line offer to separate the voice on the
  * server. In chord mode the coloured bars are the chords.
  */
-function VocalsLine({
+export function VocalsLine({
   ready,
   offer,
   chords,
@@ -370,7 +371,7 @@ function VocalsLine({
     case 'error': {
       if (vocals.during !== 'job') return null
       // quota and the administrator's switches: a retry would be refused again
-      const refused = vocals.code === 'cloud_restricted' || vocals.code === 'vocals_disabled' || vocals.code === 'analyses_paused'
+      const refused = isAdminRefusal(vocals.code)
       const quota = vocals.code === 'quota_exceeded' || refused
       return (
         <div className={clsx(line, 'text-danger')}>

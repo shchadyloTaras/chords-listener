@@ -4,6 +4,7 @@ import { toApiError, type JobOptions, type UploadMeta } from '../lib/api'
 import { forgetServerJob, recentServerJobs } from '../lib/cloud/activity'
 import { isLocalId } from '../lib/local'
 import { useConnection, whenSettled } from '../lib/serverMode'
+import { isAdminRefusal } from '../lib/serviceStatus'
 import { t } from '../i18n'
 import { useApp } from '../store'
 import type { Job, JobStatus } from '../types'
@@ -319,7 +320,7 @@ export async function submitFile(file: File, options?: JobOptions, extra: Submit
     const err = toApiError(e)
     const { toast } = useApp.getState()
     if (err.code === 'aborted') toast(t('core.upload.cancelled'), 'info')
-    else if ((err.code === 'quota_exceeded' || err.code === 'cloud_restricted' || err.code === 'analyses_paused') && !extra.inBrowser)
+    else if ((err.code === 'quota_exceeded' || isAdminRefusal(err.code)) && !extra.inBrowser)
       // the cloud's limit for today, a restricted account, a paused service: this browser can still do it
       toast(`${file.name}: ${errorText(err.code)}`, 'error', {
         label: t('cloud.quota.inBrowser'),

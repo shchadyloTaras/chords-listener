@@ -64,6 +64,13 @@ export function bannerText(status: ServiceStatus, lang: Lang): string | null {
   return text || null
 }
 
+const ADMIN_REFUSALS: ReadonlySet<string> = new Set(['cloud_restricted', 'analyses_paused', 'youtube_disabled', 'vocals_disabled'])
+
+/** Whether the cloud refused for the administrator's reason (restriction, pause, a switch): a retry would be refused again. */
+export function isAdminRefusal(code: string | null | undefined): boolean {
+  return !!code && ADMIN_REFUSALS.has(code)
+}
+
 /** Whether the cloud downloads YouTube, as far as the site knows (on until it has learnt otherwise). Asks nothing. */
 export function youtubeEnabled(): boolean {
   return useServiceStatus.getState().status.switches.youtubeEnabled

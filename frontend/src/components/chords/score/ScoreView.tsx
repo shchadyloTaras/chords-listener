@@ -15,6 +15,7 @@ import { FALLBACK_FONT, registerScoreFont, SCORE_FONT } from '../../../lib/score
 import { baseOptions, configureRules, fracAt, measureLayout, OpenSheetMusicDisplay, xAt, type ScoreColors, type ScoreLayout } from '../../../lib/score/osmd'
 import { SCORE_LEVELS, type Score, type ScoreLevel } from '../../../lib/score/types'
 import { useConnection } from '../../../lib/serverMode'
+import { isAdminRefusal } from '../../../lib/serviceStatus'
 import { requestNotes, type NotesState } from '../../../lib/transcription'
 import { loadVocals, startVocals, vocalsSupport, type VocalsState } from '../../../lib/vocals'
 import { useApp } from '../../../store'
@@ -241,7 +242,7 @@ function StatusLine({
 /** The demo song (dev/sampleTrack.ts): it exists only in this browser, an account brings no vocals for it. */
 const DEMO_TRACK_ID = 'demo'
 
-function VocalsCard({ state }: { state: VocalsState }) {
+export function VocalsCard({ state }: { state: VocalsState }) {
   const t = useT()
   const { track } = useChordModel()
   // a guest (no account, no server): vocals come with a free account
@@ -365,7 +366,7 @@ function VocalsCard({ state }: { state: VocalsState }) {
       )
     case 'error': {
       // the administrator's switches: worded in the cloud's own words, and a retry would be refused again
-      const refused = state.code === 'cloud_restricted' || state.code === 'vocals_disabled' || state.code === 'analyses_paused'
+      const refused = isAdminRefusal(state.code)
       const text = refused
         ? errorText(state.code)
         : state.code === 'quota_exceeded'
