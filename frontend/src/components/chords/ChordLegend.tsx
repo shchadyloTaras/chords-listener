@@ -1,12 +1,12 @@
 // All unique chords of the song (after transpose / simplify) with diagrams and counts — by default
-// grouped by song part (intro, verse, chorus, …: lib/music/sections), each part with the chords it
-// plays, its name (a menu to rename it) and a jump to each place it plays; or all together.
+// all together; or grouped by song part (intro, verse, chorus, …: lib/music/sections), each part with
+// the chords it plays, its name (a menu to rename it) and a jump to each place it plays.
 // Click plays the chord (copies its name when the click sound is off); the copy button copies;
 // hover highlights occurrences in the sheet / timeline.
 
 import { memo, useMemo } from 'react'
 import clsx from 'clsx'
-import { Check, Copy } from 'lucide-react'
+import { Check, Copy, LayoutGrid, Rows3 } from 'lucide-react'
 import { useT } from '../../i18n'
 import { isKeyboard } from '../../lib/instruments'
 import { chordTone } from '../../lib/music/color'
@@ -58,16 +58,38 @@ export const ChordLegend = memo(function ChordLegend() {
           <span className="font-mono text-xs text-faint tabular-nums">{unique.length}</span>
         </h2>
         {parts.length >= 2 && (
-          <Segmented<'parts' | 'all'>
-            variant="strong"
-            label={t('chords.legend.view')}
-            value={byParts ? 'parts' : 'all'}
-            onChange={(v) => useApp.getState().setSetting('legendByParts', v === 'parts')}
-            options={[
-              { value: 'parts', label: t('chords.legend.byParts'), title: t('chords.legend.partsHint') },
-              { value: 'all', label: t('chords.legend.all') },
-            ]}
-          />
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+            <span className="text-sm text-muted">{t('chords.legend.viewLabel')}</span>
+            <Segmented<'parts' | 'all'>
+              size="lg"
+              variant="strong"
+              label={t('chords.legend.view')}
+              value={byParts ? 'parts' : 'all'}
+              onChange={(v) => useApp.getState().setSetting('legendByParts', v === 'parts')}
+              options={[
+                {
+                  value: 'parts',
+                  label: (
+                    <>
+                      <Rows3 size={16} aria-hidden="true" />
+                      {t('chords.legend.byParts')}
+                    </>
+                  ),
+                  title: t('chords.legend.partsHint'),
+                },
+                {
+                  value: 'all',
+                  label: (
+                    <>
+                      <LayoutGrid size={16} aria-hidden="true" />
+                      {t('chords.legend.all')}
+                    </>
+                  ),
+                  title: t('chords.legend.allHint'),
+                },
+              ]}
+            />
+          </div>
         )}
       </div>
       {grouped

@@ -75,7 +75,7 @@ export interface Settings {
   liveKeysSource: LiveKeysSource
   /** the user's names for a track's song parts (track id → part key, lib/music/sections partKeys → kind); this device only */
   sectionKinds: Record<string, Record<string, SectionKind>>
-  /** «Акорди в пісні» grouped by song part (default) or all together */
+  /** «Акорди в пісні» all together (default) or grouped by song part */
   legendByParts: boolean
   /** the screen stays on while the app is open and visible (Screen Wake Lock, lib/wakeLock.ts); this device only */
   keepAwake: boolean

@@ -58,6 +58,12 @@ export interface SegmentOption<T extends string | number> {
   dim?: boolean
 }
 
+const SEGMENT_SIZE = {
+  sm: 'h-7 px-2.5 text-xs',
+  md: 'h-8 px-3 text-sm',
+  lg: 'h-9 px-3.5 text-sm',
+} as const
+
 export function Segmented<T extends string | number>({
   value,
   options,
@@ -73,8 +79,8 @@ export function Segmented<T extends string | number>({
   onChange(v: T): void
   label: string
   className?: string
-  size?: 'sm' | 'md'
-  /** `strong`: a bordered group with an inverted active segment, for a switch the user must notice */
+  size?: keyof typeof SEGMENT_SIZE
+  /** `strong`: a bordered group with an inverted active segment and full-contrast labels, for a switch the user must notice */
   variant?: 'quiet' | 'strong'
   /** a guided-tour anchor (data-tour) */
   tour?: string
@@ -103,11 +109,11 @@ export function Segmented<T extends string | number>({
             onClick={() => onChange(o.value)}
             className={clsx(
               'inline-flex items-center justify-center gap-1.5 rounded-md font-medium whitespace-nowrap transition-colors duration-150',
-              size === 'sm' ? 'h-7 px-2.5 text-xs' : 'h-8 px-3 text-sm',
+              SEGMENT_SIZE[size],
               strong
                 ? on
                   ? 'bg-text text-surface'
-                  : 'text-muted hover:bg-surface-2 hover:text-text'
+                  : 'text-text hover:bg-surface-2'
                 : on
                   ? 'bg-surface-3 text-text shadow-[0_1px_0_rgb(255_255_255/0.04)_inset]'
                   : 'text-muted hover:text-text',
