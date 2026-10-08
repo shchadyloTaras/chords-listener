@@ -373,6 +373,16 @@ npx -y firebase-tools@latest emulators:exec --only auth,firestore --project buil
 npx -y firebase-tools@latest emulators:exec --only auth,firestore --project build-chords-listener "node --test firestore.rules.test.mjs"   # правила Firestore
 ```
 
+Живі e2e адмінки (справжній браузер + справжній бекенд у хмарному режимі + емулятори Firebase Auth / Firestore / Storage, реальний час, без підмін; потрібні Java 21+, `uv sync` у `backend/`, вільні порти 8080, 9099, 9199, 8775 і 4183). Емулятори запускає сам скрипт (`firebase-tools@15 emulators:exec`) або бере вже запущені. Подробиці, перелік спеків і разовий крок з Linux-еталонами знімків — у `docs/CLOUD.md` → "Live e2e". У CI — `.github/workflows/admin-live-e2e.yml`, щоночі:
+
+```bash
+cd frontend && npx playwright install chromium                 # один раз
+cd frontend && npm run test:e2e:live                           # ~2 хв, усе, крім 30-хвилинного спеку
+cd frontend && LIVE_SLOW=1 npm run test:e2e:live               # + вкладка адмінки 30 хв без дій (AC-02)
+cd frontend && npm run test:e2e:live -- banner.spec.ts --update-snapshots   # нові еталони знімків банера для цієї ОС
+python3 scripts/measure_cold_start.py --dry-run                # холодний старт хмарного сервісу (p95 ≤ 15 с), лише після розгортання
+```
+
 Синтетичні пісні для оцінки: `cd backend && uv run python scripts/make_synthetic.py --out <папка>` (додай `--random 14` для випадкового набору).
 
 Документація API доступна на http://localhost:8765/api/docs. Контракти (формати JSON, позначення акордів, API, клавіші, темп, режими сайту, Firebase і його емулятори) описано в `docs/SPEC.md`.
@@ -390,7 +400,7 @@ chords-listener/
 ├── storage.rules            Firebase Storage: користувач може лише завантажити свій файл
 ├── scripts/                 deploy_cloud.sh (розгортання), smoke_cloud.py (перевірка), gcloud_token.cjs,
 │                            deploy_fetch.sh (розгортання chords-fetch), smoke_fetch.py (перевірка фрагментів YouTube),
-│                            gcloud_common.sh (спільне для обох розгортань)
+│                            gcloud_common.sh (спільне для обох розгортань), measure_cold_start.py (холодний старт)
 ├── backend/                 Python 3.11 (uv)
 │   ├── Dockerfile           образ для Cloud Run (cloudbuild.yaml збирає його в Cloud Build)
 │   ├── fetch.Dockerfile     образ chords-fetch (сервісу фрагментів YouTube)
