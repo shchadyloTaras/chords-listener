@@ -375,6 +375,23 @@ def test_the_tombstone_comes_first_and_the_auth_account_goes_after_all_the_data(
     assert seen["tombstone"] == "purging"                                       # done only after the account
 
 
+def test_a_profile_rewritten_while_the_account_is_deleted_is_erased_again(env, monkeypatch):
+    # A client still holding a valid ID token writes users/<uid> back between the Firestore erase and the Auth
+    # delete; the purge is "done" after that, so nothing later would catch it: the profile and the e-mail must go.
+    real_delete = env.auth.delete_user
+
+    def delete_user(uid: str) -> None:
+        env.put(f"{env.users}/{uid}", {"email": env.gone_email, "createdAt": NOW, "settings": {"lang": "en"}})
+        real_delete(uid)
+
+    monkeypatch.setattr(env.auth, "delete_user", delete_user)
+    report = env.purger.run()
+    assert report.purged == [env.uid]
+    assert env.get(f"{env.users}/{env.uid}") is None
+    env.directory.full_sync()
+    assert env.directory.email_of(env.uid) is None and env.directory.search("alice.gone") == []
+
+
 @pytest.mark.parametrize("where", ["objects", "index", "auth"])
 def test_an_interrupted_purge_is_resumed_by_the_next_run(env, monkeypatch, where):
     started = None

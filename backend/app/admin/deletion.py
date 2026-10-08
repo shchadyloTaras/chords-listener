@@ -16,7 +16,8 @@ these steps, every one idempotent:
                   restriction reasons removed from ``before`` / ``after``, and the search query (and the uid) removed
                   from every search that matched it - the records stay, ``redactedAt`` says what was done;
 5. Firebase Auth  the account is deleted, last, so an interrupted purge never leaves data whose owner can no longer be
-                  found from Auth (ADR-0011);
+                  found from Auth (ADR-0011); then the profile, admin state and index entry are erased once more, in
+                  case a client still holding a valid ID token wrote its profile back in the meantime;
 6. the tombstone  ``done`` and ``doneAt``.
 
 A step that raises stops that uid (its tombstone stays ``purging``, so the next sweep resumes it) and the others go on;
@@ -237,6 +238,8 @@ class Purger:
         self._step(uid, "jobs", lambda: self._anonymize_jobs(uid))
         self._step(uid, "audit", lambda: self._redact_audit(uid))
         self._step(uid, "auth", lambda: self._auth.delete_user(uid))
+        # A client still holding a valid ID token may have written its profile back before the account went.
+        self._step(uid, "profile", lambda: self._erase_profile(uid))
         self._finish(uid)
         log.info("purge done uid=%s", uid)
         return True
@@ -310,6 +313,9 @@ class Purger:
                 self._db.commit([self._db.delete_op(doc.path) for doc in page])
             if len(page) < PAGE:
                 break
+        self._erase_profile(uid)
+
+    def _erase_profile(self, uid: str) -> None:
         self._db.commit([self._db.delete_op(f"{self._users}/{uid}"), self._db.delete_op(f"{self._accounts}/{uid}")])
         self._directory.remove(uid)
 
