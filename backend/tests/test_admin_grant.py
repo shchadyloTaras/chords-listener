@@ -178,6 +178,11 @@ def test_grant_by_email_resolves_through_the_auth_emulator(emulator_db):
         json={"email": email, "password": "not-a-real-secret-1"}, timeout=10)
     assert sign_up.status_code == 200, sign_up.text
     uid = sign_up.json()["localId"]
+    # granting by email needs a verified address (e889edc); the Auth emulator marks one verified on request
+    verify = requests.post(
+        f"http://{AUTH_HOST}/identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:update",
+        headers={"Authorization": "Bearer owner"}, json={"localId": uid, "emailVerified": True}, timeout=10)
+    assert verify.status_code == 200, verify.text
     try:
         assert script.run(["grant", email, "--project", PROJECT], db=emulator_db) == 0
         doc = emulator_db.get(f"adminAllowlist/{uid}")

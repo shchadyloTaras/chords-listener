@@ -363,6 +363,14 @@ cd frontend && node scripts/eval-web-engine.ts --dir <папка з синтет
 cd frontend && node scripts/eval-transcription.ts   # точність і швидкість розпізнавання нот (живе фортепіано)
 ```
 
+Тести з емуляторами Firebase (~170 тестів адмінки, прийому задач, видачі прав і Firestore без них пропускаються; потрібні Java 21+ і Node; порти 8080 і 9099 мають бути вільні). У CI це робить `.github/workflows/backend-emulators.yml`:
+
+```bash
+export PATH=/opt/homebrew/opt/openjdk/bin:$PATH   # macOS + Homebrew; на Linux досить будь-якої Java 21+
+npx -y firebase-tools@latest emulators:exec --only auth,firestore --project build-chords-listener "cd backend && uv run pytest -q -p no:cacheprovider"
+npx -y firebase-tools@latest emulators:exec --only auth,firestore --project build-chords-listener "node --test firestore.rules.test.mjs"   # правила Firestore
+```
+
 Синтетичні пісні для оцінки: `cd backend && uv run python scripts/make_synthetic.py --out <папка>` (додай `--random 14` для випадкового набору).
 
 Документація API доступна на http://localhost:8765/api/docs. Контракти (формати JSON, позначення акордів, API, клавіші, темп, режими сайту, Firebase і його емулятори) описано в `docs/SPEC.md`.

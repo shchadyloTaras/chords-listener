@@ -1,0 +1,59 @@
+# Backend tests against the Firebase emulators (docs/features/admin, T50 / review S2-5).
+# Without the emulators the ~170 integration and NFR tests (admin, admission, grant, firestore) are skipped, so a plain
+# `pytest` run proves much less than it seems. Here one `emulators:exec` starts Firestore + Auth, runs the whole backend
+# suite with FIRESTORE_EMULATOR_HOST / FIREBASE_AUTH_EMULATOR_HOST set, then the security-rules tests, and stops.
+# Locally: README → "Розробка" / docs/CLOUD.md → "Running the emulator suites".
+name: Backend and rules tests (emulators)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-emulators-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  emulators:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FIREBASE_PROJECT: build-chords-listener
+    steps:
+      - uses: actions/checkout@v7
+
+      # the Firestore emulator needs a JRE (firebase-tools asks for 21+)
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      # madmom is built from git (as in backend/Dockerfile): git and a compiler are on the runner image;
+      # ffmpeg is used by the tests that decode audio
+      - name: Install backend dependencies
+        working-directory: backend
+        run: uv sync --frozen
+
+      - name: Backend tests under the Firestore and Auth emulators
+        run: >
+          npx -y firebase-tools@latest emulators:exec --only auth,firestore --project "$FIREBASE_PROJECT"
+          "cd backend && uv run pytest -q -p no:cacheprovider"
+
+      - name: Firestore security-rules tests
+        run: >
+          npx -y firebase-tools@latest emulators:exec --only auth,firestore --project "$FIREBASE_PROJECT"
+          "node --test firestore.rules.test.mjs"

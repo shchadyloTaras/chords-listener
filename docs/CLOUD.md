@@ -246,6 +246,20 @@ Put the real launch day in `--before`. Roll back with the matching `*.down.*` fi
 
 See the plan without touching Google Cloud: `DRY_RUN=1 scripts/deploy_cloud.sh`. Run the sweep by hand: `gcloud scheduler jobs run chords-sweep-0015 --location europe-west1`; look at the logs: `gcloud run services logs read chords-api --region europe-west1 --limit 100`.
 
+### Running the emulator suites
+
+Without the Firebase emulators about 170 backend tests (admin integration + NFR, admission, grant script, Firestore index) are skipped, and the security-rules tests do not run at all. CI runs both (`.github/workflows/backend-emulators.yml`, on every push to `main` and every pull request). Locally, from the repository root, with Java 21+ and Node installed and ports 8080 (Firestore) and 9099 (Auth) free:
+
+```bash
+export PATH=/opt/homebrew/opt/openjdk/bin:$PATH   # macOS + Homebrew only
+npx -y firebase-tools@latest emulators:exec --only auth,firestore --project build-chords-listener \
+  "cd backend && uv run pytest -q -p no:cacheprovider"
+npx -y firebase-tools@latest emulators:exec --only auth,firestore --project build-chords-listener \
+  "node --test firestore.rules.test.mjs"
+```
+
+`emulators:exec` sets `FIRESTORE_EMULATOR_HOST` and `FIREBASE_AUTH_EMULATOR_HOST` for the command, which is what un-skips the tests; the emulators are stopped afterwards. If a port is taken, an earlier emulator is still running — stop it first.
+
 ### Decisions taken at design (spec §8)
 
 Closed 2026-10-07: no 2FA in v1, no e-mails to users (a restricted or scheduled-for-deletion user sees the same cloud-restriction explanation, without the deletion date). Defaults applied: the support address in that explanation is the owner's (`SUPPORT_EMAIL` in `frontend/src/i18n/cloud.ts`), and the `smoke-test` account is shown apart as "службовий" and left out of the statistics.

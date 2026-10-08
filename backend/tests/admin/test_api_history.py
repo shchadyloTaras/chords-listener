@@ -484,10 +484,10 @@ def test_emulator_a_30_day_range_has_one_entry_per_day_and_restored_days_are_fla
 
     assert r.status_code == 200, r.text
     days = r.json()["days"]
-    assert len(days) == 30
+    assert len(days) == 6  # days without a document are omitted (890a307): five restored days and the frozen one
     assert [d["state"] for d in days[:5]] == ["restored"] * 5
     assert days[0]["restoredTracks"] == {"youtube": 2, "url": 0, "file": 1} and days[0]["failed"] == 0
-    assert days[12]["vocals"] == 3 and days[20]["state"] == "live" and days[20]["active"] == 0
+    assert days[5]["day"] == (start + timedelta(days=12)).isoformat() and days[5]["vocals"] == 3 and days[5]["active"] == 2
     assert m.reads <= 90
 
 
