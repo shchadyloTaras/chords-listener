@@ -145,7 +145,7 @@ const defaultSettings: Settings = {
   syncOffsetMs: 0,
   liveKeysSource: 'chords',
   sectionKinds: {},
-  legendByParts: true,
+  legendByParts: false,
   keepAwake: true,
   harmoniumDrone: false,
   playAlong: false,
@@ -209,7 +209,9 @@ export const useApp = create<AppState>()(
     }),
     {
       name: 'chords-listener-settings',
-      version: 1,
+      version: 2,
+      // v1 saved legendByParts: true for everyone, so v2 resets it once to the new "Усі" default
+      migrate: (state, version) => (version < 2 ? { ...(state as Settings), legendByParts: false } : (state as Settings)),
       partialize: (s): Settings => ({
         transpose: s.transpose,
         simplify: s.simplify,
