@@ -1,7 +1,7 @@
 # Chromatic tuner — Design
 
-**Date:** 2026-10-08 · **Status:** approved in chat (both sections), awaiting written-spec review.
-Details added while writing it up are marked *(added)*.
+**Date:** 2026-10-08 · **Status:** approved; plan in `docs/superpowers/plans/2026-10-08-chromatic-tuner.md`.
+Details added while writing it up are marked *(added)*, changes made while planning *(plan)*.
 
 ## Intent
 
@@ -35,8 +35,10 @@ Decisions taken with the owner:
 ## 1. What the user sees
 
 **Home.** `SmartInput`'s card grid gets a third `WayCard` «Тюнер» (lucide `Gauge` icon *(added: lucide
-has no tuning-fork glyph)*), `href="#/tuner"`; the grid becomes `sm:grid-cols-3`. The Home tour step
-`tour.home.sources` is retitled and its text gains one sentence about the tuner (uk + en).
+has no tuning-fork glyph)*), `href="#/tuner"`; the grid becomes `md:grid-cols-3` *(plan: at 640 px three
+columns squeeze the hints into four lines; below 768 px the cards stack)*. The Home tour step
+`tour.home.sources` is retitled «Файл, «Слухати» чи тюнер» and its text gains one sentence about the
+tuner (uk + en).
 
 **Page `#/tuner`** (centred column like `ListenPage`):
 
@@ -61,7 +63,8 @@ has no tuning-fork glyph)*), `href="#/tuner"`; the grid becomes `sm:grid-cols-3`
   in Idle too, without the microphone.
 - **Errors:** the mic failures reuse `captureMicrophone` → `CaptureError` and the existing
   `live.error.{denied,blocked,no-audio,unsupported,insecure,no-device,failed}` texts, with a «Почати
-  знову» button. A track that ends mid-session (device unplugged) → `no-audio`.
+  знову» button. A track that ends mid-session (device unplugged) → its own text `tuner.error.ended`
+  *(plan: `live.error.no-audio` speaks of tab audio)*.
 - **Note spelling** follows the existing `accidentals` setting: `flat` → flats, `auto` and `sharp` →
   sharps.
 - **Leaving the page** (Back, logo, any hash change) stops the microphone and the tone.
@@ -76,10 +79,10 @@ other tour-less routes.
 | File | Purity | Responsibility |
 |---|---|---|
 | `pitch.ts` | pure | `createPitchDetector(size)` → `detect(frame, sampleRate): { hz, clarity } \| null`. MPM: NSDF from the autocorrelation (zero-padded `RealFFT` of size 2·N, power spectrum, inverse) and the running energy term; key maxima between positive-going and negative-going zero crossings; pick the first key maximum ≥ 0.9 × the highest; parabolic interpolation of the lag. Search range 25–2100 Hz (lag bounds). Buffers allocated once per detector. Returns `null` when no key maximum or `clarity < 0.5`. |
-| `notes.ts` | pure | `hzToNote(hz, a4, spelling)` → `{ midi, name, octave, cents }` (cents in −50…+50, rounded to 0.1); `noteHz(midi, a4)`; `A4_MIN = 400`, `A4_MAX = 480`, `clampA4`. Names via `pcToName` from `lib/music/notes.ts`. |
+| `notes.ts` | pure | `hzToNote(hz, a4)` → `{ midi, cents }` (cents in −50…+50, rounded to 0.1); `noteName(midi, spelling)` → `{ name, octave }` via `pcToName`; `noteHz(midi, a4)`; `A4_MIN = 400`, `A4_MAX = 480`, `clampA4`; *(plan)* `tunerSpelling(accidentals)`, `IN_TUNE_CENTS = 5`, `isInTune`, `formatHz(hz, lang)`, `formatCents(cents)`. |
 | `stabilizer.ts` | pure | `createStabilizer()` → `push(estimate \| null, rms, nowMs)` returning `TunerReading \| null`. Gate: rms below −50 dBFS or clarity < 0.9 counts as silence. Median of the last 5 valid Hz. A new note is shown only after it wins 3 consecutive frames. On silence the last reading holds for 600 ms, then `null`. |
-| `session.ts` | impure | `startTuner(stream)` → `{ sampleRate, read(into: Float32Array): number /* rms */, stop() }`. Own `AudioContext({ latencyHint: 'interactive' })` (webkit fallback), `MediaStreamSource` → `AnalyserNode` (`fftSize = 4096`, not connected to the destination), `getFloatTimeDomainData`. Resumes a suspended context on the next user gesture, as `lib/live/session.ts` does. `stop()` stops the tracks and closes the context. |
-| `tone.ts` | impure | `createReferenceTone()` → `{ play(hz), stop(), dispose() }`. One `OscillatorNode` (sine) → gain, 20 ms attack and release, changing notes glides the frequency (`setTargetAtTime`) without a click. Gain 0.25, 0 when the app is `muted`. Own lazily created `AudioContext`, resumed in the click handler. |
+| `session.ts` | impure | `startTuner(stream)` → `{ sampleRate, read(into: Float32Array): number /* rms */, stop() }`. Own `AudioContext({ latencyHint: 'interactive' })` (webkit fallback), `MediaStreamSource` → `AnalyserNode` (`fftSize = 4096`) → a gain of 0 → destination *(plan: keeps the graph pulled in old Safari; nothing is heard)*, `getFloatTimeDomainData`. Resumes a suspended context on the next user gesture, as `lib/live/session.ts` does. `stop()` stops the tracks and closes the context. |
+| `tone.ts` | impure | `createReferenceTone()` → `{ play(hz), stop(), dispose() }`. One `OscillatorNode` (sine) → gain, 20 ms attack and release, changing notes glides the frequency (`setTargetAtTime`) without a click. Gain 0.25 *(plan: it ignores the player's `muted`; it sounds only on an explicit press, and a silent «Грати» would look broken)*. Own lazily created `AudioContext`, resumed in the click handler. |
 
 Window: 4096 samples ≈ 85 ms at 48 kHz, so the lowest bass string (E1 = 41.2 Hz, period ≈ 24 ms)
 fits more than three periods. One detection per animation frame (~60 Hz) on overlapping windows.
@@ -92,8 +95,9 @@ fits more than three periods. One detection per animation frame (~60 Hz) on over
   skipped while the reference tone sounds. Cleans up on unmount and on track `ended`.
 - `TunerPage.tsx`: the page layout from section 1; owns the reference-tone instance.
 - `TunerDial.tsx`: the SVG arc, ticks, green zone and the spring needle; props `{ cents: number | null,
-  inTune: boolean, muted: boolean }`.
-- `A4Control.tsx`, `ReferenceTone.tsx`: the two small control rows *(added: keeps `TunerPage` short)*.
+  inTune: boolean, label: string }` (`cents: null` = no note: needle centred and dimmed).
+- `A4Control.tsx` (typed value applies on Enter or leaving the field, clamped), `ReferenceToneControl.tsx`:
+  the two small control rows *(added: keeps `TunerPage` short)*.
 
 ### Changes to existing code
 
@@ -104,9 +108,11 @@ fits more than three periods. One detection per animation frame (~60 Hz) on over
   `partialize`. Not in `SYNCED_KEYS` (stays on the device). A persisted value outside the range is
   clamped on read in `TunerPage`.
 - `components/input/SmartInput.tsx`: third `WayCard`, grid `sm:grid-cols-3`.
-- `i18n/tuner.ts` (new, keys `tuner.*`, uk then en) registered in `i18n/index.ts`;
-  `cloud.ways.tuner.{title,hint}` in `i18n/cloud.ts`; `tour.home.sources.{title,text}` updated in
-  `i18n/tour.ts` (uk + en).
+- `i18n/tuner.ts` (new, keys `tuner.*`, uk then en, with a parity + informal-«ти» test) registered in
+  `i18n/index.ts`; `cloud.ways.tuner.{title,hint}` in `i18n/cloud.ts`; `tour.home.sources.{title,text}`
+  updated in `i18n/tour.ts` (uk + en) and the two `TourHost.test.ts` lines that pin the old title.
+- `lib/syncedSettings.test.ts`: its full `Settings` literal gains `tunerA4` *(plan)*.
+- `README.md`: a «Тюнер» paragraph in «Онлайн-версія» *(plan)*.
 - `cloud.ts` header comments that say "the three ways in" stay true (the tuner is not a way to get a
   song in) — unchanged.
 
