@@ -335,13 +335,20 @@ def _admin_email(svc: AdminServices, uid: str) -> str:
 
 
 def _live_user(svc: AdminServices, uid: str) -> Optional[Document]:
-    """``users/{uid}``, or None when ``uid`` is not an account user or the account was purged (tombstone)."""
+    """The account of ``uid``: its ``users`` document, or an empty one when the user deleted their own profile. None
+    when ``uid`` is unknown or the account was purged (tombstone). An account is known from its profile, its admin
+    state (``adminAccounts``) or the e-mail index: the profile alone is not required (review S2-1)."""
     if not valid_uid(uid):
         return None
-    user = svc.db.get(f"{USERS}/{uid}")
-    if user is None or svc.db.get(f"{TOMBSTONES}/{uid}") is not None:
+    if svc.db.get(f"{TOMBSTONES}/{uid}") is not None:
         return None
-    return user
+    user = svc.db.get(f"{USERS}/{uid}")
+    if user is not None:
+        return user
+    email = svc.directory.email_of(uid)
+    if svc.db.get(f"adminAccounts/{uid}") is None and email is None:
+        return None
+    return Document(f"{USERS}/{uid}", {"email": email} if email else {})
 
 
 # --------------------------------------------------------------------------- tracks (metadata only, AC-06)

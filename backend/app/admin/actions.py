@@ -53,6 +53,8 @@ from app.sources import SourceError
 from .audit import COLLECTION as AUDIT_COLLECTION
 from .audit import AuditEntry, NotApplied
 from .directory import USERS, parse_time
+
+TOMBSTONES = "adminTombstones"   # the marker a purge writes first (deletion.py)
 from .models import BannerIn, DefaultLimitsIn, PersonalLimitIn, Settings, SwitchName
 from .settings import PublicStatus
 
@@ -397,13 +399,15 @@ def cancel_deletion(svc: "AdminServices", *, admin_uid: str, admin_email: str, u
     (reason, date, admin), or none, with the journal record in one transaction commit. No deletion, or the purge date
     passed, is ``NotScheduled``, journaled as a rejected attempt."""
     def work(tx: Any) -> Optional[SourceError]:
+        if tx.get(f"{TOMBSTONES}/{uid}") is not None:   # the purge began: it is not to be stopped any more (ADR-0011)
+            return NotScheduled()
         doc = tx.get(_account_path(uid))
         data = doc.data if doc is not None else {}
         deletion = data.get("deletion")
         if not isinstance(deletion, dict):
             return NotScheduled()
         purge_after = parse_time(deletion.get("purgeAfter"))
-        if purge_after is not None and purge_after <= now:
+        if purge_after is not None and purge_after <= max(now, datetime.now(timezone.utc)):   # the time of the commit
             return NotScheduled()
         prior = _kept_restriction(deletion.get("priorRestriction"))
         write = svc.db.update_op(

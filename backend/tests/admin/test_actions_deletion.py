@@ -673,6 +673,55 @@ def test_cancelling_twice_the_second_time_is_not_scheduled(world) -> None:
     assert cancel(w).json()["code"] == "not_scheduled"
 
 
+# =========================================================================== T45: review S2-1 / S2-4
+
+
+def test_s2_1_admin_actions_work_when_the_profile_document_is_missing(world) -> None:
+    """The rules let a user delete their own ``users/{uid}``; the account is still known from ``adminAccounts``."""
+    w = world()
+    seed(w, restriction=restriction(reason=FIXED_REASON), deletion=deletion())
+    del w.db.docs[f"users/{UID}"]
+    w.db.docs[f"adminAccounts/{UID}"]["deletion"]["purgeAfter"] = datetime.now(timezone.utc) + timedelta(days=3)
+
+    assert cancel(w).status_code == 200                                      # the deletion can still be cancelled
+    assert "deletion" not in w.db.docs[f"adminAccounts/{UID}"]
+    assert w.client.put(f"/api/admin/users/{UID}/restriction", json={"reason": "x"}, headers=H(BOSS)).status_code == 200
+
+
+def test_s2_1_a_uid_nobody_knows_is_still_a_404(world) -> None:
+    w = world()
+    assert cancel(w, url="/api/admin/users/ghost/deletion").status_code == 404
+
+
+def test_s2_4_cancel_refuses_once_the_tombstone_exists_inside_the_transaction(world) -> None:
+    from app.admin import actions
+
+    w = world()
+    soon = datetime.now(timezone.utc) + timedelta(days=1)
+    seed(w, restriction=restriction(reason=FIXED_REASON), deletion={**deletion(), "purgeAfter": soon})
+    w.db.docs[f"adminTombstones/{UID}"] = {"status": "purging"}              # the purge began after the request's check
+    before = state(w)
+
+    with pytest.raises(SourceError) as err:
+        actions.cancel_deletion(w.services, admin_uid=BOSS, admin_email=ADMIN_EMAIL, uid=UID,
+                                now=datetime.now(timezone.utc) - timedelta(days=2))
+
+    assert err.value.code == "not_scheduled"
+    assert state(w) == before
+
+
+def test_s2_4_cancel_uses_the_time_of_the_commit_not_the_time_of_the_request(world) -> None:
+    from app.admin import actions
+
+    w = world()
+    past = datetime.now(timezone.utc) - timedelta(minutes=1)
+    seed(w, restriction=restriction(reason=FIXED_REASON), deletion={**deletion(), "purgeAfter": past})
+    with pytest.raises(SourceError) as err:
+        actions.cancel_deletion(w.services, admin_uid=BOSS, admin_email=ADMIN_EMAIL, uid=UID,
+                                now=past - timedelta(hours=1))               # a stale ``now``
+    assert err.value.code == "not_scheduled"
+
+
 # =========================================================================== the Firestore emulator (when there is one)
 
 
