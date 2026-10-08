@@ -526,6 +526,22 @@ export async function createJob(url: string, options?: JobOptions, signal?: Abor
   return startedJob(job)
 }
 
+/** Analyzes a fragment of a YouTube video on the cloud: POST /api/jobs with `clip` (whole seconds from `start`). */
+export async function createClipJob(videoId: string, start: number, signal?: AbortSignal): Promise<Job> {
+  const conn = await whenSettled()
+  if (conn.status !== 'server')
+    throw new ApiError('YouTube fragments need the cloud (sign in)', 'server_required')
+  const job = await request<Job>('/jobs', {
+    method: 'POST',
+    body: JSON.stringify({
+      url: `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`,
+      clip: { start: Math.max(0, Math.floor(start)) },
+    }),
+    signal,
+  })
+  return startedJob(job)
+}
+
 /** Body of POST /api/jobs/storage (docs/CLOUD.md "Uploads"). */
 export function storageJobBody(path: string, meta: UploadMeta = {}, options?: JobOptions): Record<string, unknown> {
   const body: Record<string, unknown> = { path }

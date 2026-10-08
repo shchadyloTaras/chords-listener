@@ -70,6 +70,12 @@ export function blockedVideoId(job: Pick<Job, 'status' | 'errorCode' | 'source'>
   return job.source.videoId || (job.source.url ? parseYouTubeId(job.source.url) : null)
 }
 
+/** Where a job YouTube refused sends the user: «Слухати у вкладці» for that video, from the fragment's start. */
+export function blockedPath(job: Pick<Job, 'status' | 'errorCode' | 'source' | 'clip'>): string | null {
+  const videoId = blockedVideoId(job)
+  return videoId ? paths.capture(videoId, { blocked: true, t: job.clip?.start }) : null
+}
+
 // ------------------------------------------------------------------ polling
 
 /**
@@ -127,11 +133,11 @@ function applyUpdate(prev: Job, next: Job) {
       run: () => navigate(paths.track(trackId)),
     })
   } else if (next.status === 'error' && next.errorCode !== 'cancelled') {
-    const videoId = blockedVideoId(next)
-    if (videoId) {
+    const blocked = blockedPath(next)
+    if (blocked) {
       toast(`${jobTitle(next)}: ${t('cloud.blocked.toast')}`, 'info', {
         label: t('cloud.blocked.action'),
-        run: () => navigate(paths.capture(videoId, { blocked: true })),
+        run: () => navigate(blocked),
       })
       return
     }
@@ -245,6 +251,15 @@ export async function submitUrl(url: string, options?: JobOptions, signal?: Abor
   return job
 }
 
+/** Starts a YouTube fragment on the cloud and follows its job (navigates to it). Throws ApiError. */
+export async function submitClip(videoId: string, start: number, signal?: AbortSignal): Promise<Job> {
+  const fromPath = currentPath()
+  const job = await api.createClipJob(videoId, start, signal)
+  upsert(job)
+  follow(job, fromPath)
+  return job
+}
+
 let uploadSeq = 0
 
 export interface SubmitFileExtra {
@@ -329,12 +344,14 @@ export async function retryJob(job: Job, opts?: { inBrowser?: boolean }): Promis
   const file = retryFiles.get(job.id)
   if (job.source?.type !== 'file' && job.source?.url) {
     const { url } = job.source
-    const target = linkTarget(url, useConnection.getState())
-    // the cloud is never sent YouTube links: the video is listened to in the browser instead
-    if (target === 'capture' || target === 'notVideo') {
+    const conn = useConnection.getState()
+    const target = linkTarget(url, conn)
+    // a YouTube video: signed in, the fragment picker (at the fragment this job asked for); a guest listens in the tab
+    if (target === 'clip' || target === 'capture' || target === 'notVideo') {
       const videoId = job.source.videoId ?? parseYouTubeId(url)
       if (!videoId) return false
-      navigate(paths.capture(videoId))
+      const onCloud = conn.status === 'server' && conn.backend === 'cloud'
+      navigate(onCloud ? paths.clip(videoId, { t: job.clip?.start }) : paths.capture(videoId))
       return true
     }
     await submitUrl(url)

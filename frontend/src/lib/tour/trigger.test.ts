@@ -5,6 +5,7 @@ import type { Route } from '../../hooks/useRoute'
 import type { NotesState } from '../transcription'
 import {
   captureReady,
+  clipReady,
   createAutoStart,
   gateOpen,
   guideAvailable,
@@ -33,7 +34,7 @@ const QUIET: GateInput = {
 
 const home: Route = { name: 'home' }
 const listen: Route = { name: 'listen', source: null, title: null }
-const capture = (blocked: boolean): Route => ({ name: 'capture', videoId: 'dQw4w9WgXcQ', blocked })
+const capture = (blocked: boolean): Route => ({ name: 'capture', videoId: 'dQw4w9WgXcQ', blocked, start: null })
 const track: Route = { name: 'track', id: 't1' }
 const demo: Route = { name: 'demo' }
 const job: Route = { name: 'job', id: 'j1' }
@@ -188,6 +189,16 @@ describe('Listen and YouTube readiness', () => {
   it('only at the start button: not while asking, failing, stopping or saving', () => {
     expect(listenReady('idle')).toBe(true)
     for (const phase of ['requesting', 'starting', 'live', 'paused', 'stopping', 'saving', 'done', 'error']) expect(listenReady(phase), phase).toBe(false)
+  })
+
+  it('the fragment picker: its own tour, once the player has loaded; one screen per video', () => {
+    const clip: Route = { name: 'clip', videoId: 'dQw4w9WgXcQ', start: null }
+    expect(reopenTours(clip, { view: 'sheet', keysPanel: false })).toEqual(['clip'])
+    expect(guideAvailable(clip, false)).toBe(true)
+    expect(tourRouteKey(clip)).toBe('clip:dQw4w9WgXcQ')
+    expect(clipReady('ready')).toBe(true)
+    expect(clipReady('loading')).toBe(false)
+    expect(clipReady('embed')).toBe(false)
   })
 
   it('YouTube also needs its player loaded', () => {

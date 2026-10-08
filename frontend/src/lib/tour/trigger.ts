@@ -84,6 +84,8 @@ export function reopenTours(route: Route, ctx: ReopenContext): TourId[] {
       return ['listen']
     case 'capture':
       return ['capture']
+    case 'clip':
+      return ['clip']
     case 'track':
     case 'demo': {
       const first: TourId = ctx.view === 'score' ? 'score' : 'song'
@@ -108,6 +110,8 @@ export function tourRouteKey(route: Route): string {
       return `${route.name}:${route.id}`
     case 'capture':
       return `capture:${route.videoId}`
+    case 'clip':
+      return `clip:${route.videoId}`
     default:
       return route.name
   }
@@ -143,4 +147,9 @@ export function listenReady(phase: string): boolean {
 /** YouTube in a tab: idle, and the embedded player has loaded. */
 export function captureReady(phase: string, player: string): boolean {
   return phase === 'idle' && player === 'ready'
+}
+
+/** The YouTube fragment picker: the embedded player has loaded. */
+export function clipReady(player: string): boolean {
+  return player === 'ready'
 }

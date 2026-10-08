@@ -154,6 +154,14 @@ export function chooseStartOffset(currentTime: number, duration: number): number
   return Math.round(currentTime * 10) / 10
 }
 
+/**
+ * Before the recording starts: where the video is or - while it has not played yet - the start the page was opened
+ * with (`#/listen/youtube/<id>?t=`, e.g. the fragment YouTube refused to the cloud), fed to chooseStartOffset.
+ */
+export function idlePosition(currentTime: number, startAt: number | null): number {
+  return currentTime >= 1 || !startAt ? currentTime : startAt
+}
+
 /** How long to wait for the video to start playing before suggesting to press play on it, ms. */
 export const STARTING_HINT_MS = 8000
 /** Shortest recording worth analyzing, seconds. */

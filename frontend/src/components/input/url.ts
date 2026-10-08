@@ -68,19 +68,34 @@ export function parseYouTubeId(raw: string): string | null {
 }
 
 /**
- * Where a link goes. YouTube refuses the cloud's servers, so on the cloud (and without a server) a YouTube
- * video is listened to in the browser, and any other YouTube page (a playlist, a channel, a clip) is not one
- * video to listen to: 'notVideo', nothing is sent anywhere. A local server (home connection) downloads every
- * link itself. Lives here, not in startLink.ts, so hooks/useJobs.ts can use it without an import cycle.
+ * Where a link goes. A local server (home connection) downloads every link itself. Signed in on the cloud, a YouTube
+ * video opens the fragment picker: the cloud downloads 30 s of it through chords-fetch (YouTube refuses the cloud's
+ * own servers). Without an account a video is listened to in the browser ('capture'). Any other YouTube page (a
+ * playlist, a channel, a clip) is not one video: 'notVideo', nothing is sent anywhere. Lives here, not in
+ * startLink.ts, so hooks/useJobs.ts can use it without an import cycle.
  */
 export function linkTarget(
   url: string,
   conn: Pick<ConnectionState, 'status' | 'backend'>,
-): 'capture' | 'notVideo' | 'server' | 'account' {
+): 'clip' | 'capture' | 'notVideo' | 'server' | 'account' {
   const server = conn.status === 'server'
   if (server && conn.backend === 'local') return 'server'
-  if (youTubeUrl(url)) return parseYouTubeId(url) ? 'capture' : 'notVideo'
+  if (youTubeUrl(url)) {
+    if (!parseYouTubeId(url)) return 'notVideo'
+    return server && conn.backend === 'cloud' ? 'clip' : 'capture'
+  }
   return server ? 'server' : 'account'
+}
+
+/** A YouTube link's own start (`t=72`, `t=1m12s`, `start=30`, `#t=45`) in whole seconds; null when it has none. */
+export function parseYouTubeStart(raw: string): number | null {
+  const u = youTubeUrl(raw)
+  if (!u) return null
+  const value = (u.searchParams.get('t') ?? u.searchParams.get('start') ?? new URLSearchParams(u.hash.slice(1)).get('t') ?? '').trim()
+  const m = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s?)?$/.exec(value)
+  if (!value || !m) return null
+  const seconds = Number(m[1] ?? 0) * 3600 + Number(m[2] ?? 0) * 60 + Number(m[3] ?? 0)
+  return seconds > 0 ? seconds : null
 }
 
 /** Accepts "youtube.com/…", "www.…", "youtu.be/…" without a scheme. */

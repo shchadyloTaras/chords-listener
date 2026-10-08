@@ -1,6 +1,7 @@
 import { t } from '../../i18n'
 import { useApp, type PlayerController } from '../../store'
-import type { Track } from '../../types'
+import type { ClipRange, Track } from '../../types'
+import { clipRestart, pastClipEnd } from './clipBounds'
 import { AudioSource, type AudioMedia } from './sources/audioSource'
 import { ClockSource } from './sources/clockSource'
 import type { PlaybackSource, SourceEvents } from './sources/types'
@@ -23,11 +24,28 @@ export class PlaybackEngine {
   private timer = 0
   private disposed = false
   private unsubscribe: () => void
+  private readonly clip: ClipRange | null
+  // stopped at the fragment's end by tick: the next play starts the fragment again
+  private clipDone = false
 
   readonly controller: PlayerController = {
-    play: () => this.active?.play(),
+    play: () => {
+      const src = this.active
+      if (!src) return
+      // a fragment that has played to its end starts again (the video itself would run on)
+      const clip = this.clip
+      if (clip && (this.clipDone || clipRestart(src.getTime(), clip) !== null)) {
+        src.seek(clip.start)
+        useApp.getState().setPlayback({ currentTime: clip.start })
+      }
+      this.clipDone = false
+      src.play()
+    },
     pause: () => this.active?.pause(),
-    seek: (time) => this.active?.seek(time),
+    seek: (time) => {
+      this.clipDone = false
+      this.active?.seek(time)
+    },
     setRate: (rate) => this.active?.setRate(rate),
     setVolume: (volume) => this.active?.setVolume(volume),
     getTime: () => this.active?.getTime() ?? 0,
@@ -35,6 +53,7 @@ export class PlaybackEngine {
 
   /** `media`: hooks for the track's audio (see AudioMedia), e.g. the cloud copy kept on this device. */
   constructor(track: Track, media?: AudioMedia) {
+    this.clip = track.clip ?? null
     this.base = this.create((events) =>
       track.audioUrl
         ? new AudioSource(track.audioUrl, events, track.startOffset ?? 0, media)
@@ -66,7 +85,9 @@ export class PlaybackEngine {
       onPause: () => {
         if (!isActive() || !source) return
         this.stopLoop()
-        useApp.getState().setPlayback({ isPlaying: false, currentTime: source.getTime() })
+        // the player rests a little before where tick stopped it: show the fragment's end
+        const time = this.clipDone && this.clip ? this.clip.end : source.getTime()
+        useApp.getState().setPlayback({ isPlaying: false, currentTime: time })
       },
       onEnded: () => {
         if (!isActive() || !source) return
@@ -155,6 +176,14 @@ export class PlaybackEngine {
     if (loop && loop.end > loop.start && time >= loop.end && time < loop.end + LOOP_WINDOW) {
       src.seek(loop.start)
       time = loop.start
+    }
+    const clip = this.clip
+    if (clip && pastClipEnd(time, clip, loop)) {
+      this.clipDone = true
+      src.pause()
+      this.stopLoop()
+      s.setPlayback({ isPlaying: false, currentTime: clip.end })
+      return
     }
     if (Math.abs(time - s.currentTime) > 0.0005) s.setPlayback({ currentTime: time })
     // rAF pauses in background tabs; a timer keeps A-B loops working there.

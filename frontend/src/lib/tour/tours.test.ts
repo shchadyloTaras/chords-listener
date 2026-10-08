@@ -1,4 +1,4 @@
-// The six tours as data: step counts per screen and breakpoint, 43 distinct anchors, conditions, text keys.
+// The seven tours as data: step counts per screen and breakpoint, 47 distinct anchors, conditions, text keys.
 import { describe, expect, it } from 'vitest'
 import { conditionHolds, textKey, textKeys, titleKey, tourAnchors, TOUR_IDS, TOURS, type TourFlags } from './tours'
 
@@ -7,13 +7,13 @@ const shown = (id: (typeof TOUR_IDS)[number], flags: TourFlags) =>
   TOURS[id].steps.filter((s) => (s.when ?? []).every((c) => conditionHolds(c, flags))).map((s) => s.id)
 
 describe('tour definitions', () => {
-  it('has the six tours in a fixed order', () => {
-    expect(TOUR_IDS).toEqual(['home', 'song', 'score', 'keys', 'listen', 'capture'])
+  it('has the seven tours in a fixed order', () => {
+    expect(TOUR_IDS).toEqual(['home', 'song', 'score', 'keys', 'listen', 'capture', 'clip'])
     for (const id of TOUR_IDS) expect(TOURS[id].id).toBe(id)
   })
 
-  it('anchors 43 distinct ids', () => {
-    expect(tourAnchors()).toHaveLength(43)
+  it('anchors 47 distinct ids', () => {
+    expect(tourAnchors()).toHaveLength(47)
   })
 
   it('keeps step ids unique inside each tour', () => {
@@ -47,6 +47,11 @@ describe('tour definitions', () => {
     expect(shown('listen', { listenMic: true })).toEqual(['sources', 'start', 'level', 'controls'])
     expect(shown('capture', { canListenInTab: true })).toEqual(['video', 'start', 'howto', 'controls'])
     expect(shown('capture', {})).toEqual(['videoNoTab', 'alt'])
+  })
+
+  it('YouTube fragment: 4 steps, the window text for touch screens too', () => {
+    expect(shown('clip', {})).toEqual(['window', 'from', 'preview', 'analyze'])
+    expect(textKey('clip', TOURS.clip.steps[0], { touch: true })).toBe('tour.clip.window.text.touch')
   })
 
   it('conditions: a flag, its negation, and a missing flag as false', () => {

@@ -312,8 +312,9 @@ export function SmartInput({ className }: { className?: string }) {
       )
     switch (hint.kind) {
       case 'youtube':
-        // a local server downloads the video; everywhere else it opens on the capture page
+        // a local server downloads the video; signed in, the cloud takes a fragment; a guest listens on the capture page
         if (localServer) return ok(t('core.input.hintYoutube'))
+        if (onCloud) return ok(t('cloud.input.hintYoutubeClip'))
         return ok(t(tabCapable ? 'cloud.input.hintYoutubeGuest' : 'cloud.input.hintYoutubeHere'))
       case 'other':
         return guest ? (

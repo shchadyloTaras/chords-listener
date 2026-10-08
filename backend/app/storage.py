@@ -507,6 +507,7 @@ class TrackStore:
             "edited": edited,
             "vocals": bool(meta.get("vocals")),
             "stems": _stems(meta),
+            "clip": meta.get("clip"),
             "createdAt": meta.get("createdAt") or utc_now(),
         }
 

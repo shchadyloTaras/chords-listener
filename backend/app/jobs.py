@@ -23,12 +23,14 @@ from .models import AnalysisResult, ErrorCode, Job, JobStatus, Settings, VocalNo
 from .quotas import QuotaExceeded, Quotas
 from .sources import (
     Cancelled,
+    ClipFetcher,
     NormalizedUrl,
     ProbeResult,
     ReceivedUpload,
     RemoteMedia,
     SourceError,
     UrlFetcher,
+    clip_track_key,
     display_name,
     probe_media,
     safe_suffix,
@@ -83,6 +85,7 @@ class JobRecord:
     keys: set[str] = field(default_factory=set)
     created_ts: float = field(default_factory=time.time)
     uid: Optional[str] = None  # owner (cloud mode); None in local mode
+    clip: Optional[dict[str, float]] = None  # YouTube fragment jobs: {"start", "end"} in video seconds
 
     @property
     def finished(self) -> bool:
@@ -102,6 +105,7 @@ class JobRecord:
                 "title": self.title,
                 "thumbnail": self.thumbnail,
                 "source": self.source,
+                "clip": self.clip,
                 "createdAt": self.created_at,
             }
         )
@@ -115,10 +119,12 @@ class JobManager:
         fetcher: UrlFetcher,
         analyzer: Optional[Analyzer] = None,
         vocal_transcriber: Optional[VocalTranscriber] = None,
+        clip_fetcher: Optional[ClipFetcher] = None,
     ) -> None:
         self.settings = settings
         self.store = store
         self.fetcher = fetcher
+        self.clip_fetcher = clip_fetcher  # YouTube fragments (None: this server can't download them)
         self.analyzer: Analyzer = analyzer or analyze
         self.vocal_transcriber = vocal_transcriber  # None: app.vocals.transcribe when the extra is installed
         self._lock = threading.RLock()
@@ -173,7 +179,9 @@ class JobManager:
 
     # ------------------------------------------------------------------ submission
 
-    def submit_url(self, url: NormalizedUrl, options: dict[str, Any]) -> Job:
+    def submit_url(self, url: NormalizedUrl, options: dict[str, Any], clip_start: Optional[int] = None) -> Job:
+        if clip_start is not None:
+            return self._submit_clip(url, clip_start, options)
         offline_key = self.fetcher.offline_key(url)
         track_id = None
         if offline_key:
@@ -200,6 +208,35 @@ class JobManager:
                 keys=keys,
             )
             self._submit(rec, lambda: self._run_url(rec, url))
+            return rec.to_model()
+
+    def _submit_clip(self, url: NormalizedUrl, start: int, options: dict[str, Any]) -> Job:
+        """``clip_s`` seconds of a YouTube video from ``start`` (whole seconds): one fragment = one track
+        (``youtube:<id>@<start>``), downloaded by ``clip_fetcher`` and analyzed in video time."""
+        video_id = url.youtube_id
+        if not video_id:
+            raise SourceError("invalid_url", "Only a YouTube video can be analyzed as a fragment")
+        if self.clip_fetcher is None:
+            raise SourceError("unavailable", "YouTube fragments can't be downloaded on this server", 501)
+        kind, _, ident = clip_track_key(video_id, start).partition(":")
+        track_id = track_id_for(kind, ident)
+        if self.store.exists(track_id):
+            return self._already_done("url", track_id)
+        keys = {self._ukey(f"track:{track_id}")}
+        with self._lock:
+            running = self._find_active(keys)
+            if running:
+                return running.to_model()
+            self.admit()
+            rec = self._new_record(
+                "url",
+                options,
+                source={"type": "youtube", "url": youtube_url(video_id), "videoId": video_id, "filename": None},
+                thumbnail=youtube_thumbnail(video_id),
+                clip={"start": float(start), "end": float(start + self.settings.clip_s)},
+                keys=keys,
+            )
+            self._submit(rec, lambda: self._run_clip(rec, video_id, start, track_id))
             return rec.to_model()
 
     def submit_upload(self, upload: ReceivedUpload, probe: ProbeResult, options: dict[str, Any]) -> Job:
@@ -368,7 +405,8 @@ class JobManager:
         except Exception:
             meta = {}
         rec = self._new_record(
-            kind, {}, keys=set(), source=meta.get("source"), title=meta.get("title"), thumbnail=meta.get("thumbnail")
+            kind, {}, keys=set(), source=meta.get("source"), title=meta.get("title"), thumbnail=meta.get("thumbnail"),
+            clip=meta.get("clip"),
         )
         self._update(rec, status="done", progress=1.0, message=message, track_id=track_id)
         self._ensure_published(track_id)
@@ -492,6 +530,35 @@ class JobManager:
                 "sourceDuration": media.duration,
             }
             self._process(rec, src, work, track_id, meta, probe=None)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+    def _run_clip(self, rec: JobRecord, video_id: str, start: int, track_id: str) -> None:
+        assert self.clip_fetcher is not None
+        self._update(rec, status="downloading", progress=0.01, message="Downloading the fragment")
+        work = self.store.new_work_dir(rec.id)
+        try:
+            clip = self.clip_fetcher.fetch(
+                video_id,
+                start,
+                self.settings.clip_s,
+                work,
+                lambda f: self._update(rec, progress=self._scaled((0.01, DOWNLOAD_RANGE[1]), f)),
+                rec.cancel,
+            )
+            self._check_cancel(rec)
+            span = {"start": clip.start, "end": clip.end}
+            self._update(rec, title=clip.title, thumbnail=clip.thumbnail or rec.thumbnail, clip=span)
+            meta = {
+                "title": clip.title,
+                "artist": clip.artist,
+                "thumbnail": clip.thumbnail or rec.thumbnail,
+                "source": rec.source,
+                "sourceDuration": clip.duration,
+                "clip": span,
+            }
+            # only the fragment was downloaded: the video's own length doesn't matter (no too_long check here)
+            self._process(rec, clip.path, work, track_id, meta, probe=None, start_offset=clip.start)
         finally:
             shutil.rmtree(work, ignore_errors=True)
 

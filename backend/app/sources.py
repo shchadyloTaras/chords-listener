@@ -35,11 +35,14 @@ _EXTRA_BIN_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin")
 class SourceError(Exception):
     """A user-facing failure with an API error code (and optionally an explicit HTTP status)."""
 
-    def __init__(self, code: ErrorCode, message: str, status: Optional[int] = None) -> None:
+    def __init__(
+        self, code: ErrorCode, message: str, status: Optional[int] = None, *, detail: Optional[str] = None
+    ) -> None:
         super().__init__(message)
         self.code: ErrorCode = code
         self.message = message
         self.status = status
+        self.detail = detail  # yt-dlp's own message, for retry decisions (chords-fetch); never shown to users
 
 
 class Cancelled(Exception):
@@ -190,6 +193,43 @@ def track_id_for(kind: str, ident: str) -> str:
     return hashlib.sha1(f"{kind}:{ident}".encode()).hexdigest()[:12]
 
 
+# --------------------------------------------------------------------------- YouTube fragments
+
+YT_CLIP_MAX_S = 60  # the longest fragment chords-fetch serves
+
+
+def clip_track_key(video_id: str, start: int) -> str:
+    """Track key of a YouTube fragment: one fragment = one track (``youtube:<videoId>@<start>``)."""
+    return f"youtube:{video_id}@{int(start)}"
+
+
+def clip_end(start: int, length: int, duration: Optional[float]) -> float:
+    """End (video seconds) of the fragment that starts at ``start``: ``length`` seconds, cut at the video's end
+    (a video shorter than that is taken whole). Raises SourceError(invalid_url) when ``start`` is past the end."""
+    if duration is not None and start >= duration:
+        raise SourceError("invalid_url", f"The fragment starts at {start} s but the video is only {duration:.0f} s long")
+    end = float(start + length)
+    return min(end, float(duration)) if duration is not None else end
+
+
+@dataclass
+class FetchedClip:
+    path: Path
+    title: str
+    artist: Optional[str]
+    duration: Optional[float]  # the whole video
+    thumbnail: Optional[str]
+    start: float
+    end: float
+
+
+class ClipFetcher(Protocol):
+    def fetch(
+        self, video_id: str, start: int, length: int, dest_dir: Path, progress: ProgressCb, cancel: threading.Event
+    ) -> FetchedClip:
+        """Download ``length`` seconds of the video from ``start`` into dest_dir. Raises SourceError / Cancelled."""
+
+
 # --------------------------------------------------------------------------- remote media (yt-dlp)
 
 
@@ -266,7 +306,18 @@ def is_blocked_message(message: str, youtube: bool = False) -> bool:
     return any(p in low for p in _BLOCKED_PATTERNS) or (youtube and any(p in low for p in _YOUTUBE_BLOCKED_PATTERNS))
 
 
+_BOT_CHECK_PATTERNS = ("sign in to confirm", "not a bot", "--cookies-from-browser")
+
+
+def is_bot_check(message: str) -> bool:
+    """YouTube's bot check / sign-in wall (a new WARP session may pass it), as opposed to a refused media URL
+    (HTTP 403 on the stream, fixed by a fresh extraction)."""
+    low = _ANSI_RE.sub("", message or "").lower().replace("’", "'")
+    return any(p in low for p in _BOT_CHECK_PATTERNS)
+
+
 def _map_ytdlp_error(exc: BaseException, youtube: bool = False) -> SourceError:
+    raw = _ANSI_RE.sub("", str(exc)).strip()[:1000]
     msg = _clean_ytdlp_message(str(exc))
     low = msg.lower()
     if is_blocked_message(str(exc), youtube):
@@ -274,13 +325,14 @@ def _map_ytdlp_error(exc: BaseException, youtube: bool = False) -> SourceError:
             "download_blocked",
             "YouTube refused the download from the server (bot check). Play the video and use "
             "\"listen in this tab\", or upload the audio file.",
+            detail=raw,
         )
     if "unsupported url" in low or "is not a valid url" in low:
-        return SourceError("invalid_url", "This link isn't supported")
+        return SourceError("invalid_url", "This link isn't supported", detail=raw)
     if any(s in low for s in ("getaddrinfo", "nodename nor servname", "name or service not known", "timed out",
                               "connection refused", "network is unreachable", "unable to download webpage")):
-        return SourceError("download_failed", f"Network error: {msg}" if msg else "Network error")
-    return SourceError("download_failed", msg or "Download failed")
+        return SourceError("download_failed", f"Network error: {msg}" if msg else "Network error", detail=raw)
+    return SourceError("download_failed", msg or "Download failed", detail=raw)
 
 
 class _YtdlLogger:
@@ -319,8 +371,10 @@ def _strip_topic(name: Optional[str]) -> Optional[str]:
 class YtDlpFetcher:
     """UrlFetcher backed by the yt-dlp Python API."""
 
-    def __init__(self, max_bytes: int) -> None:
+    def __init__(self, max_bytes: int, proxy: Optional[str] = None, ffmpeg_proxy: Optional[str] = None) -> None:
         self.max_bytes = max_bytes
+        self.proxy = proxy  # e.g. socks5h://127.0.0.1:40000 (chords-fetch: Cloudflare WARP)
+        self.ffmpeg_proxy = ffmpeg_proxy  # http://… (CONNECT) proxy for ffmpeg, which cuts fragments and can't use SOCKS
 
     def _opts(self, **extra: Any) -> dict[str, Any]:
         opts: dict[str, Any] = {
@@ -342,6 +396,8 @@ class YtDlpFetcher:
         ffmpeg = find_executable("ffmpeg")
         if ffmpeg:
             opts["ffmpeg_location"] = str(Path(ffmpeg).parent)
+        if self.proxy:
+            opts["proxy"] = self.proxy
         opts.update(extra)
         return opts
 
@@ -404,6 +460,29 @@ class YtDlpFetcher:
         )
 
     def download(self, media: RemoteMedia, dest_dir: Path, progress: ProgressCb, cancel: threading.Event) -> Path:
+        return self._download(media, dest_dir, progress, cancel)
+
+    def download_clip(
+        self, media: RemoteMedia, start: float, end: float, dest_dir: Path, progress: ProgressCb, cancel: threading.Event
+    ) -> Path:
+        """Only ``[start, end]`` of the media: yt-dlp's download_ranges has ffmpeg fetch and cut just that part."""
+        from yt_dlp.utils import download_range_func
+
+        # re-encode the 30 s: a stream-copy cut snaps to a seek point and the audio would not start at `start`
+        extra: dict[str, Any] = {
+            "download_ranges": download_range_func(None, [(start, end)]),
+            "force_keyframes_at_cuts": True,
+        }
+        # ffmpeg does the cut and can't use SOCKS or yt-dlp's env proxy: its input gets the HTTP CONNECT proxy.
+        # ffmpeg gives up on a network stall after 20 s (-rw_timeout, µs) instead of hanging; the attempt is then retried
+        extra["external_downloader_args"] = {
+            "ffmpeg_i": [*(["-http_proxy", self.ffmpeg_proxy] if self.ffmpeg_proxy else []), "-rw_timeout", "20000000"]
+        }
+        return self._download(media, dest_dir, progress, cancel, **extra)
+
+    def _download(
+        self, media: RemoteMedia, dest_dir: Path, progress: ProgressCb, cancel: threading.Event, **extra: Any
+    ) -> Path:
         import yt_dlp
 
         def hook(d: dict[str, Any]) -> None:
@@ -428,6 +507,7 @@ class YtDlpFetcher:
             overwrites=True,
             continuedl=False,
             writethumbnail=False,
+            **extra,
         )
         def run(fresh: bool) -> Optional[dict[str, Any]]:
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -466,6 +546,33 @@ class YtDlpFetcher:
         if isinstance(size, (int, float)) and size > self.max_bytes:
             raise SourceError("too_large", "The media file is too large")
         raise SourceError("download_failed", "The download produced no audio file")
+
+
+class LocalClipFetcher:
+    """ClipFetcher in this process with yt-dlp: the local server, dev, and chords-fetch (with a WARP proxy)."""
+
+    def __init__(self, ytdlp: YtDlpFetcher) -> None:
+        self.ytdlp = ytdlp
+
+    def fetch(
+        self, video_id: str, start: int, length: int, dest_dir: Path, progress: ProgressCb, cancel: threading.Event
+    ) -> FetchedClip:
+        if not _YT_ID_RE.fullmatch(video_id or ""):
+            raise SourceError("invalid_url", "This YouTube link doesn't point to a video")
+        media = self.ytdlp.probe(NormalizedUrl(youtube_url(video_id), video_id))
+        end = clip_end(start, length, media.duration)
+        if cancel.is_set():
+            raise Cancelled()
+        path = self.ytdlp.download_clip(media, float(start), end, dest_dir, progress, cancel)
+        return FetchedClip(
+            path=path,
+            title=media.title,
+            artist=media.artist,
+            duration=media.duration,
+            thumbnail=media.thumbnail or youtube_thumbnail(video_id),
+            start=float(start),
+            end=end,
+        )
 
 
 # --------------------------------------------------------------------------- ffprobe / ffmpeg

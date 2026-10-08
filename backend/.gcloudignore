@@ -2,6 +2,7 @@
 # only what backend/Dockerfile needs. Same syntax as .gitignore.
 /*
 !/Dockerfile
+!/fetch.Dockerfile
 !/.dockerignore
 !/pyproject.toml
 !/uv.lock

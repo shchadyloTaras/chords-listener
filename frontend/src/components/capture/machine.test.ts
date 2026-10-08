@@ -3,6 +3,7 @@ import { YT_STATE } from '../player/sources/youtubeApi'
 import {
   captureReducer,
   chooseStartOffset,
+  idlePosition,
   initialCapture,
   isRetryable,
   playerEvent,
@@ -141,5 +142,15 @@ describe('failure detail', () => {
     expect(isRetryable('blocked')).toBe(true)
     expect(isRetryable('unsupported')).toBe(false)
     expect(isRetryable('insecure')).toBe(false)
+  })
+})
+
+describe('idlePosition', () => {
+  it('the start the page was opened with, until the video has played; then where the video is', () => {
+    expect(idlePosition(0, 72)).toBe(72)
+    expect(idlePosition(0.4, 72)).toBe(72)
+    expect(idlePosition(15, 72)).toBe(15)
+    expect(idlePosition(0, null)).toBe(0)
+    expect(chooseStartOffset(idlePosition(0, 72), 213)).toBe(72) // «Почати з 1:12» right away
   })
 })

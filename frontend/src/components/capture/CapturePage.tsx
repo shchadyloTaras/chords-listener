@@ -18,7 +18,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { t as tNow, useT } from '../../i18n'
-import { openAuthDialog } from '../../lib/auth'
+import { openAuthDialog, useAuth } from '../../lib/auth'
 import { useApp } from '../../store'
 import { useDocumentTitle } from '../../hooks/useDocumentTitle'
 import { useJobs } from '../../hooks/useJobs'
@@ -31,31 +31,27 @@ import { copyWithToast } from '../chords/useCopy'
 import { errorText } from '../jobs/errorText'
 import { startFiles } from '../input/startFiles'
 import { FILE_ACCEPT } from '../input/url'
-import { isEmbedBlockedError, loadYouTubeApi, YT_STATE, type YTPlayer } from '../player/sources/youtubeApi'
+import { isEmbedBlockedError, loadYouTubeApi, videoTitle, YT_STATE, type YTPlayer } from '../player/sources/youtubeApi'
 import { useTourTrigger } from '../tour/hooks'
 import { Button } from '../ui/IconButton'
 import { VideoSiteIcon } from '../ui/Logo'
 import { formatTime } from '../ui/format'
 import { LiveChordsView } from '../live'
 import { CaptureErrorAlert } from './CaptureErrorAlert'
-import { chooseStartOffset, isCapturing, isRetryable, playerEvent, STARTING_HINT_MS, type CaptureFailure } from './machine'
+import {
+  chooseStartOffset,
+  idlePosition,
+  isCapturing,
+  isRetryable,
+  playerEvent,
+  STARTING_HINT_MS,
+  type CaptureFailure,
+} from './machine'
 import { recordingFilename, saveRecording } from './saveRecording'
 import { ShareTabIllustration } from './ShareTabIllustration'
 import { useCapture } from './useCapture'
 
 type PlayerStatus = 'loading' | 'ready' | 'embed' | 'error'
-
-/** The IFrame API also reports the loaded video's title (not in the typed surface). */
-type YTPlayerWithData = YTPlayer & { getVideoData?(): { title?: string; author?: string } }
-
-function videoTitle(player: YTPlayer | null): string | null {
-  try {
-    const title = (player as YTPlayerWithData | null)?.getVideoData?.()?.title?.trim()
-    return title || null
-  } catch {
-    return null
-  }
-}
 
 function failureText(error: CaptureFailure | null, reason: string): string {
   switch (error) {
@@ -172,10 +168,11 @@ function NoTabCapture({ url, title }: { url: string; title: string | null }) {
  * Where the browser cannot listen to a tab (phones, Safari, Firefox) the video still plays here and the
  * microphone (the video on another device), a file or a computer are offered instead.
  */
-export function CapturePage({ videoId, blocked }: { videoId: string; blocked: boolean }) {
+export function CapturePage({ videoId, blocked, start }: { videoId: string; blocked: boolean; start: number | null }) {
   const t = useT()
   const url = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`
   const cloudInvite = useCloudInvite()
+  const signedIn = useAuth((s) => !!s.user)
   const tabCapture = useCanListenInTab()
 
   const mountRef = useRef<HTMLDivElement>(null)
@@ -186,7 +183,7 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
   /** the video has not started playing for a while after the recording began waiting for it */
   const [slowStart, setSlowStart] = useState(false)
   const [title, setTitle] = useState<string | null>(null)
-  const [position, setPosition] = useState(0)
+  const [position, setPosition] = useState(start ?? 0)
   /** video time where the recording began (set when the video starts playing) */
   const startOffsetRef = useRef<number | null>(null)
   const titleRef = useRef<string | null>(null)
@@ -215,6 +212,18 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
   })
   const { state, dispatch, current } = capture
 
+  // A guest who signs in from the hint above goes on to the fragment picker: the tab / microphone page is what that
+  // hint promised to spare (a phone cannot listen in a tab at all). Only the change counts: someone who was signed
+  // in when the page opened (a blocked fragment is sent here on purpose) stays.
+  const wasInvited = useRef(cloudInvite)
+  useEffect(() => {
+    const was = wasInvited.current
+    wasInvited.current = cloudInvite
+    if (was && !cloudInvite && signedIn && state.phase === 'idle') {
+      navigate(paths.clip(videoId, { t: position }), { replace: true })
+    }
+  }, [cloudInvite, signedIn, state.phase, videoId, position])
+
   // "listen in the tab" only where the tab can be heard: elsewhere it is just the video, with other ways to listen
   const pageLabel = t(tabCapture ? 'cloud.capture.title' : 'cloud.capture.videoBadge')
   useDocumentTitle(title ? `${pageLabel} · ${title}` : pageLabel)
@@ -236,7 +245,14 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
           width: '100%',
           height: '100%',
           host: 'https://www.youtube-nocookie.com',
-          playerVars: { playsinline: 1, rel: 0, iv_load_policy: 3, enablejsapi: 1, origin: window.location.origin },
+          playerVars: {
+            playsinline: 1,
+            rel: 0,
+            iv_load_policy: 3,
+            enablejsapi: 1,
+            origin: window.location.origin,
+            ...(start ? { start } : {}),
+          },
           events: {
             onReady: (e) => {
               if (cancelled) return
@@ -284,7 +300,7 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
       }
       host.replaceChildren()
     }
-  }, [videoId, dispatch, current, playerKey])
+  }, [videoId, start, dispatch, current, playerKey])
 
   // ---- before starting: where the video is (to offer "start at 1:23")
   useEffect(() => {
@@ -293,13 +309,13 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
       const p = playerRef.current
       if (!p) return
       try {
-        setPosition(chooseStartOffset(p.getCurrentTime(), p.getDuration()))
+        setPosition(chooseStartOffset(idlePosition(p.getCurrentTime(), start), p.getDuration()))
       } catch {
         /* not ready */
       }
     }, 500)
     return () => window.clearInterval(id)
-  }, [state.phase])
+  }, [state.phase, start])
 
   // ---- waiting for the video to start: after a while, point at the play button of the video itself
   useEffect(() => {
@@ -445,12 +461,12 @@ export function CapturePage({ videoId, blocked }: { videoId: string; blocked: bo
         <p className="mt-2 text-[15px] leading-relaxed text-muted">
           {!tabCapture ? t('cloud.capture.here.intro') : blocked ? t('cloud.capture.blocked') : t('cloud.capture.intro')}
         </p>
-        {/* about the recording this page makes: none where the tab cannot be heard */}
-        {cloudInvite && tabCapture && (
+        {/* a guest: signed in, the cloud takes a fragment of this video - no microphone, no tab */}
+        {cloudInvite && (
           <p className="mt-1.5 text-sm text-muted">
-            {t('cloud.capture.guest')}{' '}
+            {tabCapture && <>{t('cloud.capture.guest')} </>}
             <button type="button" onClick={() => openAuthDialog('signIn')} className="text-left font-medium text-accent hover:underline">
-              {t('cloud.capture.accountHint')}
+              {t('cloud.capture.clipHint')}
             </button>
           </p>
         )}

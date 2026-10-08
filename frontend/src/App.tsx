@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { AuthDialogHost } from './components/account/AuthDialogHost'
 import { CapturePage } from './components/capture/CapturePage'
 import { ListenPage } from './components/capture/ListenPage'
+import { ClipPage } from './components/clip/ClipPage'
 import { AppHeader } from './components/layout/AppHeader'
 import { DropOverlay } from './components/layout/DropOverlay'
 import { HealthBanner } from './components/layout/HealthBanner'
@@ -39,7 +40,9 @@ function Page({ route }: { route: Route }) {
     case 'listen':
       return <ListenPage key={route.source ?? 'listen'} initialSource={route.source} title={route.title} />
     case 'capture':
-      return <CapturePage key={route.videoId} videoId={route.videoId} blocked={route.blocked} />
+      return <CapturePage key={route.videoId} videoId={route.videoId} blocked={route.blocked} start={route.start} />
+    case 'clip':
+      return <ClipPage key={route.videoId} videoId={route.videoId} start={route.start} />
     default:
       return <NotFoundPage />
   }

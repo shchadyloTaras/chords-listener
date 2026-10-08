@@ -8,7 +8,7 @@ import type { TrackSummary } from '../../types'
 import { paths } from '../../hooks/useRoute'
 import { Button, IconButton } from '../ui/IconButton'
 import { VideoSiteIcon } from '../ui/Logo'
-import { formatRelative, formatTime, pluralCategory } from '../ui/format'
+import { formatRange, formatRelative, formatTime, pluralCategory } from '../ui/format'
 import { isLocalId } from '../../lib/local'
 import { useConnection } from '../../lib/serverMode'
 import { moveToCloud, onTransferDone, transferLabel, useTransfers } from '../../lib/cloud/transfer'
@@ -54,6 +54,9 @@ function TrackRow({ track }: { track: TrackSummary }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="truncate font-medium text-text">{track.title}</span>
+            {track.clip && (
+              <span className="shrink-0 text-sm text-muted tabular-nums">· {formatRange(track.clip.start, track.clip.end)}</span>
+            )}
             {track.edited && (
               <span
                 title={t('core.history.editedHint')}
