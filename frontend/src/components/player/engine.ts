@@ -25,21 +25,27 @@ export class PlaybackEngine {
   private disposed = false
   private unsubscribe: () => void
   private readonly clip: ClipRange | null
+  // stopped at the fragment's end by tick: the next play starts the fragment again
+  private clipDone = false
 
   readonly controller: PlayerController = {
     play: () => {
       const src = this.active
       if (!src) return
       // a fragment that has played to its end starts again (the video itself would run on)
-      const from = clipRestart(src.getTime(), this.clip)
-      if (from !== null) {
-        src.seek(from)
-        useApp.getState().setPlayback({ currentTime: from })
+      const clip = this.clip
+      if (clip && (this.clipDone || clipRestart(src.getTime(), clip) !== null)) {
+        src.seek(clip.start)
+        useApp.getState().setPlayback({ currentTime: clip.start })
       }
+      this.clipDone = false
       src.play()
     },
     pause: () => this.active?.pause(),
-    seek: (time) => this.active?.seek(time),
+    seek: (time) => {
+      this.clipDone = false
+      this.active?.seek(time)
+    },
     setRate: (rate) => this.active?.setRate(rate),
     setVolume: (volume) => this.active?.setVolume(volume),
     getTime: () => this.active?.getTime() ?? 0,
@@ -79,7 +85,9 @@ export class PlaybackEngine {
       onPause: () => {
         if (!isActive() || !source) return
         this.stopLoop()
-        useApp.getState().setPlayback({ isPlaying: false, currentTime: source.getTime() })
+        // the player rests a little before where tick stopped it: show the fragment's end
+        const time = this.clipDone && this.clip ? this.clip.end : source.getTime()
+        useApp.getState().setPlayback({ isPlaying: false, currentTime: time })
       },
       onEnded: () => {
         if (!isActive() || !source) return
@@ -171,6 +179,7 @@ export class PlaybackEngine {
     }
     const clip = this.clip
     if (clip && pastClipEnd(time, clip, loop)) {
+      this.clipDone = true
       src.pause()
       this.stopLoop()
       s.setPlayback({ isPlaying: false, currentTime: clip.end })

@@ -52,7 +52,7 @@ export function TrackTitleBar({ demo }: { demo: boolean }) {
             className="hidden size-9 rounded-lg sm:flex [&_span]:text-xs"
           />
           <div className="flex min-w-0 flex-1 flex-col items-start leading-tight">
-            <div className="flex max-w-full min-w-0 items-baseline gap-1.5">
+            <div className="flex w-full max-w-full min-w-0 items-baseline gap-1.5">
               <InlineEdit
                 value={track.title}
                 placeholder={t('core.track.untitled')}
