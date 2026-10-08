@@ -31,7 +31,7 @@ import { copyWithToast } from '../chords/useCopy'
 import { errorText } from '../jobs/errorText'
 import { startFiles } from '../input/startFiles'
 import { FILE_ACCEPT } from '../input/url'
-import { isEmbedBlockedError, loadYouTubeApi, YT_STATE, type YTPlayer } from '../player/sources/youtubeApi'
+import { isEmbedBlockedError, loadYouTubeApi, videoTitle, YT_STATE, type YTPlayer } from '../player/sources/youtubeApi'
 import { useTourTrigger } from '../tour/hooks'
 import { Button } from '../ui/IconButton'
 import { VideoSiteIcon } from '../ui/Logo'
@@ -44,18 +44,6 @@ import { ShareTabIllustration } from './ShareTabIllustration'
 import { useCapture } from './useCapture'
 
 type PlayerStatus = 'loading' | 'ready' | 'embed' | 'error'
-
-/** The IFrame API also reports the loaded video's title (not in the typed surface). */
-type YTPlayerWithData = YTPlayer & { getVideoData?(): { title?: string; author?: string } }
-
-function videoTitle(player: YTPlayer | null): string | null {
-  try {
-    const title = (player as YTPlayerWithData | null)?.getVideoData?.()?.title?.trim()
-    return title || null
-  } catch {
-    return null
-  }
-}
 
 function failureText(error: CaptureFailure | null, reason: string): string {
   switch (error) {
