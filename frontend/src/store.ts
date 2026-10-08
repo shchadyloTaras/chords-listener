@@ -13,7 +13,7 @@ export interface PlayerController {
   getTime(): number
 }
 
-export type Instrument = 'guitar' | 'bass' | 'ukulele' | 'piano' | 'harmonium' | 'handpan'
+export type Instrument = 'guitar' | 'bass' | 'ukulele' | 'piano' | 'harmonium' | 'handpan' | 'sopilka' | 'flute'
 export type Accidentals = 'auto' | 'sharp' | 'flat'
 /** chord sheet, timeline, or the score (sheet music, components/chords/score) */
 export type ChordView = 'sheet' | 'timeline' | 'score'

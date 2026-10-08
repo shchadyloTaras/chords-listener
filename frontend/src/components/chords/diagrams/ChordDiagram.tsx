@@ -6,15 +6,16 @@ import type { FretInstrument } from '../../../lib/diagrams/chordsDb'
 import { fretVoicings } from '../../../lib/diagrams/fretted'
 import { harmoniumStaff, harmoniumVoicing } from '../../../lib/diagrams/harmonium'
 import { pianoVoicing } from '../../../lib/diagrams/piano'
-import { isFretted, isKeyboard } from '../../../lib/instruments'
+import { isFretted, isKeyboard, isWind } from '../../../lib/instruments'
 import { staffChord, type StaffNotes } from '../../../lib/diagrams/staff'
 import { parseChord } from '../../../lib/music/chord'
 import { chordTone } from '../../../lib/music/color'
 import type { Spelling } from '../../../lib/music/notes'
-import { playChordSound, playHandpanField, playHarmoniumKey, playPianoKey, useSoundingTargets } from '../../../lib/sound'
+import { playChordSound, playHandpanField, playHarmoniumKey, playPianoKey, playWindNote, useSoundingTargets } from '../../../lib/sound'
 import type { Instrument } from '../../../store'
 import { HandpanDiagram } from '../handpan/HandpanDiagram'
 import { useChordUi } from '../uiStore'
+import { WindDiagram } from '../wind/WindDiagram'
 import { FretChart } from './FretChart'
 import { HARMONIUM_ASPECT, HarmoniumChart } from './HarmoniumChart'
 import { PIANO_ASPECT, PianoChart } from './PianoChart'
@@ -31,6 +32,9 @@ const WIDTHS = {
   // phone), ~10.4 / ~11.5 px in the popover / hero
   harmonium: { sm: 132, md: 240, lg: 264 },
   handpan: { sm: 80, md: 124, lg: 148 },
+  // four fingering columns (the arpeggio), ~20 px each in the legend
+  sopilka: { sm: 92, md: 150, lg: 176 },
+  flute: { sm: 92, md: 150, lg: 176 },
 } as const
 
 /** grand-staff height (px) shown above the piano / harmonium keyboard */
@@ -42,8 +46,9 @@ export type DiagramSize = 'sm' | 'md' | 'lg'
  * Chord diagram for the selected instrument. Guitar / ukulele: chart from chords-db, bass: generated
  * shapes (lib/diagrams/bass.ts), each with a voicing switcher (shared choice per chord); piano:
  * 2-octave keyboard, harmonium: the instrument's 37 keys (C3–C6) under its carved panel, both under
- * the grand staff; handpan: the selected scale with the chord's tone fields lit. A click plays the
- * chord (a key / handpan field: just that note); the notes light up while they sound.
+ * the grand staff; handpan: the selected scale with the chord's tone fields lit; sopilka / flute: the
+ * fingering of every note of the chord's arpeggio. A click plays the chord (a key / handpan field /
+ * fingering: just that note); the notes light up while they sound.
  */
 export const ChordDiagram = memo(function ChordDiagram({
   label,
@@ -89,6 +94,21 @@ export const ChordDiagram = memo(function ChordDiagram({
         sounding={sounding}
         onPlay={play}
         onField={(i) => playHandpanField(label, i)}
+      />
+    )
+  }
+
+  if (isWind(instrument)) {
+    return (
+      <WindDiagram
+        instrument={instrument}
+        label={label}
+        width={width}
+        size={size}
+        className={className}
+        sounding={sounding}
+        onPlay={play}
+        onNote={(i) => playWindNote(label, instrument, i)}
       />
     )
   }

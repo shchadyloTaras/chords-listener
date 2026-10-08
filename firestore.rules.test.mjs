@@ -208,8 +208,8 @@ describe('users/{uid}', () => {
     assert.equal(await updateProfile(alice, alice.uid, { settings: { ...VALID_SETTINGS, view: 'score' } }), OK)
   })
 
-  test('the bass and the harmonium are valid instruments', async () => {
-    for (const instrument of ['bass', 'harmonium']) {
+  test('the bass, the harmonium, the sopilka and the flute are valid instruments', async () => {
+    for (const instrument of ['bass', 'harmonium', 'sopilka', 'flute']) {
       assert.equal(await updateProfile(alice, alice.uid, { settings: { ...VALID_SETTINGS, instrument } }), OK)
     }
   })

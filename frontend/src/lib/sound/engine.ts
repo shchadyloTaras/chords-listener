@@ -22,6 +22,7 @@ import { harmoniumParams, renderHarmonium } from './harmonium'
 import { pianoParams, renderPiano } from './piano'
 import { pluckParams, pluckRelease, renderPluck, type PluckInstrument } from './pluck'
 import { roomImpulse } from './reverb'
+import { renderWind, windLoop, windParams } from './wind'
 import { addSounding, clearSounding, touchSounding, type SoundingNote } from './sounding'
 import { COMPRESSOR_DELAY, contextToPerformance, outputStamp, timeRef, type TimeRef } from './time'
 import type { VoiceParts } from './voice'
@@ -63,6 +64,9 @@ const BUS: Record<Instrument, { level: number; reverb: number }> = {
   bass: { level: 1.46, reverb: 0.06 },
   ukulele: { level: 1.45, reverb: 0.12 },
   handpan: { level: 1.4, reverb: 0.24 },
+  // one note at a time, held: a sustained note measures ~−17 dBFS RMS, its first 300 ms ~−19.5
+  sopilka: { level: 1.1, reverb: 0.2 },
+  flute: { level: 1.1, reverb: 0.22 },
 }
 /** Per-string level of the cached plucks (they are RMS-normalized). */
 const PLUCK_LEVEL = 0.55
@@ -72,6 +76,12 @@ const HARMONIUM_LEVEL = 0.44
 const PIANO_LEVEL = 0.75
 /** Per-note level of the cached handpan notes (rendered at HANDPAN_RMS; the strike's force scales it). */
 const HANDPAN_LEVEL = 0.77
+/** Per-note level of the cached wind notes (rendered at WIND_RMS; one note at a time, so louder than a chord's keys). */
+const WIND_LEVEL = 0.9
+/** How long a wind note is blown when nothing says (s): a clicked note. */
+const WIND_HOLD: Record<PlayKind, number> = { chord: 1.2, note: 1.1 }
+/** The player stops blowing: the tone dies away in this long (s; a tongue stop is quicker, a breath release slower). */
+export const WIND_RELEASE = 0.06
 /** The harmonium's drone: as loud as one key of a chord, and how fast it swells in / dies away (s). */
 const DRONE_LEVEL = HARMONIUM_LEVEL
 const DRONE_SWELL = 0.25
@@ -183,8 +193,9 @@ function inputFor(g: Graph, group: SoundGroup, instrument: Instrument): GainNode
 }
 
 // Plucked strings (per instrument, pitch, sample rate), harmonium keys (per pitch, hold, sample rate),
-// piano keys (per pitch, touch, hold, sample rate) and handpan notes (per pitch, ding or field, sample
-// rate) are rendered once; least recently used dropped.
+// piano keys (per pitch, touch, hold, sample rate), handpan notes (per pitch, ding or field, sample
+// rate) and wind notes (per instrument, pitch, sample rate: any hold loops the same buffer) are
+// rendered once; least recently used dropped.
 const bufferCache = new Map<string, AudioBuffer>()
 
 function cachedBuffer(ctx: BaseAudioContext, key: string, render: () => Float32Array): AudioBuffer {
@@ -227,6 +238,9 @@ function noteSource(ctx: BaseAudioContext, instrument: Instrument, kind: PlayKin
       const ding = n.target === 0
       return { key: `handpan:${midi}:${ding ? 'ding' : 'field'}:${sr}`, render: () => renderHandpan(handpanParams(midi, ding, sr)) }
     }
+    case 'sopilka':
+    case 'flute':
+      return { key: `${instrument}:${midi}:${sr}`, render: () => renderWind(windParams(instrument, midi, sr)) }
     default:
       return { key: `${instrument}:${midi}:${sr}`, render: () => renderPluck(pluckParams(instrument, midi, sr)) }
   }
@@ -310,6 +324,33 @@ function startHandpanNote(ctx: BaseAudioContext, when: number, n: NoteEvent, buf
   return { out, level, sources: [src], nodes: [src, out], end: when + buffer.duration, release: handpanRelease(n.midi, ding) }
 }
 
+/**
+ * A wind note blown `hold` seconds: its rendered attack, then the steady loop repeated for as long as
+ * the breath lasts, dying away over WIND_RELEASE when the player stops.
+ */
+function startWindNote(ctx: BaseAudioContext, when: number, n: NoteEvent, hold: number, buffer: AudioBuffer): VoiceParts {
+  const loop = windLoop(n.midi, ctx.sampleRate)
+  const src = ctx.createBufferSource()
+  src.buffer = buffer
+  src.loop = true
+  src.loopStart = loop.start / ctx.sampleRate
+  src.loopEnd = buffer.duration
+  const level = WIND_LEVEL * (0.8 + 0.2 * clamp(n.velocity, 0, 1))
+  const out = ctx.createGain()
+  const up = when + hold
+  const end = up + WIND_RELEASE + 0.005
+  out.gain.value = level
+  out.gain.setValueAtTime(level, up)
+  // breath off: a fast exponential-like fall, closed with a short ramp to silence
+  out.gain.setTargetAtTime(0, up, WIND_RELEASE / 4)
+  out.gain.setValueAtTime(level * Math.exp(-3.6), up + WIND_RELEASE * 0.9)
+  out.gain.linearRampToValueAtTime(0, up + WIND_RELEASE)
+  src.connect(out)
+  src.start(when)
+  src.stop(end)
+  return { out, level, sources: [src], nodes: [src, out], end, release: hold }
+}
+
 function startVoice(g: Graph, instrument: Instrument, kind: PlayKind, n: NoteEvent, when: number): VoiceParts {
   const buffer = sourceBuffer(g.ctx, noteSource(g.ctx, instrument, kind, n))
   switch (instrument) {
@@ -319,6 +360,9 @@ function startVoice(g: Graph, instrument: Instrument, kind: PlayKind, n: NoteEve
       return n.hold != null ? startHeldHarmoniumNote(g.ctx, when, n, n.hold, buffer) : startHarmoniumNote(g.ctx, when, n, KEY_HOLD[kind], buffer)
     case 'handpan':
       return startHandpanNote(g.ctx, when, n, buffer)
+    case 'sopilka':
+    case 'flute':
+      return startWindNote(g.ctx, when, n, n.hold ?? WIND_HOLD[kind], buffer)
     default:
       return startPluckNote(g.ctx, when, instrument, n, buffer)
   }

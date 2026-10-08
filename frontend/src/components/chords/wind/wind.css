@@ -1,0 +1,48 @@
+/* Wind fingering charts (sopilka, flute): body tones per theme. Tokens come from src/index.css. */
+
+/* Dark theme. */
+.cw-wind {
+  --wd-body: rgb(255 255 255 / 0.06);
+  --wd-body-stroke: rgb(255 255 255 / 0.16);
+  --wd-open: var(--surface);
+  --wd-open-stroke: rgb(255 255 255 / 0.42);
+  --wd-break: rgb(255 255 255 / 0.18);
+  --wd-label: var(--text);
+  --wd-octave: var(--muted);
+}
+/* The sopilka: wood. */
+.cw-wind[data-instrument='sopilka'] {
+  --wd-body: rgb(196 140 84 / 0.2);
+  --wd-body-stroke: rgb(214 164 108 / 0.42);
+}
+/* The flute: silver. */
+.cw-wind[data-instrument='flute'] {
+  --wd-body: rgb(214 220 228 / 0.1);
+  --wd-body-stroke: rgb(214 220 228 / 0.3);
+}
+
+[data-theme='light'] .cw-wind {
+  --wd-body: rgb(40 38 34 / 0.05);
+  --wd-body-stroke: rgb(40 38 34 / 0.2);
+  --wd-open: #ffffff;
+  --wd-open-stroke: rgb(40 38 34 / 0.5);
+  --wd-break: rgb(40 38 34 / 0.2);
+}
+[data-theme='light'] .cw-wind[data-instrument='sopilka'] {
+  --wd-body: rgb(176 118 62 / 0.16);
+  --wd-body-stroke: rgb(150 98 48 / 0.45);
+}
+[data-theme='light'] .cw-wind[data-instrument='flute'] {
+  --wd-body: rgb(120 128 140 / 0.12);
+  --wd-body-stroke: rgb(100 108 120 / 0.42);
+}
+
+.cw-wind-col {
+  transition: opacity 160ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cw-wind-col {
+    transition: none;
+  }
+}

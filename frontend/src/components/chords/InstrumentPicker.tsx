@@ -1,5 +1,5 @@
 // The instrument switch of the now-playing hero and the live view: segmented buttons from the sm
-// breakpoint up; below it (six names do not fit a phone's width) a button dressed as a control — a
+// breakpoint up; below it (eight names do not fit a phone’s width) a button dressed as a control — a
 // visible «Інструмент» label, the instrument's icon, an accent outline — that opens the app's own
 // menu in a portal (Floating), so the hero's overflow-hidden never clips it.
 
