@@ -393,6 +393,7 @@ class StorageJobRequest(CamelModel):
     source: Optional[StorageSource] = None
     start_offset: Optional[float] = Field(default=None, ge=0, le=24 * 3600)
     options: Optional[AnalysisOptions] = None
+    origin: Literal["file", "mic"] = "file"  # client hint for the admin job history (a YouTube source is a tab capture)
 
 
 class QuotaUsage(CamelModel):

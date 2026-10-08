@@ -14,11 +14,13 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional, get_args
 
 from app.engine import analyze
 
+from .admin.history import AcceptedJob, FinishedJob
 from .models import AnalysisResult, ErrorCode, Job, JobStatus, Settings, VocalNotes
 from .quotas import QuotaExceeded, Quotas
 from .sources import (
@@ -42,6 +44,7 @@ from .storage import AUDIO_FILE, TrackStore, summary_fields, utc_now
 from .users import current_uid
 
 if TYPE_CHECKING:
+    from .admin.history import Projections
     from .gcs import UploadBucket
 
 log = logging.getLogger("chords.jobs")
@@ -51,6 +54,7 @@ Analyzer = Callable[..., dict]
 VocalTranscriber = Callable[..., dict]
 
 ERROR_CODES = frozenset(get_args(ErrorCode))
+ORIGINS = ("link", "file", "mic", "tab")  # where a job's audio came from (admin history ``origin``)
 DOWNLOAD_RANGE = (0.0, 0.35)
 DECODE_RANGE = (0.35, 0.45)
 ANALYZE_RANGE = (0.45, 1.0)
@@ -83,6 +87,7 @@ class JobRecord:
     keys: set[str] = field(default_factory=set)
     created_ts: float = field(default_factory=time.time)
     uid: Optional[str] = None  # owner (cloud mode); None in local mode
+    origin: str = "file"  # "link" | "file" | "mic" | "tab" (admin job history)
 
     @property
     def finished(self) -> bool:
@@ -115,12 +120,19 @@ class JobManager:
         fetcher: UrlFetcher,
         analyzer: Optional[Analyzer] = None,
         vocal_transcriber: Optional[VocalTranscriber] = None,
+        projections: Optional["Projections"] = None,
+        is_tombstoned: Optional[Callable[[str], bool]] = None,
     ) -> None:
+        """``projections`` (admin job history, docs/features/admin) is told when a job is taken on and when it ends;
+        ``is_tombstoned(uid)`` tells whether the user's account is being purged: the result of such a job is
+        discarded instead of written (ADR-0011). Both are optional and never fail a job."""
         self.settings = settings
         self.store = store
         self.fetcher = fetcher
         self.analyzer: Analyzer = analyzer or analyze
         self.vocal_transcriber = vocal_transcriber  # None: app.vocals.transcribe when the extra is installed
+        self.projections = projections
+        self._is_tombstoned = is_tombstoned
         self._lock = threading.RLock()
         self._jobs: dict[str, JobRecord] = {}
         self._active: dict[str, str] = {}  # dedup key ("track:<id>" / "url:<url>") -> job id
@@ -195,6 +207,7 @@ class JobManager:
             rec = self._new_record(
                 "url",
                 options,
+                origin="link",
                 source=source,
                 thumbnail=youtube_thumbnail(url.youtube_id) if url.youtube_id else None,
                 keys=keys,
@@ -202,8 +215,10 @@ class JobManager:
             self._submit(rec, lambda: self._run_url(rec, url))
             return rec.to_model()
 
-    def submit_upload(self, upload: ReceivedUpload, probe: ProbeResult, options: dict[str, Any]) -> Job:
-        """Takes ownership of ``upload.work_dir`` (removed when the job ends)."""
+    def submit_upload(
+        self, upload: ReceivedUpload, probe: ProbeResult, options: dict[str, Any], origin: str = "file"
+    ) -> Job:
+        """Takes ownership of ``upload.work_dir`` (removed when the job ends). ``origin``: "file" | "mic"."""
         track_id = upload.sha1[:12]
         if self.store.exists(track_id):
             shutil.rmtree(upload.work_dir, ignore_errors=True)
@@ -222,6 +237,7 @@ class JobManager:
             rec = self._new_record(
                 "upload",
                 options,
+                origin=_upload_origin(origin),
                 source={"type": "file", "url": None, "videoId": None, "filename": upload.filename},
                 title=probe.title or display_name(upload.filename),
                 keys=keys,
@@ -240,6 +256,7 @@ class JobManager:
             rec = self._new_record(
                 "reanalyze",
                 options,
+                origin=_meta_origin(meta),
                 source=meta.get("source"),
                 title=meta.get("title"),
                 thumbnail=meta.get("thumbnail"),
@@ -258,11 +275,13 @@ class JobManager:
         video_id: Optional[str],
         start_offset: float,
         options: dict[str, Any],
+        origin: str = "file",
     ) -> Job:
         """Ingest a client upload from the bucket (``users/<uid>/uploads/...``, cloud mode). The job
         downloads it, deletes the object, dedups by content sha1 and analyzes it like an upload.
-        ``video_id`` links the track to a YouTube video; ``start_offset`` (video time where the
-        recording begins) shifts every analysis time so chords line up with the video."""
+        ``video_id`` links the track to a YouTube video (a tab capture, origin "tab"); ``start_offset`` (video
+        time where the recording begins) shifts every analysis time so chords line up with the video.
+        ``origin`` ("file" | "mic") is the client's hint for anything that is not a tab capture."""
         filename = path.rsplit("/", 1)[-1] or "audio"
         if video_id:
             source = {"type": "youtube", "url": youtube_url(video_id), "videoId": video_id, "filename": None}
@@ -277,6 +296,7 @@ class JobManager:
             rec = self._new_record(
                 "upload",
                 options,
+                origin="tab" if video_id else _upload_origin(origin),
                 source=source,
                 title=(title or "").strip() or (None if video_id else display_name(filename)),
                 thumbnail=youtube_thumbnail(video_id) if video_id else None,
@@ -308,6 +328,7 @@ class JobManager:
             rec = self._new_record(
                 "vocals",
                 {},
+                origin=_meta_origin(meta),
                 source=meta.get("source"),
                 title=meta.get("title"),
                 thumbnail=meta.get("thumbnail"),
@@ -378,7 +399,7 @@ class JobManager:
         """A track that is "already analyzed" may predate publishing: publish it if the index lacks it. Cloud
         mode only; call it outside ``self._lock`` (the publisher may take a while)."""
         uid = current_uid()
-        if self.settings.cloud and uid:
+        if self.settings.cloud and uid and not self._tombstoned(uid):  # never republish for a purged account
             self.store.publisher.ensure_published(uid, track_id)
 
     def _find_active(self, keys: set[str]) -> Optional[JobRecord]:
@@ -428,6 +449,7 @@ class JobManager:
 
     def _run(self, rec: JobRecord, fn: Callable[[], None]) -> None:
         started = time.monotonic()
+        self._project_accept(rec)
         try:
             self._check_cancel(rec)
             fn()
@@ -445,9 +467,55 @@ class JobManager:
             self._release(rec)
             with self._lock:
                 self._prune()
+            self._project_finish(rec)
 
     def _fail(self, rec: JobRecord, code: ErrorCode, message: str) -> None:
         self._update(rec, status="error", error_code=code, error=message, message=message)
+
+    # ------------------------------------------------------------------ admin hooks (docs/features/admin)
+
+    def _project_accept(self, rec: JobRecord) -> None:
+        """Record the job in the admin history. Cloud jobs only; never raises (a failed write is buffered).
+        Nothing here looks at the account's restriction: a job the server accepted always runs (AC-19)."""
+        if self.projections is None or not rec.uid:
+            return
+        try:
+            self.projections.accept(AcceptedJob(
+                id=rec.id, uid=rec.uid, kind="vocals" if rec.kind == "vocals" else "analysis",
+                origin=rec.origin if rec.origin in ORIGINS else "file",  # type: ignore[arg-type]
+                accepted_at=datetime.fromtimestamp(rec.created_ts, timezone.utc), title=rec.title,
+            ))
+        except Exception:
+            log.warning("admin history: could not record job %s", rec.id, exc_info=True)
+
+    def _project_finish(self, rec: JobRecord) -> None:
+        if self.projections is None or not rec.uid or not rec.finished:
+            return
+        try:
+            self.projections.finish(FinishedJob(
+                id=rec.id, status="done" if rec.status == "done" else "error", finished_at=datetime.now(timezone.utc),
+                error_code=rec.error_code, error_text=rec.error, track_id=rec.track_id,
+            ))
+        except Exception:
+            log.warning("admin history: could not settle job %s", rec.id, exc_info=True)
+
+    def _tombstoned(self, uid: Optional[str]) -> bool:
+        """Is the account being purged (ADR-0011)? A check that cannot be made says no: the purge repeats its erase
+        steps on its next run, so a result that slipped through is erased again."""
+        if self._is_tombstoned is None or not uid:
+            return False
+        try:
+            return bool(self._is_tombstoned(uid))
+        except Exception:
+            log.warning("could not check the tombstone of %s", uid, exc_info=True)
+            return False
+
+    def _discard_if_tombstoned(self, rec: JobRecord) -> None:
+        """Late-job discard: called right before a result is written, so the song of a purged account does not
+        come back."""
+        if self._tombstoned(rec.uid):
+            log.info("job %s: its account is being purged, the result is discarded", rec.id)
+            raise JobFailed("cancelled", "The account was removed")
 
     def _track_lock(self, track_id: str) -> threading.Lock:
         with self._lock:
@@ -603,6 +671,7 @@ class JobManager:
             "updatedAt": now,
             "analyzedAt": now,
             "options": rec.options,
+            "origin": rec.origin,
             "engine": analysis.engine,
             "audio": {"codec": "mp3", "bitrate": 192000, "sampleRate": 44100, "channels": 2,
                       "duration": playback.duration},
@@ -612,6 +681,7 @@ class JobManager:
             full_meta["duration"] = playback.duration
         with self._track_lock(track_id):
             self._check_cancel(rec)
+            self._discard_if_tombstoned(rec)
             installed = self.store.install_track(staged, track_id, full_meta, analysis)
         if not installed:
             log.info("job %s: track %s was completed by another job meanwhile", rec.id, track_id)
@@ -626,6 +696,7 @@ class JobManager:
         self._update(rec, message="Saving")
         with self._track_lock(track_id):
             self._check_cancel(rec)
+            self._discard_if_tombstoned(rec)
             self.store.save_reanalysis(track_id, analysis, rec.options)
         self._update(rec, status="done", progress=1.0, message="Done", track_id=track_id)
 
@@ -675,6 +746,7 @@ class JobManager:
             self._update(rec, message="Saving")
             with self._track_lock(track_id):
                 self._check_cancel(rec)
+                self._discard_if_tombstoned(rec)
                 self.store.install_vocals(track_id, stems, vocals)
             self._update(rec, status="done", progress=1.0, message="Done", track_id=track_id)
         finally:
@@ -719,6 +791,20 @@ class JobManager:
 
     def _too_long_message(self, duration: float) -> str:
         return too_long_message(duration, self.settings.max_duration_min)
+
+
+def _upload_origin(hint: Optional[str]) -> str:
+    """The client's hint for an uploaded file: "mic" for a recording, anything else (or none) is "file"."""
+    return "mic" if hint == "mic" else "file"
+
+
+def _meta_origin(meta: dict[str, Any]) -> str:
+    """Re-analysis and vocal transcription inherit the origin of their track (tracks that predate it: a YouTube
+    source is a link, anything else a file)."""
+    origin = meta.get("origin")
+    if origin in ORIGINS:
+        return origin
+    return "link" if (meta.get("source") or {}).get("type") == "youtube" else "file"
 
 
 def _file_sha1(path: Path) -> str:

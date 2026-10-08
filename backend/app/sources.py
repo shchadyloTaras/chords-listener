@@ -583,6 +583,7 @@ class ReceivedUpload:
     size: int
     sha1: str
     options: Optional[dict[str, Any]] = None
+    origin: str = "file"  # the client's hint: "file" | "mic" (anything else reads as "file")
 
     @property
     def work_dir(self) -> Path:
@@ -720,7 +721,10 @@ async def receive_upload(request: Request, dest_dir: Path, max_bytes: int) -> Re
         except ValueError:
             log.warning("ignoring malformed upload options: %.100s", fields["options"])
     filename = (result.get("filename") or "").replace("\\", "/").rsplit("/", 1)[-1].strip() or "audio"
-    return ReceivedUpload(path=out["path"], filename=filename[:255], size=out["size"], sha1=hasher.hexdigest(), options=options)
+    origin = "mic" if fields.get("origin", "").strip() == "mic" else "file"
+    return ReceivedUpload(
+        path=out["path"], filename=filename[:255], size=out["size"], sha1=hasher.hexdigest(), options=options, origin=origin
+    )
 
 
 def _too_large_message(max_bytes: int) -> str:

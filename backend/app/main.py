@@ -29,6 +29,7 @@ from app.engine import engine_info
 
 from .admin.audit import AuditFailure
 from .admin.authz import ADMIN_PREFIX, AdminAuthz, HiddenFromCaller, ReauthRequired, unguarded_admin_routes
+from .admin.history import Projections, pending_path
 from .admin.router import router as admin_router_default
 from .auth import AuthMiddleware, FirebaseTokenVerifier, MediaSigner
 from .firestore import FirestoreIndex
@@ -263,8 +264,13 @@ def create_app(
             log.warning("CHORDS_SIGNING_KEY is not set: media links stop working when the server restarts")
             signer = MediaSigner.random(ttl_s=settings.media_url_ttl_s)
     store = TrackStore(settings, signer=signer)
+    if admin_db is None and settings.cloud:
+        admin_db = FirestoreIndex(settings.firebase_project)
     jobs = JobManager(
-        settings, store, fetcher or YtDlpFetcher(settings.max_upload_bytes), analyzer, vocal_transcriber=vocal_transcriber
+        settings, store, fetcher or YtDlpFetcher(settings.max_upload_bytes), analyzer, vocal_transcriber=vocal_transcriber,
+        # admin job history and the late-job discard of purged accounts (docs/features/admin): none without a database
+        projections=Projections(admin_db, pending_path(settings.data_dir)) if admin_db is not None else None,
+        is_tombstoned=(lambda uid: admin_db.get(f"adminTombstones/{uid}") is not None) if admin_db is not None else None,
     )
     bucket = (
         UploadBucket(settings.upload_bucket, project=settings.firebase_project, client_factory=gcs_client_factory)
@@ -322,8 +328,6 @@ def create_app(
     app.state.jobs = jobs
     app.state.bucket = bucket
     app.state.publisher = publisher
-    if admin_db is None and settings.cloud:
-        admin_db = FirestoreIndex(settings.firebase_project)
     app.state.admin_db = admin_db
     app.state.admin_authz = admin_authz or AdminAuthz(admin_db)
 
@@ -611,7 +615,7 @@ def _api_router(
         except BaseException:
             shutil.rmtree(work, ignore_errors=True)
             raise
-        return await run_in_threadpool(jobs.submit_upload, upload, probe, _options(upload.options))
+        return await run_in_threadpool(jobs.submit_upload, upload, probe, _options(upload.options), upload.origin)
 
     @api.post(
         "/jobs/storage",
@@ -649,6 +653,7 @@ def _api_router(
             video_id=video_id,
             start_offset=float(body.start_offset or 0.0),
             options=_options(body.options),
+            origin=body.origin,
         )
 
     @api.get("/me", response_model=UserInfo)

@@ -20,6 +20,7 @@ from app.publish import Publisher
 from app.storage import read_json, write_json_atomic
 from app.users import user_context
 from app.vocals import VocalsError
+from admin.test_projections import MemDb
 from tests.test_cloud import BUCKET, FakeGcs, FakeIndex
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
@@ -100,7 +101,7 @@ def make_client(tmp_path: Path) -> Iterator[Callable[..., TestClient]]:
                             allowed_hosts=overrides.pop("allowed_hosts", ("testserver",)), **overrides)
         fake = FakeVocals() if transcriber == "fake" else transcriber
         app = create_app(settings, analyzer=fake_analyzer, engine_info_fn=lambda: ENGINE_INFO,
-                         vocal_transcriber=fake, **(app_kw or {}))
+                         vocal_transcriber=fake, **{"admin_db": MemDb(), **(app_kw or {})})  # never the real Firestore
         client = TestClient(app)
         client.__enter__()
         client.fake = fake  # type: ignore[attr-defined]

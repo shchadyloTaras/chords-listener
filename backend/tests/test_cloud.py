@@ -27,12 +27,15 @@ import app.jobs as jobs_module
 import app.quotas as quotas_module
 import app.storage as storage_module
 from app.auth import AuthError, FirebaseTokenVerifier, MediaSigner
+from app.admin import history, stats
 from app.firestore import IndexError_
 from app.main import create_app
 from app.models import AnalysisResult, Settings
 from app.publish import NullPublisher, Publisher
 from app.sources import NormalizedUrl, RemoteMedia, SourceError, _map_ytdlp_error, find_executable, youtube_thumbnail
 from app.users import SMOKE_UID, current_uid, user_context
+
+from admin.test_projections import MemDb  # the in-memory Firestore of the projection tests
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
@@ -256,7 +259,8 @@ class FakeIndex:
 def make_cloud(tmp_path: Path, media: SimpleNamespace):
     clients: list[TestClient] = []
 
-    def factory(data_dir: Optional[Path] = None, *, verifier: Any = None, cloud: bool = True, **overrides: Any) -> SimpleNamespace:
+    def factory(data_dir: Optional[Path] = None, *, verifier: Any = None, cloud: bool = True, admin_db: Any = None,
+                **overrides: Any) -> SimpleNamespace:
         defaults: dict[str, Any] = {
             "auth": "firebase" if cloud else "off",
             "signing_key": SIGNING_KEY,
@@ -268,9 +272,10 @@ def make_cloud(tmp_path: Path, media: SimpleNamespace):
         defaults.update(overrides)
         settings = Settings(data_dir=data_dir or tmp_path / "data", frontend_dist=tmp_path / "no-dist", **defaults)
         engine, fetcher, gcs, index = FakeEngine(), FakeFetcher(media.a), FakeGcs(), FakeIndex()
+        admin_db = admin_db or MemDb()  # never the real Firestore: the lifecycle hooks write to it
         app = create_app(
             settings, analyzer=engine, fetcher=fetcher, engine_info_fn=lambda: ENGINE_INFO,
-            token_verifier=verifier or FakeVerifier(), gcs_client_factory=lambda: gcs,
+            token_verifier=verifier or FakeVerifier(), gcs_client_factory=lambda: gcs, admin_db=admin_db,
             publisher_factory=lambda store: Publisher(store, index, bucket=BUCKET, gcs_client_factory=lambda: gcs,
                                                       backoff_s=0),
         )
@@ -278,7 +283,7 @@ def make_cloud(tmp_path: Path, media: SimpleNamespace):
         client.__enter__()
         clients.append(client)
         return SimpleNamespace(client=client, engine=engine, fetcher=fetcher, gcs=gcs, index=index,
-                               settings=settings, app=app)
+                               settings=settings, app=app, admin_db=admin_db)
 
     yield factory
     for c in clients:
@@ -1145,3 +1150,179 @@ def test_storage_helpers_need_a_user_in_cloud_mode(cloud: SimpleNamespace) -> No
         assert store.track_dir("0123456789ab") == cloud.settings.data_dir / "users" / "alice" / "tracks" / "0123456789ab"
         assert store.upload_prefix() == "users/alice/uploads/"
         assert store.media_url("0123456789ab", "stems/vocals").startswith("/api/tracks/0123456789ab/stems/vocals?u=alice&")
+
+
+# --------------------------------------------------------------------------- admin projections (docs/features/admin, T12)
+
+
+@pytest.fixture
+def admin_cloud(make_cloud) -> SimpleNamespace:
+    """A cloud server whose admin database is the in-memory Firestore; ``jobs()`` / ``today()`` read what it holds."""
+    db = MemDb()
+    env = make_cloud(admin_db=db)
+    env.db = db
+    env.jobs = lambda: {k.split("/", 1)[1]: v for k, v in db.docs.items() if k.startswith("adminJobs/")}
+    env.today = lambda: db.docs.get(f"adminStats/{stats.utc_day(datetime.now(timezone.utc))}")
+    return env
+
+
+def settled(env: SimpleNamespace, expected: int = 1) -> list[dict[str, Any]]:
+    """The ``adminJobs`` records once ``expected`` of them exist and none is still running (the finish lands a
+    moment after the job reads as done)."""
+    deadline = time.monotonic() + 10
+    jobs: list[dict[str, Any]] = []
+    while time.monotonic() < deadline:
+        jobs = list(env.jobs().values())
+        if len(jobs) >= expected and all(j["status"] != "running" for j in jobs):
+            break
+        time.sleep(0.02)
+    assert len(jobs) == expected and all(j["status"] != "running" for j in jobs), jobs
+    return jobs
+
+
+def upload_with(client: TestClient, path: Path, uid: str, **fields: str) -> Any:
+    with open(path, "rb") as fh:
+        return client.post("/api/jobs/upload", files={"file": (path.name, fh, "audio/mpeg")}, data=fields or None,
+                           headers=H(uid))
+
+
+@needs_ffmpeg
+def test_accepted_job_is_recorded_and_counted_then_settled(admin_cloud: SimpleNamespace, media: SimpleNamespace) -> None:
+    env = admin_cloud
+    env.engine.gate = threading.Event()
+    res = upload_with(env.client, media.a, "alice")
+    assert res.status_code == 201, res.text
+    job_id = res.json()["id"]
+    deadline = time.monotonic() + 10
+    while not env.jobs() and time.monotonic() < deadline:  # the accept lands as the worker takes the job on
+        time.sleep(0.02)
+    rec = env.jobs()[job_id]
+    assert (rec["uid"], rec["kind"], rec["origin"], rec["status"], rec["service"]) == ("alice", "analysis", "file", "running", False)
+    day = env.today()
+    assert day["analyses"]["file"] == 1 and day["active"] == 1 and day["failed"] == 0
+
+    env.engine.gate.set()
+    done = wait_job(env.client, job_id, H("alice"))
+    assert done["status"] == "done"
+    (rec,) = settled(env)
+    assert rec["status"] == "done" and rec["trackId"] == done["trackId"] and rec["finishedAt"] is not None
+    assert env.today()["failed"] == 0
+
+
+@needs_ffmpeg
+def test_failed_job_records_its_reason_and_counts_a_failure(admin_cloud: SimpleNamespace) -> None:
+    env = admin_cloud
+    env.fetcher.error = SourceError("download_failed", "The video cannot be fetched")
+    res = env.client.post("/api/jobs", json={"url": f"https://youtu.be/{VIDEO_ID}"}, headers=H("alice"))
+    assert res.status_code == 201, res.text
+    assert wait_job(env.client, res.json()["id"], H("alice"))["status"] == "error"
+    (rec,) = settled(env)
+    assert (rec["origin"], rec["status"], rec["reason"]) == ("link", "error", "download_failed")
+    assert rec["errorText"] == "The video cannot be fetched"
+    day = env.today()
+    assert day["analyses"]["link"] == 1 and day["failed"] == 1 and day["failedByReason"] == {"download_failed": 1}
+
+
+@needs_ffmpeg
+def test_upload_origin_hint_is_file_or_mic_and_defaults_to_file(admin_cloud: SimpleNamespace, media: SimpleNamespace) -> None:
+    env = admin_cloud
+    for path, fields in ((media.a, {}), (media.b, {"origin": "mic"}), (media.c, {"origin": "bogus"})):
+        res = upload_with(env.client, path, "alice", **fields)
+        assert res.status_code == 201, res.text
+        wait_job(env.client, res.json()["id"], H("alice"))
+    assert sorted(j["origin"] for j in settled(env, 3)) == ["file", "file", "mic"]
+    assert env.today()["analyses"] == {"link": 0, "file": 2, "mic": 1, "tab": 0}
+
+
+@needs_ffmpeg
+def test_storage_origin_hint_and_tab_capture(admin_cloud: SimpleNamespace, media: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(jobs_module, "youtube_oembed", lambda vid: ("Tab song", "Someone"))
+    env = admin_cloud
+    bodies = [
+        (media.a, {}),                                                                     # absent -> file
+        (media.b, {"origin": "mic"}),                                                      # the hint
+        (media.c, {"origin": "mic", "source": {"type": "youtube", "videoId": VIDEO_ID}}),  # a tab capture ignores it
+    ]
+    for i, (audio, body) in enumerate(bodies):
+        path = env.gcs.put(f"users/alice/uploads/u{i}/rec.webm", Path(audio).read_bytes())
+        res = env.client.post("/api/jobs/storage", json={"path": path, **body}, headers=H("alice"))
+        assert res.status_code == 201, res.text
+        wait_job(env.client, res.json()["id"], H("alice"))
+    assert sorted(j["origin"] for j in settled(env, 3)) == ["file", "mic", "tab"]
+    bad = env.gcs.put("users/alice/uploads/u9/rec.webm", b"x" * 10)
+    res = env.client.post("/api/jobs/storage", json={"path": bad, "origin": "tab"}, headers=H("alice"))
+    assert res.status_code == 422  # only file | mic may be hinted
+
+
+@needs_ffmpeg
+def test_reanalysis_inherits_the_origin_of_its_track(admin_cloud: SimpleNamespace, media: SimpleNamespace) -> None:
+    env = admin_cloud
+    res = upload_with(env.client, media.a, "alice", origin="mic")
+    track_id = wait_job(env.client, res.json()["id"], H("alice"))["trackId"]
+    again = env.client.post(f"/api/tracks/{track_id}/reanalyze", headers=H("alice"))
+    assert wait_job(env.client, again.json()["id"], H("alice"))["status"] == "done"
+    assert [j["origin"] for j in settled(env, 2)] == ["mic", "mic"]
+
+
+@needs_ffmpeg
+def test_projection_failure_does_not_fail_the_job(admin_cloud: SimpleNamespace, media: SimpleNamespace) -> None:
+    env = admin_cloud
+
+    def refuse(*_a: Any, **_k: Any) -> Any:
+        raise IndexError_("Firestore is down", retryable=True)
+
+    env.db.run_transaction = refuse  # type: ignore[method-assign]
+    job, track = upload_and_wait(env, media.a, "alice")
+    assert job["status"] == "done" and track["id"] == job["trackId"]
+    assert env.jobs() == {}
+    pending = history.pending_path(env.settings.data_dir)
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:  # the finish is buffered a moment after the job reads as done
+        if pending.exists() and '"finish"' in pending.read_text("utf-8"):
+            break
+        time.sleep(0.02)
+    ops = json.loads(pending.read_text("utf-8"))["ops"]
+    assert [op["op"] for op in ops] == ["accept", "finish"]
+
+
+@needs_ffmpeg
+def test_jobs_accepted_before_a_restriction_complete_into_the_library(admin_cloud: SimpleNamespace, media: SimpleNamespace) -> None:
+    """AC-19: nothing in the lifecycle hooks looks at the restriction an administrator sets after the accept."""
+    env = admin_cloud
+    env.engine.gate = threading.Event()
+    res = upload_with(env.client, media.a, "alice")
+    job_id = res.json()["id"]
+    env.db.docs["adminAccounts/alice"] = {
+        "restriction": {"reason": "abuse", "since": "2026-10-08T00:00:00Z", "byAdminUid": "admin-1"},
+        "deletion": None, "personalLimit": None,
+    }
+    env.engine.gate.set()
+    done = wait_job(env.client, job_id, H("alice"))
+    assert done["status"] == "done", done
+    assert [t["id"] for t in env.client.get("/api/tracks", headers=H("alice")).json()] == [done["trackId"]]
+
+
+@needs_ffmpeg
+def test_late_job_result_for_a_tombstoned_user_is_discarded(admin_cloud: SimpleNamespace, media: SimpleNamespace) -> None:
+    """AC-22 / ADR-0011: a job that finishes after the purge began does not bring the song back."""
+    env = admin_cloud
+    env.engine.gate = threading.Event()
+    res = upload_with(env.client, media.a, "alice")
+    job_id = res.json()["id"]
+    env.db.docs["adminTombstones/alice"] = {
+        "status": "purging", "purgeAfter": "2026-10-01T00:00:00Z", "startedAt": "2026-10-08T00:00:00Z", "doneAt": None,
+    }
+    env.engine.gate.set()
+    done = wait_job(env.client, job_id, H("alice"))
+    assert done["status"] == "error" and done["trackId"] is None, done
+    assert env.client.get("/api/tracks", headers=H("alice")).json() == []
+    assert env.index.docs == {} and not list(env.settings.data_dir.glob("users/alice/tracks/*"))
+    assert list(env.settings.work_dir.iterdir()) == []
+
+
+@needs_ffmpeg
+def test_a_tombstone_of_one_user_does_not_touch_another(admin_cloud: SimpleNamespace, media: SimpleNamespace) -> None:
+    env = admin_cloud
+    env.db.docs["adminTombstones/alice"] = {"status": "done"}
+    job, _ = upload_and_wait(env, media.a, "bob")
+    assert job["status"] == "done"

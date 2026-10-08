@@ -386,6 +386,21 @@ def test_upload_job_to_track(env: SimpleNamespace) -> None:
 
 
 @needs_ffmpeg
+def test_upload_accepts_the_origin_hint_and_keeps_it_on_the_track_meta(env: SimpleNamespace) -> None:
+    """Local mode keeps no admin history, but the hint (file | mic; absent or unknown -> file) still travels with the job."""
+    res = upload(env.client, env.media.tagged_mp3)
+    assert res.status_code == 201, res.text
+    wait_job(env.client, res.json()["id"])
+    with open(env.media.plain_wav, "rb") as fh:
+        res = env.client.post("/api/jobs/upload", files={"file": ("rec.wav", fh, "audio/wav")}, data={"origin": "mic"})
+    assert res.status_code == 201, res.text
+    job = wait_job(env.client, res.json()["id"])
+    assert job["status"] == "done"
+    meta = json.loads((env.settings.tracks_dir / job["trackId"] / "meta.json").read_text("utf-8"))
+    assert meta["origin"] == "mic"
+
+
+@needs_ffmpeg
 def test_upload_title_falls_back_to_filename_and_video_containers_work(env: SimpleNamespace) -> None:
     _, track = upload_and_wait(env, env.media.plain_wav)
     assert track["title"] == "my song-take 2" and track["artist"] is None
