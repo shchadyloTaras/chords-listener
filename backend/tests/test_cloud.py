@@ -1171,7 +1171,7 @@ def test_fragment_jobs_count_against_the_quota_and_stay_per_user(make_cloud, med
     assert env.client.get(f"/api/tracks/{a['trackId']}", headers=H("bob")).json()["clip"] == {"start": 72.0, "end": 102.0}
 
 
-def test_stale_fragments_are_swept_after_an_hour(cloud: SimpleNamespace) -> None:
+def test_bucket_sweep_glob_for_fragments(cloud: SimpleNamespace) -> None:
     from app.gcs import FETCH_GLOB
 
     cloud.gcs.put("fetch/0123456789abcdef/source.webm", b"1", age_s=2 * 3600)
@@ -1179,3 +1179,32 @@ def test_stale_fragments_are_swept_after_an_hour(cloud: SimpleNamespace) -> None
     cloud.gcs.put("users/alice/uploads/u1/a.mp3", b"3", age_s=2 * 3600)
     assert cloud.app.state.bucket.sweep(max_age_s=3600, glob=FETCH_GLOB) == 1
     assert {n for (_, n) in cloud.gcs.objects} == {"fetch/fedcba9876543210/source.webm", "users/alice/uploads/u1/a.mp3"}
+
+
+def test_the_hourly_sweep_removes_old_uploads_and_fragments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.main as main_module
+
+    def upload_sweeps() -> list[threading.Thread]:
+        return [t for t in threading.enumerate() if t.name == "chords-upload-sweep"]
+
+    def left() -> set[str]:
+        return {n for (_, n) in gcs.objects}
+
+    gcs = FakeGcs()
+    gcs.put("fetch/0123456789abcdef/source.webm", b"1", age_s=2 * 3600)  # a fragment nobody took: over an hour
+    gcs.put("fetch/fedcba9876543210/source.webm", b"2", age_s=60)  # a fragment a job is about to take
+    gcs.put("users/alice/uploads/u1/a.mp3", b"3", age_s=2 * 3600)  # an upload: kept for a day
+    gcs.put("users/alice/uploads/u2/b.mp3", b"4", age_s=2 * 86400)
+    monkeypatch.setattr(main_module, "BUCKET_SWEEP_INTERVAL_S", 0.01)
+    settings = Settings(data_dir=tmp_path / "data", frontend_dist=tmp_path / "no-dist", auth="firebase",
+                        signing_key=SIGNING_KEY, scratch_dir=tmp_path / "scratch", upload_bucket=BUCKET, publish=False)
+    app = create_app(settings, analyzer=FakeEngine(), token_verifier=FakeVerifier(), gcs_client_factory=lambda: gcs)
+    others = upload_sweeps()  # earlier tests' apps may still have one winding down (a real GCS client times out)
+    with TestClient(app):
+        wait_for(lambda: left() == {"fetch/fedcba9876543210/source.webm", "users/alice/uploads/u1/a.mp3"})
+        gcs.put("fetch/aaaaaaaaaaaaaaaa/source.webm", b"5", age_s=3 * 3600)  # left behind after start-up: the next pass
+        wait_for(lambda: "fetch/aaaaaaaaaaaaaaaa/source.webm" not in left())
+        assert left() == {"fetch/fedcba9876543210/source.webm", "users/alice/uploads/u1/a.mp3"}
+        mine = [t for t in upload_sweeps() if t not in others]
+        assert [t.daemon for t in mine] == [True]
+    wait_for(lambda: not any(t.is_alive() for t in mine))  # the app's shutdown ends the loop
