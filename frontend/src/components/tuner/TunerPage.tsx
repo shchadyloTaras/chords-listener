@@ -35,7 +35,7 @@ export function TunerPage() {
 
   const [toneOn, setToneOn] = useState(false)
   const [toneMidi, setToneMidi] = useState<number | null>(null)
-  const { state, lastMidi, start, stop } = useTuner({ a4, paused: toneOn })
+  const { state, lastMidi, waitingForTap, start, stop } = useTuner({ a4, paused: toneOn })
   const toneRef = useRef<ReferenceTone | null>(null)
 
   // the picker starts at the last note heard, else A4
@@ -62,11 +62,12 @@ export function TunerPage() {
   const inTune = reading !== null && isInTune(reading.cents)
   const errorText = (code: TunerErrorCode) => (code === 'ended' ? t('tuner.error.ended') : t(`live.error.${code}`))
 
-  let status: string
+  // never contradicts the controls below: no «press Start» without the button, no second permission line
+  let status = ''
   if (toneOn) status = t('tuner.tone.sounding', { note: `${pickedName.name}${pickedName.octave}` })
   else if (reading) status = `${formatHz(reading.hz, lang)} ${t('tuner.hz')} · ${formatCents(reading.cents)} ${t('tuner.cents')}`
-  else if (state.phase === 'running') status = t('tuner.playNote')
-  else status = t('tuner.idle')
+  else if (state.phase === 'running') status = t(waitingForTap ? 'tuner.tapToHear' : 'tuner.playNote')
+  else if (state.phase === 'idle' && !blocked) status = t('tuner.idle')
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 pt-6 pb-24 sm:px-6 sm:pt-10">

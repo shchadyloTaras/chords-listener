@@ -36,7 +36,6 @@ export function ReferenceToneControl({
       <Button
         size="sm"
         variant={playing ? 'primary' : 'secondary'}
-        aria-pressed={playing}
         icon={playing ? <Square className="size-3.5" fill="currentColor" /> : <Play className="size-3.5" fill="currentColor" />}
         onClick={onToggle}
         className="ml-1"
