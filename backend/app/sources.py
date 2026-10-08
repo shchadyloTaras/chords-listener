@@ -468,7 +468,11 @@ class YtDlpFetcher:
         """Only ``[start, end]`` of the media: yt-dlp's download_ranges has ffmpeg fetch and cut just that part."""
         from yt_dlp.utils import download_range_func
 
-        extra: dict[str, Any] = {"download_ranges": download_range_func(None, [(start, end)])}
+        # re-encode the 30 s: a stream-copy cut snaps to a seek point and the audio would not start at `start`
+        extra: dict[str, Any] = {
+            "download_ranges": download_range_func(None, [(start, end)]),
+            "force_keyframes_at_cuts": True,
+        }
         if self.ffmpeg_proxy:
             # ffmpeg does the cut and can't use SOCKS or yt-dlp's env proxy: its input gets the HTTP CONNECT proxy.
             extra["external_downloader_args"] = {"ffmpeg_i": ["-http_proxy", self.ffmpeg_proxy]}
