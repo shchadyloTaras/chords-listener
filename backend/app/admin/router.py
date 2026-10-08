@@ -21,6 +21,9 @@ Served here:
 * ``restrictUser`` and ``unrestrictUser`` (``PUT`` / ``DELETE /users/{uid}/restriction``, AC-16, AC-17, AC-19, AC-23b):
   the cloud restriction, one transaction with its journal record; own account and scheduled deletion are refused
   (409) and journaled.
+* ``scheduleDeletion`` and ``cancelDeletion`` (``POST`` / ``DELETE /users/{uid}/deletion``, AC-17, AC-20, AC-21, AC-23,
+  AC-34, AC-35): scheduling needs a sign-in at most 15 minutes old, the user's e-mail typed again and a free place in the
+  cap of 10 per 60 minutes; one transaction with its journal record (``actions.py``).
 """
 from __future__ import annotations
 
@@ -34,7 +37,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Any, Callable, Mapping, NoReturn, Optional
 
-from fastapi import APIRouter, FastAPI, Query, Request
+from fastapi import APIRouter, Depends, FastAPI, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
@@ -886,5 +889,35 @@ def unrestrict_user(uid: str, request: Request) -> AccountState:
     restricted -> 409 ``not_set`` (nothing journaled)."""
     svc, admin_uid, admin_email = _acting_user(request, uid)
     actions.unrestrict_user(svc, admin_uid=admin_uid, admin_email=admin_email, uid=uid)
+    _forget_account(request, uid)
+    return _account_state(svc, request, uid)
+
+
+# --------------------------------------------------------------------------- user actions: scheduled deletion
+
+
+@router.post(
+    "/users/{uid}/deletion", response_model=AccountState, operation_id="scheduleDeletion",
+    dependencies=[Depends(require_fresh_login)],
+)
+def schedule_deletion(uid: str, body: models.DeletionIn, request: Request) -> AccountState:
+    """Schedule the final deletion of the account for 7 days from now and restrict it at once. A sign-in older than 15
+    minutes -> 401 ``reauth_required``; own account -> 409 ``self_target``, already scheduled -> 409 ``deletion_pending``,
+    10 deletions in the last 60 minutes -> 429 ``deletion_rate_limit`` (all journaled as rejected); another e-mail than the
+    user's -> 422 ``confirm_email_mismatch`` (not journaled)."""
+    svc, admin_uid, admin_email = _acting_user(request, uid)
+    actions.schedule_deletion(
+        svc, admin_uid=admin_uid, admin_email=admin_email, uid=uid, confirm_email=body.confirm_email, now=utc_now()
+    )
+    _forget_account(request, uid)
+    return _account_state(svc, request, uid)
+
+
+@router.delete("/users/{uid}/deletion", response_model=AccountState, operation_id="cancelDeletion")
+def cancel_deletion(uid: str, request: Request) -> AccountState:
+    """Cancel the scheduled deletion within its 7 days: the restriction from before comes back (or none). Nothing
+    scheduled, or the purge date passed -> 409 ``not_scheduled`` (journaled as rejected)."""
+    svc, admin_uid, admin_email = _acting_user(request, uid)
+    actions.cancel_deletion(svc, admin_uid=admin_uid, admin_email=admin_email, uid=uid, now=utc_now())
     _forget_account(request, uid)
     return _account_state(svc, request, uid)

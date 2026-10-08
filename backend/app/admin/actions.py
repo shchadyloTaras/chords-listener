@@ -26,6 +26,14 @@ User actions (AC-12, AC-12b, AC-13, AC-14, AC-15, AC-33):
                               journaled as rejected attempts); lifting a restriction that is not there -> ``NotSet`` (409,
                               nothing journaled). A restriction stops no job: it only writes configuration (AC-19).
 
+* ``schedule_deletion``     - ``adminAccounts/<uid>.deletion`` (purgeAfter = +7 d, the prior restriction kept inside), the
+                              immediate restriction (fixed reason ``Scheduled deletion``, OQ-API-2) and its journal record in
+                              ONE transaction commit, under an in-process lock that also covers the ``count()`` of deletions
+                              scheduled by all admins in the last 60 minutes (cap 10, AC-35). Order of checks: own account,
+                              already scheduled (both journaled as rejected), typed e-mail (422, not journaled), the cap
+                              (journaled). ``cancel_deletion`` puts the prior restriction back exactly (or none); no deletion,
+                              or the purge date passed, is ``NotScheduled`` (409, journaled).
+
 Every settings op is masked to the fields it changes, so a banner write cannot clobber the switches and the other way round.
 A failed commit raises ``NotApplied`` (503) and nothing changed, cache included; after a commit the server's own
 settings cache is refreshed at once (the other instances follow within its 30 s TTL, AC-24). No action stops or
@@ -34,14 +42,17 @@ before any of this (the request models), so a rejected form is never journaled (
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import threading
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Callable, Optional, TypeVar
 
 from app.firestore import IndexError_, server_timestamp
 from app.quotas import KINDS, Quotas
 from app.sources import SourceError
 
+from .audit import COLLECTION as AUDIT_COLLECTION
 from .audit import AuditEntry, NotApplied
+from .directory import USERS, parse_time
 from .models import BannerIn, DefaultLimitsIn, PersonalLimitIn, Settings, SwitchName
 from .settings import PublicStatus
 
@@ -225,7 +236,7 @@ def _refused(
     record cannot be written ``NotApplied`` is raised instead: no record, no answer about the attempt."""
     if refusal is None:
         return
-    if not isinstance(refusal, NotSet):
+    if not isinstance(refusal, _UNJOURNALED):
         svc.audit.record_first(AuditEntry(
             action=action, admin_uid=admin_uid, admin_email=admin_email, target_uid=uid,
             outcome="rejected", reject_reason=refusal.code,
@@ -276,6 +287,137 @@ def unrestrict_user(svc: "AdminServices", *, admin_uid: str, admin_email: str, u
         return None
 
     _refused(svc, "unrestrict", _in_transaction(svc, work), admin_uid=admin_uid, admin_email=admin_email, uid=uid)
+
+
+# --------------------------------------------------------------------------- user actions: scheduled deletion
+
+DELETION_CAP = 10                            # scheduled deletions by ALL admins together ...
+DELETION_CAP_WINDOW = timedelta(minutes=60)  # ... in any 60 minutes (AC-35)
+DELETION_DELAY = timedelta(days=7)           # from scheduling to the purge (AC-20)
+DELETION_REASON = "Scheduled deletion"       # the restriction a deletion sets (OQ-API-2): server text, never typed
+_deletion_lock = threading.Lock()            # one server at most (SAD §11): the count and the commit are one step
+
+
+class ConfirmEmailMismatch(SourceError):
+    """The typed e-mail is not the user's (422 ``confirm_email_mismatch``, AC-21): an input error, not journaled."""
+
+    def __init__(self) -> None:
+        super().__init__("confirm_email_mismatch", "Type this user's email exactly to confirm", 422)
+
+
+class DeletionRateLimit(SourceError):
+    """Ten deletions are already scheduled in the last 60 minutes (429 ``deletion_rate_limit``, AC-35)."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "deletion_rate_limit", "At most 10 deletions can be scheduled in any 60 minutes (all admins together)", 429
+        )
+
+
+class NotScheduled(SourceError):
+    """No deletion to cancel, or its 7 days have passed (409 ``not_scheduled``)."""
+
+    def __init__(self) -> None:
+        super().__init__("not_scheduled", "No deletion to cancel, or the final deletion has already started", 409)
+
+
+_UNJOURNALED = (NotSet, ConfirmEmailMismatch)   # nothing changed and nothing was attempted: no record
+
+
+def emails_match(typed: Optional[str], actual: Optional[str]) -> bool:
+    """The confirmation rule (AC-21): the typed address equals the user's, ignoring case and the spaces around it."""
+    if not typed or not actual:
+        return False
+    return typed.strip().casefold() == actual.strip().casefold() != ""
+
+
+def _user_email(svc: "AdminServices", uid: str) -> Optional[str]:
+    doc = svc.db.get(f"{USERS}/{uid}")
+    email = doc.data.get("email") if doc is not None else None
+    return email if isinstance(email, str) and email else svc.directory.email_of(uid)
+
+
+def _scheduled_since(svc: "AdminServices", since: datetime) -> int:
+    """Deletions that were scheduled (journal: ``deletion_scheduled`` + ``applied``) after ``since``, by any admin.
+    Rejected attempts and ``not_applied`` follow-ups are other outcomes, so they do not count."""
+    return svc.db.count(AUDIT_COLLECTION, filters=[
+        ("action", "==", "deletion_scheduled"), ("outcome", "==", "applied"), ("at", ">", since),
+    ])
+
+
+def _kept_restriction(stored: Any) -> Optional[dict[str, Any]]:
+    """A stored restriction as it is written back: its date is a timestamp again (it reads as text)."""
+    if not isinstance(stored, dict):
+        return None
+    return {**stored, "since": parse_time(stored.get("since")) or stored.get("since")}
+
+
+def schedule_deletion(
+    svc: "AdminServices", *, admin_uid: str, admin_email: str, uid: str, confirm_email: str, now: datetime
+) -> None:
+    """Schedule the purge of ``uid`` for ``now`` + 7 days and restrict the account at once (the restriction it had is kept
+    inside the deletion), in one transaction commit with the journal record. Checks, in this order: own account, already
+    scheduled, typed e-mail (not journaled), the cap of 10 per 60 minutes over all admins; the other refusals are journaled
+    as rejected attempts. A failed journal write or transaction raises ``NotApplied``: nothing changed."""
+    who = {"admin_uid": admin_uid, "admin_email": admin_email, "uid": uid}
+    purge_after = now + DELETION_DELAY
+    restriction = {"reason": DELETION_REASON, "since": now, "byAdminUid": admin_uid}
+
+    def work(tx: Any) -> Optional[SourceError]:
+        doc = tx.get(_account_path(uid))
+        data = doc.data if doc is not None else {}
+        if data.get("deletion"):
+            return DeletionPending()
+        if not emails_match(confirm_email, _user_email(svc, uid)):
+            return ConfirmEmailMismatch()
+        if _scheduled_since(svc, now - DELETION_CAP_WINDOW) >= DELETION_CAP:
+            return DeletionRateLimit()
+        prior = _kept_restriction(data.get("restriction"))
+        deletion = {"scheduledAt": now, "purgeAfter": purge_after, "byAdminUid": admin_uid, "priorRestriction": prior}
+        write = svc.db.update_op(
+            _account_path(uid), {"restriction": restriction, "deletion": deletion}, mask=["restriction", "deletion"],
+            transforms=[server_timestamp("updatedAt")],
+        )
+        svc.audit.record_with([write], AuditEntry(
+            action="deletion_scheduled", admin_uid=admin_uid, admin_email=admin_email, target_uid=uid,
+            before=_restriction_view(prior),
+            after={**(_restriction_view(restriction) or {}), "purgeAfter": _zulu(purge_after)},
+        ), tx=tx)
+        return None
+
+    if uid == admin_uid:
+        _refused(svc, "deletion_scheduled", SelfTarget(), **who)
+    with _deletion_lock:
+        refusal = _in_transaction(svc, work)
+    _refused(svc, "deletion_scheduled", refusal, **who)
+
+
+def cancel_deletion(svc: "AdminServices", *, admin_uid: str, admin_email: str, uid: str, now: datetime) -> None:
+    """Cancel the scheduled deletion of ``uid`` while its 7 days run: the restriction it had before comes back as it was
+    (reason, date, admin), or none, with the journal record in one transaction commit. No deletion, or the purge date
+    passed, is ``NotScheduled``, journaled as a rejected attempt."""
+    def work(tx: Any) -> Optional[SourceError]:
+        doc = tx.get(_account_path(uid))
+        data = doc.data if doc is not None else {}
+        deletion = data.get("deletion")
+        if not isinstance(deletion, dict):
+            return NotScheduled()
+        purge_after = parse_time(deletion.get("purgeAfter"))
+        if purge_after is not None and purge_after <= now:
+            return NotScheduled()
+        prior = _kept_restriction(deletion.get("priorRestriction"))
+        write = svc.db.update_op(
+            _account_path(uid), {"restriction": prior} if prior else {}, mask=["restriction", "deletion"],
+            transforms=[server_timestamp("updatedAt")],
+        )
+        before = {**(_restriction_view(data.get("restriction")) or {}), "purgeAfter": deletion.get("purgeAfter")}
+        svc.audit.record_with([write], AuditEntry(
+            action="deletion_cancelled", admin_uid=admin_uid, admin_email=admin_email, target_uid=uid,
+            before=before, after=_restriction_view(prior),
+        ), tx=tx)
+        return None
+
+    _refused(svc, "deletion_cancelled", _in_transaction(svc, work), admin_uid=admin_uid, admin_email=admin_email, uid=uid)
 
 
 def _in_transaction(svc: "AdminServices", work: Callable[[Any], T]) -> T:

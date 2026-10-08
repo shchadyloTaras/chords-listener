@@ -187,6 +187,9 @@ def endpoint_cases(uid: str, cursor: str) -> dict[tuple[str, str], list[tuple[st
         # restrict before lift: lifting needs a stored restriction
         ("PUT", f"{p}/users/{{uid}}/restriction"): [(f"{p}/users/{uid}/restriction", {"reason": "automated mass requests"})],
         ("DELETE", f"{p}/users/{{uid}}/restriction"): [(f"{p}/users/{uid}/restriction", None)],
+        # schedule before cancel: cancelling needs a scheduled deletion; the typed e-mail is the synthetic user's own
+        ("POST", f"{p}/users/{{uid}}/deletion"): [(f"{p}/users/{uid}/deletion", {"confirmEmail": f"{uid}@example.test"})],
+        ("DELETE", f"{p}/users/{{uid}}/deletion"): [(f"{p}/users/{uid}/deletion", None)],
     }
 
 
@@ -368,6 +371,8 @@ class TestPropagation:
                 ("DELETE", "/api/admin/users/u1/limit", None),
                 ("PUT", "/api/admin/users/u1/restriction", {"reason": "abuse"}),
                 ("DELETE", "/api/admin/users/u1/restriction", None),
+                ("POST", "/api/admin/users/u1/deletion", {"confirmEmail": "u1@example.test"}),
+                ("DELETE", "/api/admin/users/u1/deletion", None),
             ]:
                 res = client.request(method, url, json=body, headers=as_trusted)
                 assert res.status_code == unknown.status_code == 404, (method, url, res.status_code)
