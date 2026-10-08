@@ -408,6 +408,22 @@ def test_full_sync_does_not_lose_a_user_registered_while_it_ran(db, make_dir, cl
     assert emails(d.search("latecomer")) == ["latecomer@example.test"]
 
 
+def test_s2_2_a_purged_uid_is_not_indexed_again_by_a_full_sync_or_a_catch_up(db, make_dir, clock):
+    """A purged user's still-valid token can write ``users/{uid}`` back; the tombstone keeps it out of the index."""
+    seed_ivans(db)
+    d = make_dir()
+    d.full_sync()
+    db.add_user("back", "back@example.test", T0 - timedelta(days=2))
+    db.docs["adminTombstones/back"] = {"status": "done"}
+    d.full_sync()
+    assert d.search("back@") == [] and d.email_of("back") is None
+    db.add_user("back2", "back2@example.test", T0 + timedelta(seconds=5))
+    db.docs["adminTombstones/back2"] = {"status": "purging"}
+    clock.advance(3600)
+    d.catch_up()
+    assert d.search("back2@") == []
+
+
 # ===================================================================== remove / email_of
 
 

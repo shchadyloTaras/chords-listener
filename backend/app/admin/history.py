@@ -34,6 +34,7 @@ from .models import JobKind, Origin, SourceType
 log = logging.getLogger("chords.admin.history")
 
 JOBS = "adminJobs"
+TOMBSTONES = "adminTombstones"   # written by the purge (deletion.py)
 RETENTION = timedelta(days=90)  # `adminJobs.expireAt` = acceptedAt + 90 d (TTL policy, NFR history >= 90 days)
 TITLE_CHARS = 300               # = StorageJobRequest.title
 ERROR_TEXT_CHARS = 200
@@ -119,12 +120,14 @@ class Projections:
         *,
         jobs_collection: str = JOBS,
         stats_collection: str = stats.STATS,
+        tombstones_collection: str = TOMBSTONES,
         now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
         self._db = db
         self._pending = pending
         self._jobs = jobs_collection
         self._stats = stats_collection
+        self._tombstones = tombstones_collection
         self._now = now
 
     # ----------------------------------------------------------------------- public
@@ -213,11 +216,12 @@ class Projections:
         def work(tx: Transaction) -> None:
             if tx.get(path) is not None:
                 return  # a replay
+            gone = tx.get(f"{self._tombstones}/{job.uid}") is not None   # purged meanwhile: a buffered replay must not restore the title
             doc = {
                 "uid": job.uid, "service": service, "kind": job.kind, "origin": job.origin, "sourceType": job.source_type, "status": "running",
-                "reason": None, "errorText": None, "title": _cut(job.title, TITLE_CHARS), "trackId": None,
+                "reason": None, "errorText": None, "title": None if gone else _cut(job.title, TITLE_CHARS), "trackId": None,
                 "acceptedAt": job.accepted_at, "finishedAt": None, "day": day,
-                "expireAt": job.accepted_at + RETENTION, "anonymizedAt": None,
+                "expireAt": job.accepted_at + RETENTION, "anonymizedAt": now if gone else None,
             }
             writes = [db.update_op(path, doc, exists=False)]
             if not service:
@@ -250,12 +254,13 @@ class Projections:
             if existing.data.get("status") != "running":
                 return  # a replay (or a second outcome): the first one stands
             failed = job.status == "error"
+            gone = tx.get(f"{self._tombstones}/{existing.data.get('uid')}") is not None   # purged: no track to point at
             reason = reason_for(job.error_code) if failed else None
             outcome = {
                 "status": "error" if failed else "done",
                 "reason": reason,
                 "errorText": _cut(job.error_text, ERROR_TEXT_CHARS) if failed else None,
-                "trackId": None if failed else job.track_id,
+                "trackId": None if failed or gone else job.track_id,
                 "finishedAt": job.finished_at,
             }
             writes = [db.update_op(path, outcome, mask=list(outcome), exists=True)]

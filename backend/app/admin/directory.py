@@ -37,6 +37,7 @@ SYNC_SKEW = timedelta(minutes=5)   # a full sync's cursor starts this far before
 
 USERS = "users"
 INDEX = "adminEmailIndex"
+TOMBSTONES = "adminTombstones"   # written by the purge (deletion.py)
 
 _FRACTION = re.compile(r"(\.\d{6})\d+")
 
@@ -86,6 +87,7 @@ class Directory:
         shard_size: int = SHARD_SIZE,
         users_collection: str = USERS,
         index_collection: str = INDEX,
+        tombstones_collection: str = TOMBSTONES,
         now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -93,6 +95,7 @@ class Directory:
         self._shard_size = shard_size
         self._users = users_collection
         self._index = index_collection
+        self._tombstones = tombstones_collection
         self._now = now
         self._monotonic = monotonic
         self._lock = threading.RLock()
@@ -192,6 +195,7 @@ class Directory:
         if cursor is None:                       # no index (or a shard without a cursor): build it from scratch
             return self._full_sync()
         total, last = 0, None
+        purged = self._purged()
         while True:
             page = self._db.run_query(
                 self._users, filters=[("createdAt", ">", cursor)], order_by=["createdAt"],
@@ -200,7 +204,7 @@ class Directory:
             newest = cursor
             for doc in page:
                 email = doc.data.get("email")
-                if isinstance(email, str) and email:
+                if isinstance(email, str) and email and doc.id not in purged:
                     added[doc.id] = email.lower()
                 created = parse_time(doc.data.get("createdAt"))
                 if created is not None and created > newest:
@@ -261,15 +265,21 @@ class Directory:
 
     # ----------------------------------------------------------------------- full sync
 
+    def _purged(self) -> set[str]:
+        """The uids that have a tombstone: a purged (or being purged) account is never indexed again, whatever a
+        client holding a still-valid token wrote back to ``users/{uid}`` (review S2-2)."""
+        return {d.id for d in self._db.run_query(self._tombstones)}
+
     def _all_emails(self) -> dict[str, str]:
         emails: dict[str, str] = {}
+        purged = self._purged()
         last: Optional[Document] = None
         while True:
             # Ordered by email: only users that have one are returned, and that is exactly who is indexed.
             page = self._db.run_query(self._users, order_by=["email"], limit=SYNC_PAGE, start_after=last)
             for doc in page:
                 email = doc.data.get("email")
-                if isinstance(email, str) and email:
+                if isinstance(email, str) and email and doc.id not in purged:
                     emails[doc.id] = email.lower()
             if len(page) < SYNC_PAGE:
                 return emails

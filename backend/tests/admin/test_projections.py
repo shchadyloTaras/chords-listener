@@ -148,10 +148,11 @@ class Env:
     not EMULATOR_HOST, reason="needs the Firestore emulator (FIRESTORE_EMULATOR_HOST)"))])
 def env(request, tmp_path) -> Env:
     tag = uuid.uuid4().hex[:10]
-    jobs, stats_coll = f"t11_jobs_{tag}", f"t11_stats_{tag}"
+    jobs, stats_coll, tombs = f"t11_jobs_{tag}", f"t11_stats_{tag}", f"t11_tombs_{tag}"
     db: FirestoreIndex = MemDb() if request.param == "fake" else FirestoreIndex("build-chords-listener", emulator_host=EMULATOR_HOST)
     pending = tmp_path / "admin" / "projections-pending.json"
-    proj = Projections(db, pending, jobs_collection=jobs, stats_collection=stats_coll, now=lambda: NOON)
+    proj = Projections(db, pending, jobs_collection=jobs, stats_collection=stats_coll,
+                       tombstones_collection=tombs, now=lambda: NOON)
     return Env(db, proj, jobs, stats_coll, pending)
 
 
@@ -438,6 +439,17 @@ def test_a_replay_that_already_landed_is_a_no_op(env):
     before = env.day(DAY)
     assert env.p.replay_pending() == 1
     assert env.day(DAY) == before and env.buffered() == []
+
+
+def test_s2_3_a_replay_after_the_purge_does_not_restore_the_title(env):
+    outage(env, True)
+    env.p.accept(job("j1", "u1", title="Secret song"))
+    env.p.finish(done("j1", "t1"))
+    env.db.commit([env.db.update_op(f"{env.p._tombstones}/u1", {"status": "done"})])    # noqa: SLF001 - the purge ran meanwhile
+    outage(env, False)
+    assert env.p.replay_pending() == 2
+    j = env.job("j1")
+    assert j["title"] is None and j["trackId"] is None and j["anonymizedAt"] is not None
 
 
 def test_the_next_projection_write_replays_the_buffer_first(env):
