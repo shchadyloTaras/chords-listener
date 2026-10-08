@@ -4,6 +4,7 @@
 #   scripts/deploy_cloud.sh                  everything: setup + Cloud Build + deploy
 #   SKIP_SETUP=1 scripts/deploy_cloud.sh     code-only redeploy (no APIs/repo/bucket/IAM/rules/CORS steps)
 #   SKIP_BUILD=1 scripts/deploy_cloud.sh     redeploy the newest image (settings / env changes only)
+#   OPS_ONLY=1 scripts/deploy_cloud.sh       only the admin ops below (no setup, build or deploy)
 #
 # Credentials and Cloud Build: scripts/gcloud_common.sh.
 # Secrets: CHORDS_SIGNING_KEY and CHORDS_SMOKE_KEY are generated once into .cloud.env (gitignored,
@@ -67,8 +68,17 @@ ops_sweep_scheduler() { # $1 = the service's stable URL (the OIDC audience)
   if ops_dry || ! gc iam service-accounts describe "$SCHEDULER_SA" >/dev/null 2>&1; then
     gc iam service-accounts create "$SCHEDULER_SA_NAME" --display-name="Chords Listener sweep (Cloud Scheduler)"
   fi
-  gc run services add-iam-policy-binding "$SERVICE" --region "$REGION" \
-    --member="serviceAccount:$SCHEDULER_SA" --role=roles/run.invoker --format=none
+  # an account created a moment ago is not visible to IAM yet ("does not exist"): retry for a minute
+  local try
+  for try in 1 2 3 4 5 6 7; do
+    if gc run services add-iam-policy-binding "$SERVICE" --region "$REGION" \
+      --member="serviceAccount:$SCHEDULER_SA" --role=roles/run.invoker --format=none; then
+      break
+    fi
+    [[ $try -lt 7 ]] || return 1
+    echo "$SCHEDULER_SA is not visible to IAM yet; retrying in 10 s" >&2
+    sleep 10
+  done
   for entry in "${SWEEP_JOBS[@]}"; do
     name="${entry%%|*}"
     cron="${entry#*|}"
@@ -133,9 +143,16 @@ EOF
   fi
   if [[ -n "$existing" ]]; then
     gc monitoring policies update "$existing" --policy-from-file="$file"
-  else
-    gc monitoring policies create --policy-from-file="$file"
+    return
   fi
+  # a log metric created a moment ago is not known to Monitoring yet ("Cannot find metric(s)"): retry for 5 minutes
+  local try
+  for try in $(seq 1 10); do
+    if gc monitoring policies create --policy-from-file="$file"; then return; fi
+    [[ $try -lt 10 ]] || return 1
+    echo "the metric $metric is not visible to Monitoring yet; retrying in 30 s" >&2
+    sleep 30
+  done
 }
 
 ops_alerts() {
@@ -188,7 +205,7 @@ source "$ROOT/scripts/gcloud_common.sh"
 
 log "Project $PROJECT, region $REGION, service $SERVICE (auth: $AUTH_MODE)"
 
-if [[ -z "${SKIP_SETUP:-}" ]]; then
+if [[ -z "${SKIP_SETUP:-}" && -z "${OPS_ONLY:-}" ]]; then
   # ---------------------------------------------------------------------------- APIs
   log "Enabling APIs"
   gc services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com \
@@ -280,6 +297,17 @@ SIGNING_KEY="$(secret CHORDS_SIGNING_KEY)"
 SMOKE_KEY="$(secret CHORDS_SMOKE_KEY)"
 ALERT_EMAIL="${ALERT_EMAIL:-$(secret ALERT_EMAIL)}" # where the admin alerts go (optional; never committed)
 [[ -n "$SIGNING_KEY" && -n "$SMOKE_KEY" ]] || { echo "$ENV_FILE lacks CHORDS_SIGNING_KEY / CHORDS_SMOKE_KEY" >&2; exit 1; }
+
+# ------------------------------------------------------------------------------ ops only
+if [[ -n "${OPS_ONLY:-}" ]]; then # e.g. after a deploy whose ops step failed: the service itself is left as it is
+  STABLE_URL="https://$SERVICE-$(gc projects describe "$PROJECT" --format='value(projectNumber)').$REGION.run.app"
+  log "Admin ops only: sweep scheduler jobs, log metrics, alerts"
+  ops_sweep_scheduler "$STABLE_URL"
+  ops_log_metrics
+  ops_alerts
+  log "Done in $(elapsed)"
+  exit 0
+fi
 
 # ------------------------------------------------------------------------------ build
 if [[ -z "${SKIP_BUILD:-}" ]]; then
