@@ -10,6 +10,7 @@ import { buildDisplayChords, uniqueChords, type DisplayChord, type UniqueChord }
 import type { ExportInput } from '../../lib/music/formats'
 import { resolveSpelling, transposeKeyName } from '../../lib/music/key'
 import type { Spelling } from '../../lib/music/notes'
+import { detectSections, withKinds, type SongSection } from '../../lib/music/sections'
 import type { EffectiveRhythm } from '../../lib/tempo'
 import { useEffectiveRhythm } from './tempo/useRhythm'
 
@@ -30,6 +31,8 @@ export interface ChordModel {
   hasChords: boolean
   /** beats / downbeats / tempo after the per-track tempo correction; `bars` are built from it */
   rhythm: EffectiveRhythm
+  /** the song's parts (intro, verse, chorus, …) over the bars, with the user's names for them */
+  sections: SongSection[]
   exportInput(barsPerLine: number, collapseRepeats: boolean): ExportInput
 }
 
@@ -61,6 +64,15 @@ export function useBuildChordModel(track: Track): ChordModel {
   )
   const bars = useMemo(() => fillBars(frames, chords), [frames, chords])
   const unique = useMemo(() => uniqueChords(chords), [chords])
+  // song parts: from the chords as detected (transposing / simplifying / spelling cannot change them),
+  // on the same bar grid as the sheet
+  const plainBars = useMemo(() => fillBars(frames, buildDisplayChords(track.chords, { transpose: 0, simplify: false, spelling: 'sharp' })), [frames, track.chords])
+  const detected = useMemo(
+    () => detectSections({ bars: plainBars, waveform: track.waveform, duration: track.duration }),
+    [plainBars, track.waveform, track.duration],
+  )
+  const kinds = useApp((s) => s.sectionKinds?.[track.id])
+  const sections = useMemo(() => withKinds(detected, kinds), [detected, kinds])
   const capo = useMemo(
     () =>
       hasCapo(instrument)
@@ -88,6 +100,7 @@ export function useBuildChordModel(track: Track): ChordModel {
       capo,
       hasChords: unique.length > 0,
       rhythm,
+      sections,
       exportInput: (barsPerLine, collapseRepeats) => ({
         meta: {
           title: track.title,
@@ -102,7 +115,7 @@ export function useBuildChordModel(track: Track): ChordModel {
         collapseRepeats,
       }),
     }
-  }, [track, transpose, simplify, spelling, accidentals, chords, bars, unique, capo, rhythm])
+  }, [track, transpose, simplify, spelling, accidentals, chords, bars, unique, capo, rhythm, sections])
 }
 
 export function useChordModel(): ChordModel {
