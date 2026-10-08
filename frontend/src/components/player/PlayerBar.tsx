@@ -4,6 +4,7 @@ import type { Track } from '../../types'
 import { LoopChip, PlayButton, SkipButton, SpeedMenu, TimeReadout, VideoToggle, VolumeControl } from './PlayerControls'
 import { trackVideoId } from './trackSource'
 import { SeekBar } from './SeekBar'
+import { PlayAlongToggle } from '../chords/PlayAlong'
 import { MetronomeToggle } from '../chords/tempo/MetronomeToggle'
 
 /**
@@ -48,6 +49,7 @@ export function PlayerBar({ track }: { track: Track }) {
           <LoopChip />
           <SpeedMenu />
           <MetronomeToggle />
+          <PlayAlongToggle />
         </div>
         <div className="order-3 flex items-center gap-1 sm:order-1 sm:gap-1.5">
           <SkipButton dir={-1} />

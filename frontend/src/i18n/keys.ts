@@ -4,9 +4,11 @@ import type { Dict } from './index'
 export const keys: Dict = {
   uk: {
     'keys.title': 'Живе фортепіано',
+    'keys.title.harmonium': 'Жива фісгармонія',
     'keys.canvas': 'Клавіатура фортепіано: клавіші натискаються й світяться, коли в пісні звучать відповідні ноти',
     'keys.canvas.harmonium':
-      'Клавіші фісгармонії, 37 від «до» малої октави до «до» третьої: клавіші натискаються й світяться, коли в пісні звучать відповідні ноти',
+      'Клавіші фісгармонії, 37 від «до» малої октави до «до» третьої: акорди пісні натискаються й тримаються до наступної зміни акорду',
+    'keys.harmonium.hint': 'Права рука тримає кожен акорд до наступної зміни, як на діаграмі',
     'keys.sounding': 'Звучить: {notes}',
     'keys.silence': 'Ноти не звучать',
 
@@ -28,8 +30,10 @@ export const keys: Dict = {
     'keys.retry': 'Спробувати ще',
 
     'keys.legend.instruments': 'Інструменти',
+    'keys.legend.chords': 'Акорди',
     'keys.legend.voice': 'Голос',
     'keys.legend.aria': 'Кольорові смуги — інструменти, контурні — голос',
+    'keys.legend.aria.harmonium': 'Кольорові смуги — акорди, контурні — голос',
     'keys.vocals.hint': 'Голос тут змішаний з музикою.',
     'keys.vocals.separate': 'Відокремити голос',
     'keys.vocals.separate.title':
@@ -40,7 +44,9 @@ export const keys: Dict = {
     'keys.recompute': 'Розпізнати заново',
     'keys.recompute.title': 'Розпізнати ноти заново (займе трохи часу)',
     'keys.hide': 'Сховати живе фортепіано',
+    'keys.hide.harmonium': 'Сховати живу фісгармонію',
     'keys.hidden': 'Живе фортепіано сховано. Повернути можна в налаштуваннях вигляду.',
+    'keys.hidden.harmonium': 'Живу фісгармонію сховано. Повернути можна в налаштуваннях вигляду.',
     'keys.show': 'Повернути',
 
     'keys.sync': 'Синхронізація',
@@ -55,12 +61,15 @@ export const keys: Dict = {
     'keys.sync.latency': 'Пристрій повідомляє затримку звуку ≈ {n} мс. Браузер уже її враховує.',
 
     'keys.settings.toggle': 'Живе фортепіано',
+    'keys.settings.toggle.harmonium': 'Жива фісгармонія',
     'keys.settings.hint': 'Клавіші світяться разом із нотами пісні',
   },
   en: {
     'keys.title': 'Live piano',
+    'keys.title.harmonium': 'Live harmonium',
     'keys.canvas': 'Piano keyboard: keys go down and light up as the matching notes sound in the song',
-    'keys.canvas.harmonium': 'Harmonium keyboard, 37 keys from C3 to C6: keys go down and light up as the matching notes sound in the song',
+    'keys.canvas.harmonium': 'Harmonium keyboard, 37 keys from C3 to C6: the song’s chords go down and are held until the chord changes',
+    'keys.harmonium.hint': 'The right hand holds each chord until it changes, as on the diagram',
     'keys.sounding': 'Sounding: {notes}',
     'keys.silence': 'No notes sounding',
 
@@ -82,8 +91,10 @@ export const keys: Dict = {
     'keys.retry': 'Try again',
 
     'keys.legend.instruments': 'Instruments',
+    'keys.legend.chords': 'Chords',
     'keys.legend.voice': 'Voice',
     'keys.legend.aria': 'Coloured bars are the instruments, outlined ones the voice',
+    'keys.legend.aria.harmonium': 'Coloured bars are the chords, outlined ones the voice',
     'keys.vocals.hint': 'The voice is mixed in with the music here.',
     'keys.vocals.separate': 'Separate the voice',
     'keys.vocals.separate.title':
@@ -94,7 +105,9 @@ export const keys: Dict = {
     'keys.recompute': 'Recognize again',
     'keys.recompute.title': 'Recognize the notes again (takes a moment)',
     'keys.hide': 'Hide the live piano',
+    'keys.hide.harmonium': 'Hide the live harmonium',
     'keys.hidden': 'Live piano hidden. You can bring it back in the view settings.',
+    'keys.hidden.harmonium': 'Live harmonium hidden. You can bring it back in the view settings.',
     'keys.show': 'Show again',
 
     'keys.sync': 'Sync',
@@ -109,6 +122,7 @@ export const keys: Dict = {
     'keys.sync.latency': 'Your device reports ≈ {n} ms of audio latency. The browser already accounts for it.',
 
     'keys.settings.toggle': 'Live piano',
+    'keys.settings.toggle.harmonium': 'Live harmonium',
     'keys.settings.hint': 'Keys light up with the song’s notes',
   },
 }

@@ -1,11 +1,11 @@
 // Which notes the chord sound plays — always exactly what the diagram for the selected instrument
-// shows: the staff voicing on the piano / harmonium keys, the displayed guitar / ukulele / bass
+// shows: the staff voicing on the piano keys, the right hand's shape on the harmonium, the displayed guitar / ukulele / bass
 // voicing (strummed low → high; the bass arpeggiated), or the chord tones the selected handpan
 // really has (a low → high arpeggio). Pure functions.
 
 import { BASS_TUNING } from '../diagrams/bass'
 import type { DbInstrument, FretInstrument, Voicing } from '../diagrams/chordsDb'
-import { HARMONIUM_LOW } from '../diagrams/harmonium'
+import { HARMONIUM_LOW, harmoniumVoicing } from '../diagrams/harmonium'
 import { pianoVoicing } from '../diagrams/piano'
 import { staffChord } from '../diagrams/staff'
 import { handpanMidis, playability, type HandpanScale } from '../handpan'
@@ -23,6 +23,8 @@ export interface NoteEvent {
   target: number
   /** stereo position −1..1 (when the instrument does not pan by pitch) */
   pan?: number
+  /** seconds the key stays down (piano, harmonium; default: the chord / note hold) */
+  hold?: number
 }
 
 // ---------- piano ----------
@@ -54,15 +56,16 @@ export function pianoKeyNote(key: number): NoteEvent {
 
 // ---------- harmonium ----------
 
-/** The harmonium's right hand speaks this long after the bass (s): pressed together, no roll. */
-export const HARMONIUM_SPREAD = 0.01
-
 /**
- * The staff's notes (the piano's) on the harmonium, lighting its own keys (0 = C3): bass first, the
- * rest together just after.
+ * The harmonium diagram's shape — one right hand, the left pumps the bellows — pressed together, no
+ * roll, lighting the instrument's own keys (0 = C3); the top note a touch stronger.
  */
 export function harmoniumChordNotes(label: string): NoteEvent[] {
-  return pianoChordNotes(label).map((n, i) => ({ ...n, offset: i === 0 ? 0 : HARMONIUM_SPREAD, target: n.midi - HARMONIUM_LOW }))
+  const parsed = parseChord(label)
+  if (!parsed) return []
+  const { notes } = harmoniumVoicing(parsed)
+  const top = notes.length - 1
+  return notes.map((k, i) => ({ midi: HARMONIUM_LOW + k, offset: 0, velocity: i === top ? 0.66 : 0.62, target: k }))
 }
 
 /** One key of the harmonium diagram (key 0 = C3, its lowest key). */

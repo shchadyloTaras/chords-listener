@@ -3,6 +3,7 @@
 //   POST /api/tracks/{id}/vocals → Job (kind 'vocals': Demucs separation, then melody tracking),
 //        polled until done; 501 / code 'unavailable' when the server has no vocal transcription.
 //   GET  /api/tracks/{id}/stems/{vocals|instruments} → the separated audio (mp3)
+//   POST /api/jobs/{id}/cancel → the job ends with code 'cancelled' (the vocals are 'missing' again)
 // Browser tracks (ids "local-…") and browser mode have no server to do this. A signed-in user's vocal notes are
 // read from Storage (vocals.json) while the live library answers, else from the API; what is found is kept on
 // the device (lib/cloud/cache) and read from there next time. Loading asks nothing the track already
@@ -13,7 +14,7 @@ import { create } from 'zustand'
 import { useJobs } from '../hooks/useJobs'
 import { useApp } from '../store'
 import type { Job, Track, TrackNotes, VocalNotes } from '../types'
-import { ApiError, apiFetch, apiRequest, cloudCacheUid, fetchMedia, getJob, listJobs, publishedJson, toApiError } from './api'
+import { ApiError, apiFetch, apiRequest, cancelJob, cloudCacheUid, fetchMedia, getJob, listJobs, publishedJson, toApiError } from './api'
 import { recentServerJobs, rememberServerJob } from './cloud/activity'
 import { cachedJson, saveJson } from './cloud/cache'
 import { isLocalId } from './local'
@@ -236,6 +237,8 @@ function watchJob(track: VocalsTrack, job: Job): void {
     if (current.status === 'error') {
       polling.delete(id)
       if (current.errorCode === 'unavailable') setState(id, { status: 'unavailable', reason: 'server' })
+      // cancelled (here or in another tab): can be started again
+      else if (current.errorCode === 'cancelled') setState(id, { status: 'missing' })
       else setState(id, { status: 'error', code: current.errorCode ?? 'internal', message: current.error ?? '', during: 'job' })
       return
     }
@@ -301,6 +304,33 @@ export async function startVocals(track: VocalsTrack): Promise<void> {
     if (e.code === 'unavailable' || e.status === 501) setState(track.id, { status: 'unavailable', reason: 'server' })
     else setState(track.id, { status: 'error', code: e.code, message: e.message, during: 'job' })
   }
+}
+
+/**
+ * Cancels the track's running vocals job: once the server took it, the vocals are 'missing' again (the polling
+ * stops; the job itself ends at its next progress report). Throws when the server did not take it.
+ */
+export async function cancelVocals(track: Pick<Track, 'id'>): Promise<void> {
+  const st = getState(track.id)
+  // not started yet (the POST is still on its way): nothing to cancel
+  if (st.status !== 'running' || !st.jobId) return
+  const { jobId } = st
+  try {
+    await cancelJob(jobId)
+  } catch (err) {
+    if (toApiError(err).code !== 'not_found') throw err
+    // the job is gone (nothing left to stop), or the server is older than cancelling: the job itself tells
+    const running = await getJob(jobId).then(
+      (j) => j.status !== 'done' && j.status !== 'error',
+      (e) => {
+        if (toApiError(e).code === 'not_found') return false
+        throw err
+      },
+    )
+    if (running) throw err
+  }
+  const now = getState(track.id)
+  if (now.status === 'running' && now.jobId === jobId) setState(track.id, { status: 'missing' })
 }
 
 /**

@@ -1,6 +1,6 @@
 import '@fontsource/bravura'
 import { memo } from 'react'
-import type { SpelledNote, StaffChord } from '../../../lib/diagrams/staff'
+import type { SpelledNote, StaffNotes } from '../../../lib/diagrams/staff'
 
 // Engraved with Bravura, a SMuFL font: a glyph's origin sits exactly on its reference line
 // (the G clef's spiral on the G4 line, the F clef's head and dots around the F3 line), and
@@ -12,6 +12,8 @@ const TREBLE_TOP = 17 // y of the F5 line
 const BASS_TOP = TREBLE_TOP + 4 * SP + 3.5 * SP // y of the A3 line
 const W = 74
 const H = BASS_TOP + 4 * SP + 9
+/** height of the treble staff alone (one hand, no bass): room down to G3, two ledger lines below */
+const H_TREBLE = TREBLE_TOP + (38 - 25) * STEP + 6
 const CLEF_X = 4
 const NOTE_X = 50 // notehead centre
 const HEAD_W = 1.688 * SP // noteheadWhole width (Bravura metadata)
@@ -108,7 +110,7 @@ function Notes({ placed, y, bottom, top, color }: { placed: Placed[]; y: (s: num
 
 /**
  * Grand staff with the chord as whole notes: right hand in the treble clef (G clef), bass note
- * in the bass clef (F clef).
+ * in the bass clef (F clef). Without a bass note only the treble staff, at the same scale.
  */
 export const StaffChart = memo(function StaffChart({
   chord,
@@ -117,22 +119,25 @@ export const StaffChart = memo(function StaffChart({
   title,
   clefTitles,
 }: {
-  chord: StaffChord
+  chord: StaffNotes
   color: string
+  /** height of the grand staff; the treble staff alone keeps its scale */
   height: number
   title: string
   /** hover titles for the two clefs */
   clefTitles?: { treble: string; bass: string }
 }) {
   const treble = place(chord.treble, trebleY)
-  const bass = place([chord.bass], bassY)
+  const bass = chord.bass ? place([chord.bass], bassY) : null
   const lines = [0, 1, 2, 3, 4]
+  const h = bass ? H : H_TREBLE
+  const bottom = bass ? BASS_TOP + 4 * SP : TREBLE_TOP + 4 * SP
 
   return (
     <svg
-      viewBox={`0 0 ${W} ${H}`}
+      viewBox={`0 0 ${W} ${h}`}
       width={(height * W) / H}
-      height={height}
+      height={(height * h) / H}
       role="img"
       aria-label={title}
       className="block shrink-0 text-muted"
@@ -141,11 +146,12 @@ export const StaffChart = memo(function StaffChart({
       {lines.map((i) => (
         <line key={`t${i}`} x1={2} x2={W - 2} y1={TREBLE_TOP + i * SP} y2={TREBLE_TOP + i * SP} stroke="currentColor" strokeOpacity={0.45} strokeWidth={0.13 * SP} />
       ))}
-      {lines.map((i) => (
-        <line key={`b${i}`} x1={2} x2={W - 2} y1={BASS_TOP + i * SP} y2={BASS_TOP + i * SP} stroke="currentColor" strokeOpacity={0.45} strokeWidth={0.13 * SP} />
-      ))}
-      <line x1={2} x2={2} y1={TREBLE_TOP} y2={BASS_TOP + 4 * SP} stroke="currentColor" strokeOpacity={0.6} strokeWidth={0.16 * SP} />
-      <line x1={W - 2} x2={W - 2} y1={TREBLE_TOP} y2={BASS_TOP + 4 * SP} stroke="currentColor" strokeOpacity={0.45} strokeWidth={0.13 * SP} />
+      {bass &&
+        lines.map((i) => (
+          <line key={`b${i}`} x1={2} x2={W - 2} y1={BASS_TOP + i * SP} y2={BASS_TOP + i * SP} stroke="currentColor" strokeOpacity={0.45} strokeWidth={0.13 * SP} />
+        ))}
+      <line x1={2} x2={2} y1={TREBLE_TOP} y2={bottom} stroke="currentColor" strokeOpacity={0.6} strokeWidth={0.16 * SP} />
+      <line x1={W - 2} x2={W - 2} y1={TREBLE_TOP} y2={bottom} stroke="currentColor" strokeOpacity={0.45} strokeWidth={0.13 * SP} />
       <g fill="currentColor" fillOpacity={0.85}>
         {/* G clef: origin on the G4 line (2nd line from the bottom of the treble staff) */}
         <text x={CLEF_X} y={trebleY(32)} fontSize={FONT}>
@@ -153,13 +159,15 @@ export const StaffChart = memo(function StaffChart({
           {G_CLEF}
         </text>
         {/* F clef: origin on the F3 line (2nd line from the top of the bass staff) */}
-        <text x={CLEF_X} y={bassY(24)} fontSize={FONT}>
-          {clefTitles && <title>{clefTitles.bass}</title>}
-          {F_CLEF}
-        </text>
+        {bass && (
+          <text x={CLEF_X} y={bassY(24)} fontSize={FONT}>
+            {clefTitles && <title>{clefTitles.bass}</title>}
+            {F_CLEF}
+          </text>
+        )}
       </g>
       <Notes placed={treble} y={trebleY} bottom={30} top={38} color={color} />
-      <Notes placed={bass} y={bassY} bottom={18} top={26} color={color} />
+      {bass && <Notes placed={bass} y={bassY} bottom={18} top={26} color={color} />}
     </svg>
   )
 })

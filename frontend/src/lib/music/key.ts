@@ -15,7 +15,7 @@ export function keyPrefersFlats(tonicPc: number, mode: Mode): boolean {
   return (mode === 'minor' ? FLAT_MINOR : FLAT_MAJOR).has(mod12(tonicPc))
 }
 
-function keyTonicPc(key: KeyInfo | null | undefined): number | null {
+export function keyTonicPc(key: KeyInfo | null | undefined): number | null {
   if (!key) return null
   return noteToPc(key.tonic) ?? noteToPc(key.name.replace(/m$/, ''))
 }

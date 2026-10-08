@@ -4,10 +4,10 @@ import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useT } from '../../../i18n'
 import type { FretInstrument } from '../../../lib/diagrams/chordsDb'
 import { fretVoicings } from '../../../lib/diagrams/fretted'
-import { harmoniumVoicing } from '../../../lib/diagrams/harmonium'
+import { harmoniumStaff, harmoniumVoicing } from '../../../lib/diagrams/harmonium'
 import { pianoVoicing } from '../../../lib/diagrams/piano'
 import { isFretted, isKeyboard } from '../../../lib/instruments'
-import { staffChord } from '../../../lib/diagrams/staff'
+import { staffChord, type StaffNotes } from '../../../lib/diagrams/staff'
 import { parseChord } from '../../../lib/music/chord'
 import { chordTone } from '../../../lib/music/color'
 import type { Spelling } from '../../../lib/music/notes'
@@ -107,8 +107,10 @@ export const ChordDiagram = memo(function ChordDiagram({
   const title = `${label} — ${instName}`
 
   if (!fretted) {
+    // the harmonium: one hand's shape on the treble staff alone (the left hand pumps the bellows)
+    const hv = instrument === 'harmonium' ? harmoniumVoicing(parsed) : null
     const v = pianoVoicing(parsed)
-    const staff = staffChord(parsed, v)
+    const staff: StaffNotes = hv ? { treble: harmoniumStaff(parsed, hv) } : staffChord(parsed, v)
     const right = staff.treble.map((n) => n.name).join(' ')
     return (
       <figure
@@ -121,12 +123,14 @@ export const ChordDiagram = memo(function ChordDiagram({
           chord={staff}
           color={color}
           height={STAFF_HEIGHTS[size]}
-          title={t('chords.staff.label', { chord: label, notes: right, bass: staff.bass.name })}
+          title={
+            staff.bass ? t('chords.staff.label', { chord: label, notes: right, bass: staff.bass.name }) : t('chords.staff.label.oneHand', { chord: label, notes: right })
+          }
           clefTitles={{ treble: t('chords.staff.treble'), bass: t('chords.staff.bass') }}
         />
-        {instrument === 'harmonium' ? (
+        {hv ? (
           <HarmoniumChart
-            voicing={harmoniumVoicing(parsed)}
+            voicing={hv}
             color={color}
             width={width}
             title={title}
@@ -137,7 +141,7 @@ export const ChordDiagram = memo(function ChordDiagram({
           <PianoChart voicing={v} color={color} width={width} title={title} sounding={sounding} onKey={(k) => playPianoKey(label, k)} />
         )}
         <figcaption className="font-mono text-[11px] tracking-wide text-muted">
-          {parsed.bassPc != null && `${staff.bass.name} / `}
+          {parsed.bassPc != null && staff.bass && `${staff.bass.name} / `}
           {staff.treble.map((n) => n.name).join('  ')}
         </figcaption>
       </figure>

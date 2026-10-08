@@ -293,6 +293,26 @@ def test_delete_cancels_a_running_job_and_removes_everything(client: TestClient)
     assert_error(client.get(f"/api/tracks/{TRACK_ID}/vocals"), 404, "not_found")
 
 
+def test_cancel_stops_a_running_job_and_a_new_one_starts_afresh(client: TestClient) -> None:
+    fake: FakeVocals = client.fake  # type: ignore[attr-defined]
+    fake.gate = threading.Event()
+    job = client.post(f"/api/tracks/{TRACK_ID}/vocals").json()
+    assert fake.started.wait(5)
+    res = client.post(f"/api/jobs/{job['id']}/cancel")
+    assert res.status_code == 200 and res.json()["id"] == job["id"]
+    # asked again while the old one is still stopping: a new job, not the cancelled one
+    fake.gate = None
+    again = client.post(f"/api/tracks/{TRACK_ID}/vocals").json()
+    assert again["id"] != job["id"]
+    done = wait_job(client, job["id"])
+    assert done["status"] == "error" and done["errorCode"] == "cancelled"
+    assert wait_job(client, again["id"])["status"] == "done"
+    assert client.get(f"/api/tracks/{TRACK_ID}/vocals").status_code == 200
+    # a finished job is returned unchanged; an unknown one is 404
+    assert client.post(f"/api/jobs/{again['id']}/cancel").json()["status"] == "done"
+    assert_error(client.post("/api/jobs/nope/cancel"), 404, "not_found")
+
+
 def test_reanalysis_and_reset_keep_the_vocals(client: TestClient) -> None:
     run_vocals(client)
     res = client.post(f"/api/tracks/{TRACK_ID}/reanalyze")
@@ -379,3 +399,21 @@ def test_cloud_per_user_signed_stems_and_quota(make_client, tmp_path: Path) -> N
     assert c.post(f"/api/tracks/{TRACK_ID}/vocals", headers=H("alice")).json()["status"] == "done"  # cached: free
     assert_error(c.post(f"/api/tracks/{TRACK_ID}/vocals", json={"force": True}, headers=H("alice")), 429,
                  "quota_exceeded")
+
+
+def test_cloud_cancel_gives_the_quota_back_and_is_per_user(make_client, tmp_path: Path) -> None:
+    c = make_client(auth="firebase", signing_key="test-signing-key-0123456789abcdef", quota_vocals=1,
+                    scratch_dir=tmp_path / "scratch", publish=False, app_kw={"token_verifier": FakeVerifier()})
+    with user_context("alice"):
+        install(c)
+    fake: FakeVocals = c.fake  # type: ignore[attr-defined]
+    fake.gate = threading.Event()
+    job = c.post(f"/api/tracks/{TRACK_ID}/vocals", headers=H("alice")).json()
+    assert fake.started.wait(5)
+    assert_error(c.post(f"/api/jobs/{job['id']}/cancel", headers=H("bob")), 404, "not_found")  # not bob's
+    assert c.post(f"/api/jobs/{job['id']}/cancel", headers=H("alice")).status_code == 200
+    assert c.post(f"/api/jobs/{job['id']}/cancel", headers=H("alice")).status_code == 200  # twice: one refund
+    assert wait_job(c, job["id"], H("alice"))["errorCode"] == "cancelled"
+    assert c.get("/api/me", headers=H("alice")).json()["quotas"]["vocals"]["used"] == 0
+    fake.gate = None
+    assert run_vocals(c, headers=H("alice"))["status"] == "done"  # the unit given back pays for this one

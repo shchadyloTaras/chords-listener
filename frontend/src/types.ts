@@ -19,6 +19,8 @@ export type ErrorCode =
   | 'download_blocked'
   /** the requested feature is not installed on this server (e.g. vocal transcription) */
   | 'unavailable'
+  /** the user cancelled the job (POST /api/jobs/{id}/cancel) */
+  | 'cancelled'
 
 export interface Job {
   id: string

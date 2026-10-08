@@ -91,9 +91,9 @@ export const tour: Dict = {
     'tour.score.canvas.text': 'Натисни на будь-яку ноту, і пісня гратиме з цього місця. Світла лінія показує, що звучить зараз.',
     'tour.score.canvas.text.demo': 'Натисни на будь-яку ноту, щоб перейти до цього місця. Світла лінія показує, де ти зараз.',
 
-    'tour.keys.intro.title': 'Живе фортепіано',
+    'tour.keys.intro.title': 'Живі клавіші',
     'tour.keys.intro.text': 'На твоїх піснях ноти падають згори на ці клавіші й натискають їх разом зі звуком. ▼ чи ▲ біля краю — нота нижча чи вища за клавіатуру.',
-    'tour.keys.canvas.title': 'Живе фортепіано',
+    'tour.keys.canvas.title': 'Живі клавіші',
     'tour.keys.canvas.text': 'Ноти падають згори й натискають клавіші разом зі звуком. Колір — яка це нота, такий самий, як в акорду з цією основною нотою.',
     'tour.keys.edges.title': 'За краєм клавіатури',
     'tour.keys.edges.text': '▼ чи ▲ біля краю означає, що нота нижча чи вища за показані клавіші.',
@@ -219,9 +219,9 @@ export const tour: Dict = {
     'tour.score.canvas.text': 'Click any note and the song plays from there. The bright line shows what is playing now.',
     'tour.score.canvas.text.demo': 'Click any note to jump there. The bright line shows where you are.',
 
-    'tour.keys.intro.title': 'Live piano',
+    'tour.keys.intro.title': 'Live keys',
     'tour.keys.intro.text': 'On your own songs the notes fall onto these keys and press them along with the sound. ▼ or ▲ at an edge means a note below or above the keyboard.',
-    'tour.keys.canvas.title': 'Live piano',
+    'tour.keys.canvas.title': 'Live keys',
     'tour.keys.canvas.text': 'Notes fall from above and press the keys along with the sound. The colour tells the note — the same as a chord with that root.',
     'tour.keys.edges.title': 'Past the keyboard',
     'tour.keys.edges.text': '▼ or ▲ at an edge means the note is below or above the keys shown.',

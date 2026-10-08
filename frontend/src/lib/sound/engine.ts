@@ -1,8 +1,11 @@
 // The chord-sound engine: one lazily created AudioContext ("interactive" latency) shared by every
 // chord / note preview, separate from the metronome's. Graph:
 //
-//   voice → (panner) → instrument bus ─┬──────────────────────────→ master (chordSoundVolume)
-//                                      └→ send → room reverb ──────→ master → limiter → speakers
+//   voice → (panner) → volume ─→ instrument bus ─┬───────────────────────→ master
+//                                                 └→ send → room reverb ──→ master → limiter → speakers
+//
+// The volume stage is per group and instrument: the chord sound (clicks, the drone) follows the
+// chordSoundVolume setting, the play-along its own playAlongVolume.
 //
 // A new chord fades the previous one out over 70 ms; finished voices are disconnected; the context
 // is suspended after a few idle seconds, so nothing runs while nothing sounds. Every note is also
@@ -14,6 +17,7 @@ import { emitLiveNotes, type LiveNote } from '../liveNotes'
 import type { NoteEvent } from './chordNotes'
 import { clamp } from './dsp'
 import { handpanParams, handpanRelease, renderHandpan } from './handpanTone'
+import { DRONE_HOLD, DRONE_LOOP_START, droneLoop } from './drone'
 import { harmoniumParams, renderHarmonium } from './harmonium'
 import { pianoParams, renderPiano } from './piano'
 import { pluckParams, pluckRelease, renderPluck, type PluckInstrument } from './pluck'
@@ -68,6 +72,12 @@ const HARMONIUM_LEVEL = 0.44
 const PIANO_LEVEL = 0.75
 /** Per-note level of the cached handpan notes (rendered at HANDPAN_RMS; the strike's force scales it). */
 const HANDPAN_LEVEL = 0.77
+/** The harmonium's drone: as loud as one key of a chord, and how fast it swells in / dies away (s). */
+const DRONE_LEVEL = HARMONIUM_LEVEL
+const DRONE_SWELL = 0.25
+const DRONE_FADE = 0.2
+/** How fast a held harmonium key's reeds stop when it comes up (s), like the rendered notes' release. */
+const HELD_RELEASE = 0.03
 /** Piano notes are rendered at touches this far apart (≤ 0.1 dB off; the cache stays small). */
 const PIANO_TOUCH_STEP = 0.02
 const BUFFER_CACHE_MAX = 48
@@ -77,6 +87,20 @@ export function volumeGain(volume: number): number {
   const v = clamp(Number.isFinite(volume) ? volume : 0.8, 0, 1)
   return v * v
 }
+
+/** Highest play-along volume setting (2 = 200%): over a loud recording the accompaniment may need more. */
+export const PLAY_ALONG_MAX_VOLUME = 2
+
+/** The play-along volume's curve: perceptual up to 100%, then steeper (the limiter keeps it clean), like the metronome's. */
+export function alongVolumeGain(volume: number): number {
+  const v = clamp(Number.isFinite(volume) ? volume : 0.8, 0, PLAY_ALONG_MAX_VOLUME)
+  return v <= 1 ? v * v : 1 + (v - 1) * 3
+}
+
+/** What a voice belongs to, for its volume: a clicked chord / key / the drone, or the play-along. */
+export type SoundGroup = 'click' | 'along'
+
+const groupGain = (group: SoundGroup, volume: number) => (group === 'along' ? alongVolumeGain(volume) : volumeGain(volume))
 
 type Ctor = typeof AudioContext
 
@@ -90,12 +114,14 @@ interface Graph {
   master: GainNode
   reverb: ConvolverNode | null
   buses: Partial<Record<Instrument, GainNode>>
+  /** each group's gain now, and its volume stage per instrument (in front of the bus) */
+  levels: Record<SoundGroup, number>
+  inputs: Record<SoundGroup, Partial<Record<Instrument, GainNode>>>
 }
 
-/** Master → limiter → destination, and the room. */
-function buildGraph(ctx: BaseAudioContext, volume: number): Graph {
+/** Master → limiter → destination, and the room; `volumes` = the groups' volume settings. */
+function buildGraph(ctx: BaseAudioContext, volumes: Record<SoundGroup, number>): Graph {
   const master = ctx.createGain()
-  master.gain.value = volumeGain(volume)
   // Gentle limiter: chords stay clean when they stack up at high volume.
   const limiter = ctx.createDynamicsCompressor()
   limiter.threshold.value = -6
@@ -119,7 +145,14 @@ function buildGraph(ctx: BaseAudioContext, volume: number): Graph {
   } catch {
     reverb = null
   }
-  return { ctx, master, reverb, buses: {} }
+  return {
+    ctx,
+    master,
+    reverb,
+    buses: {},
+    levels: { click: groupGain('click', volumes.click), along: groupGain('along', volumes.along) },
+    inputs: { click: {}, along: {} },
+  }
 }
 
 function busFor(g: Graph, instrument: Instrument): GainNode {
@@ -136,6 +169,17 @@ function busFor(g: Graph, instrument: Instrument): GainNode {
   }
   g.buses[instrument] = bus
   return bus
+}
+
+/** Where a voice of `group` on `instrument` connects: the group's volume, then the instrument's bus. */
+function inputFor(g: Graph, group: SoundGroup, instrument: Instrument): GainNode {
+  const have = g.inputs[group][instrument]
+  if (have) return have
+  const input = g.ctx.createGain()
+  input.gain.value = g.levels[group]
+  input.connect(busFor(g, instrument))
+  g.inputs[group][instrument] = input
+  return input
 }
 
 // Plucked strings (per instrument, pitch, sample rate), harmonium keys (per pitch, hold, sample rate),
@@ -156,31 +200,61 @@ function cachedBuffer(ctx: BaseAudioContext, key: string, render: () => Float32A
   return buffer
 }
 
-function pluckBuffer(ctx: BaseAudioContext, instrument: PluckInstrument, midi: number): { buffer: AudioBuffer; release: number } {
-  const params = pluckParams(instrument, midi, ctx.sampleRate)
-  const buffer = cachedBuffer(ctx, `${instrument}:${midi}:${ctx.sampleRate}`, () => renderPluck(params))
-  return { buffer, release: pluckRelease(params) }
+/** The rendered buffer a note plays from: its cache key, and how to render it. */
+interface NoteSource {
+  key: string
+  render(): Float32Array
 }
 
-function startPluckNote(ctx: BaseAudioContext, when: number, instrument: PluckInstrument, midi: number, velocity: number): VoiceParts {
-  const { buffer, release } = pluckBuffer(ctx, instrument, midi)
+const pianoTouch = (velocity: number) => Math.round(clamp(velocity, 0, 1) / PIANO_TOUCH_STEP) * PIANO_TOUCH_STEP
+
+/** Which buffer `n` sounds from on `instrument` (a held harmonium key: the drone's looped note). */
+function noteSource(ctx: BaseAudioContext, instrument: Instrument, kind: PlayKind, n: NoteEvent): NoteSource {
+  const sr = ctx.sampleRate
+  const { midi } = n
+  switch (instrument) {
+    case 'piano': {
+      const touch = pianoTouch(n.velocity)
+      const hold = n.hold ?? KEY_HOLD[kind]
+      return { key: `piano:${midi}:${touch.toFixed(2)}:${hold}:${sr}`, render: () => renderPiano(pianoParams(midi, touch, hold, sr)) }
+    }
+    case 'harmonium': {
+      if (n.hold != null) return droneSource(midi, sr)
+      const hold = KEY_HOLD[kind]
+      return { key: `harmonium:${midi}:${hold}:${sr}`, render: () => renderHarmonium(harmoniumParams(midi, hold, sr)) }
+    }
+    case 'handpan': {
+      const ding = n.target === 0
+      return { key: `handpan:${midi}:${ding ? 'ding' : 'field'}:${sr}`, render: () => renderHandpan(handpanParams(midi, ding, sr)) }
+    }
+    default:
+      return { key: `${instrument}:${midi}:${sr}`, render: () => renderPluck(pluckParams(instrument, midi, sr)) }
+  }
+}
+
+/** The harmonium key looped for as long as it is held (the drone, the play-along's held chords). */
+function droneSource(midi: number, sr: number): NoteSource {
+  return { key: `harmonium-drone:${midi}:${sr}`, render: () => droneLoop(renderHarmonium(harmoniumParams(midi, DRONE_HOLD, sr)), sr) }
+}
+
+const sourceBuffer = (ctx: BaseAudioContext, src: NoteSource) => cachedBuffer(ctx, src.key, () => src.render())
+
+function startPluckNote(ctx: BaseAudioContext, when: number, instrument: PluckInstrument, n: NoteEvent, buffer: AudioBuffer): VoiceParts {
   const src = ctx.createBufferSource()
   src.buffer = buffer
-  const level = PLUCK_LEVEL * Math.pow(clamp(velocity, 0.05, 1), 1.3)
+  const level = PLUCK_LEVEL * Math.pow(clamp(n.velocity, 0.05, 1), 1.3)
   const out = ctx.createGain()
   out.gain.value = level
   src.connect(out)
   src.start(when)
-  return { out, level, sources: [src], nodes: [src, out], end: when + buffer.duration, release }
+  return { out, level, sources: [src], nodes: [src, out], end: when + buffer.duration, release: pluckRelease(pluckParams(instrument, n.midi, ctx.sampleRate)) }
 }
 
 /** A harmonium key held `hold` seconds: its rendered note (the release is in the buffer). */
-function startHarmoniumNote(ctx: BaseAudioContext, when: number, midi: number, velocity: number, hold: number): VoiceParts {
-  const params = harmoniumParams(midi, hold, ctx.sampleRate)
-  const buffer = cachedBuffer(ctx, `harmonium:${midi}:${hold}:${ctx.sampleRate}`, () => renderHarmonium(params))
+function startHarmoniumNote(ctx: BaseAudioContext, when: number, n: NoteEvent, hold: number, buffer: AudioBuffer): VoiceParts {
   const src = ctx.createBufferSource()
   src.buffer = buffer
-  const level = HARMONIUM_LEVEL * (0.85 + 0.15 * clamp(velocity, 0, 1))
+  const level = HARMONIUM_LEVEL * (0.85 + 0.15 * clamp(n.velocity, 0, 1))
   const out = ctx.createGain()
   out.gain.value = level
   src.connect(out)
@@ -188,11 +262,31 @@ function startHarmoniumNote(ctx: BaseAudioContext, when: number, midi: number, v
   return { out, level, sources: [src], nodes: [src, out], end: when + buffer.duration, release: hold }
 }
 
+/**
+ * A harmonium key held any length (`n.hold` s): the looped note, swelling from the reed's speech,
+ * its reeds stopping in HELD_RELEASE when the key comes up.
+ */
+function startHeldHarmoniumNote(ctx: BaseAudioContext, when: number, n: NoteEvent, hold: number, buffer: AudioBuffer): VoiceParts {
+  const src = ctx.createBufferSource()
+  src.buffer = buffer
+  src.loop = true
+  src.loopStart = Math.round(DRONE_LOOP_START * ctx.sampleRate) / ctx.sampleRate
+  src.loopEnd = buffer.duration
+  const level = HARMONIUM_LEVEL * (0.85 + 0.15 * clamp(n.velocity, 0, 1))
+  const out = ctx.createGain()
+  const up = when + hold
+  const end = up + HELD_RELEASE + 0.005
+  out.gain.value = level
+  out.gain.setValueAtTime(level, up)
+  out.gain.linearRampToValueAtTime(0, up + HELD_RELEASE)
+  src.connect(out)
+  src.start(when)
+  src.stop(end)
+  return { out, level, sources: [src], nodes: [src, out], end, release: hold }
+}
+
 /** A piano key held `hold` seconds: its rendered note (the dampers and the key-up thud are in the buffer). */
-function startPianoNote(ctx: BaseAudioContext, when: number, midi: number, velocity: number, hold: number): VoiceParts {
-  const touch = Math.round(clamp(velocity, 0, 1) / PIANO_TOUCH_STEP) * PIANO_TOUCH_STEP
-  const params = pianoParams(midi, touch, hold, ctx.sampleRate)
-  const buffer = cachedBuffer(ctx, `piano:${midi}:${touch.toFixed(2)}:${hold}:${ctx.sampleRate}`, () => renderPiano(params))
+function startPianoNote(ctx: BaseAudioContext, when: number, hold: number, buffer: AudioBuffer): VoiceParts {
   const src = ctx.createBufferSource()
   src.buffer = buffer
   const level = PIANO_LEVEL
@@ -204,29 +298,29 @@ function startPianoNote(ctx: BaseAudioContext, when: number, midi: number, veloc
 }
 
 /** A handpan note — the ding or a tone field — struck with `velocity`: its rendered ring. */
-function startHandpanNote(ctx: BaseAudioContext, when: number, midi: number, velocity: number, ding: boolean): VoiceParts {
-  const params = handpanParams(midi, ding, ctx.sampleRate)
-  const buffer = cachedBuffer(ctx, `handpan:${midi}:${ding ? 'ding' : 'field'}:${ctx.sampleRate}`, () => renderHandpan(params))
+function startHandpanNote(ctx: BaseAudioContext, when: number, n: NoteEvent, buffer: AudioBuffer): VoiceParts {
+  const ding = n.target === 0
   const src = ctx.createBufferSource()
   src.buffer = buffer
-  const level = HANDPAN_LEVEL * Math.pow(clamp(velocity, 0.05, 1), 1.2)
+  const level = HANDPAN_LEVEL * Math.pow(clamp(n.velocity, 0.05, 1), 1.2)
   const out = ctx.createGain()
   out.gain.value = level
   src.connect(out)
   src.start(when)
-  return { out, level, sources: [src], nodes: [src, out], end: when + buffer.duration, release: handpanRelease(midi, ding) }
+  return { out, level, sources: [src], nodes: [src, out], end: when + buffer.duration, release: handpanRelease(n.midi, ding) }
 }
 
 function startVoice(g: Graph, instrument: Instrument, kind: PlayKind, n: NoteEvent, when: number): VoiceParts {
+  const buffer = sourceBuffer(g.ctx, noteSource(g.ctx, instrument, kind, n))
   switch (instrument) {
     case 'piano':
-      return startPianoNote(g.ctx, when, n.midi, n.velocity, KEY_HOLD[kind])
+      return startPianoNote(g.ctx, when, n.hold ?? KEY_HOLD[kind], buffer)
     case 'harmonium':
-      return startHarmoniumNote(g.ctx, when, n.midi, n.velocity, KEY_HOLD[kind])
+      return n.hold != null ? startHeldHarmoniumNote(g.ctx, when, n, n.hold, buffer) : startHarmoniumNote(g.ctx, when, n, KEY_HOLD[kind], buffer)
     case 'handpan':
-      return startHandpanNote(g.ctx, when, n.midi, n.velocity, n.target === 0)
+      return startHandpanNote(g.ctx, when, n, buffer)
     default:
-      return startPluckNote(g.ctx, when, instrument, n.midi, n.velocity)
+      return startPluckNote(g.ctx, when, instrument, n, buffer)
   }
 }
 
@@ -259,6 +353,8 @@ interface Voice {
   /** the recorded note (shared with ./sounding.ts; its `end` is shortened when the voice is cut) */
   note: SoundingNote
   cut: boolean
+  /** played along the song (lib/sound/accompanyRuntime.ts) */
+  accomp: boolean
 }
 
 function dispose(v: Voice): void {
@@ -290,6 +386,11 @@ export interface SoundStats {
   /** AudioContext start time of each of those notes (s) */
   lastContextTimes: number[]
   state: AudioContextState | 'none'
+  /** MIDI note of the harmonium's drone while it sounds */
+  drone: number | null
+  /** play-along steps scheduled so far, and how many of them were already due (started late) */
+  alongSteps: number
+  alongLate: number
 }
 
 class SoundEngine {
@@ -308,6 +409,13 @@ class SoundEngine {
   private runningSince = 0
   /** the browser's output timestamp proved usable (false: it never went live, ignore it) */
   private stampOk: boolean | null = null
+  /** the harmonium's drone, looping while the song plays (not a voice: chords never cut it) */
+  private drone: { midi: number; src: AudioBufferSourceNode; out: GainNode } | null = null
+  private droneTicket = 0
+  private alongSteps = 0
+  private alongLate = 0
+  /** the play-along runs: the context is not suspended between its steps */
+  private alongAwake = false
 
   /** Web Audio exists in this browser (no context is created). */
   get supported(): boolean {
@@ -323,6 +431,9 @@ class SoundEngine {
       last: this.last,
       lastContextTimes: this.lastTimes,
       state: this.graph ? (this.graph.ctx as AudioContext).state : 'none',
+      drone: this.drone?.midi ?? null,
+      alongSteps: this.alongSteps,
+      alongLate: this.alongLate,
     }
   }
 
@@ -371,6 +482,134 @@ class SoundEngine {
     return true
   }
 
+  /**
+   * Holds the harmonium's drone on `midi` (looped, swelling in) until called with another key or
+   * null (it fades out). Separate from the chords: a new chord never cuts it.
+   */
+  async setDrone(midi: number | null): Promise<void> {
+    const ticket = ++this.droneTicket
+    if (midi == null) {
+      this.stopDrone()
+      return
+    }
+    if (this.drone?.midi === midi) return
+    const g = this.unlock()
+    if (!g) return
+    const ctx = g.ctx as AudioContext
+    if (ctx.state !== 'running' && !(await this.whenRunning(ctx))) return
+    if (ticket !== this.droneTicket) return
+    this.stopDrone()
+    try {
+      const sr = ctx.sampleRate
+      const buffer = sourceBuffer(ctx, droneSource(midi, sr))
+      const src = ctx.createBufferSource()
+      src.buffer = buffer
+      src.loop = true
+      src.loopStart = Math.round(DRONE_LOOP_START * sr) / sr
+      src.loopEnd = buffer.length / sr
+      const out = ctx.createGain()
+      const at = ctx.currentTime + LEAD
+      out.gain.setValueAtTime(0, at)
+      out.gain.linearRampToValueAtTime(DRONE_LEVEL, at + DRONE_SWELL)
+      src.connect(out)
+      out.connect(inputFor(g, 'click', 'harmonium'))
+      src.start(at)
+      this.drone = { midi, src, out }
+      window.clearTimeout(this.idleTimer)
+    } catch {
+      // no drone, nothing else affected
+    }
+  }
+
+  private stopDrone(): void {
+    const d = this.drone
+    const g = this.graph
+    this.drone = null
+    if (!d || !g) return
+    const at = g.ctx.currentTime
+    try {
+      d.out.gain.cancelScheduledValues(at)
+      d.out.gain.setValueAtTime(d.out.gain.value, at)
+      d.out.gain.linearRampToValueAtTime(0, at + DRONE_FADE)
+      d.src.stop(at + DRONE_FADE + 0.01)
+    } catch {
+      // already stopped
+    }
+    d.src.onended = () => {
+      d.src.disconnect()
+      d.out.disconnect()
+    }
+    if (!this.voices.length) this.scheduleIdle()
+  }
+
+  /**
+   * The audio clock, for scheduling ahead of it: `now` (currentTime: nothing can start earlier),
+   * `heard` — the context time reaching the listener right now (the output timestamp, else
+   * currentTime minus the reported latencies; the limiter's lookahead included), so a note scheduled
+   * at `heard + x` is heard x seconds from now — and whether the context runs. Null before the
+   * context exists.
+   */
+  clock(): { now: number; heard: number; running: boolean } | null {
+    const g = this.graph
+    if (!g) return null
+    const ctx = g.ctx as AudioContext
+    const ref = this.timeRef(ctx)
+    const heard = ref.contextTime + (performance.now() - ref.performanceTime) / 1000
+    return { now: ctx.currentTime, heard, running: ctx.state === 'running' }
+  }
+
+  /**
+   * Schedules a play-along step at context time `when`. Its voices are the accompaniment's own: a
+   * step cuts the accompaniment's earlier ones (`cut` "all") or only those on its notes ("same"),
+   * never a chord clicked meanwhile (which, being a chord, cuts them). False when the context is not
+   * running.
+   */
+  scheduleAt(step: { instrument: Instrument; label: string; cut: 'all' | 'same'; notes: readonly NoteEvent[] }, when: number): boolean {
+    const g = this.graph
+    if (!g || (g.ctx as AudioContext).state !== 'running' || !step.notes.length) return false
+    const now = g.ctx.currentTime
+    this.alongSteps++
+    if (when < now) this.alongLate++
+    const t0 = Math.max(when, now + 0.002)
+    const midis = new Set(step.notes.map((n) => n.midi))
+    const victims = this.voices.filter((v) => v.accomp && (step.cut === 'all' || v.instrument !== step.instrument || midis.has(v.midi)))
+    this.startVoices(g, { instrument: step.instrument, kind: 'chord', label: step.label, notes: step.notes }, t0, victims, true)
+    return true
+  }
+
+  /** While the play-along runs the context stays awake, even through a long stretch without chords. */
+  keepAwake(on: boolean): void {
+    this.alongAwake = on
+    if (on) window.clearTimeout(this.idleTimer)
+    else if (!this.voices.length && !this.drone) this.scheduleIdle()
+  }
+
+  /** Fades out the accompaniment, including steps scheduled but not heard yet (pause, seek, off). */
+  cancelAccompaniment(): void {
+    const g = this.graph
+    const along = this.voices.filter((v) => v.accomp)
+    if (!g || !along.length) return
+    const ref = this.timeRef(g.ctx as AudioContext)
+    this.cutVoices(along, g.ctx.currentTime, (t) => contextToPerformance(t, ref))
+    this.scheduleSweep()
+  }
+
+  /**
+   * Renders the first of `notes` whose buffer is not cached yet (play-along: done ahead, a note per
+   * call, so nothing renders at the moment it is due). True when one was rendered.
+   */
+  prepare(instrument: Instrument, notes: readonly NoteEvent[]): boolean {
+    const g = this.graph
+    if (!g) return false
+    for (const n of notes) {
+      const src = noteSource(g.ctx, instrument, 'chord', n)
+      if (bufferCache.has(src.key)) continue
+      sourceBuffer(g.ctx, src)
+      return true
+    }
+    return false
+  }
+
   /** Fades out everything (e.g. the track was closed). */
   stopAll(): void {
     const g = this.graph
@@ -396,10 +635,12 @@ class SoundEngine {
       } catch {
         ctx = new C()
       }
-      this.graph = buildGraph(ctx, useApp.getState().chordSoundVolume)
+      const s0 = useApp.getState()
+      this.graph = buildGraph(ctx, { click: s0.chordSoundVolume, along: s0.playAlongVolume })
       this.runningSince = performance.now()
       useApp.subscribe((s, p) => {
-        if (s.chordSoundVolume !== p.chordSoundVolume) this.setVolume(s.chordSoundVolume)
+        if (s.chordSoundVolume !== p.chordSoundVolume) this.setVolume('click', s.chordSoundVolume)
+        if (s.playAlongVolume !== p.playAlongVolume) this.setVolume('along', s.playAlongVolume)
       })
       ctx.addEventListener('statechange', () => {
         if (ctx.state === 'running') this.runningSince = performance.now()
@@ -412,13 +653,17 @@ class SoundEngine {
     }
   }
 
-  private setVolume(volume: number): void {
+  private setVolume(group: SoundGroup, volume: number): void {
     const g = this.graph
     if (!g) return
-    try {
-      g.master.gain.setTargetAtTime(volumeGain(volume), g.ctx.currentTime, 0.015)
-    } catch {
-      g.master.gain.value = volumeGain(volume)
+    const level = groupGain(group, volume)
+    g.levels[group] = level
+    for (const input of Object.values(g.inputs[group])) {
+      try {
+        input.gain.setTargetAtTime(level, g.ctx.currentTime, 0.015)
+      } catch {
+        input.gain.value = level
+      }
     }
   }
 
@@ -484,17 +729,20 @@ class SoundEngine {
   private schedule(g: Graph, req: PlayRequest): void {
     const ctx = g.ctx as AudioContext
     const t0 = ctx.currentTime + LEAD
+    const midis = new Set(req.notes.map((n) => n.midi))
+    const victims = this.voices.filter(
+      (v) => req.kind === 'chord' || v.kind === 'chord' || (v.instrument === req.instrument && midis.has(v.midi)),
+    )
+    this.startVoices(g, req, t0, victims, false)
+  }
+
+  /** Cuts `victims` at `t0` and starts the request's notes from `t0` (their offsets after it). */
+  private startVoices(g: Graph, req: PlayRequest, t0: number, victims: Voice[], accomp: boolean): void {
+    const ctx = g.ctx as AudioContext
     const ref = this.timeRef(ctx)
     const toPerf = (t: number) => contextToPerformance(t, ref)
-    const midis = new Set(req.notes.map((n) => n.midi))
-    this.cutVoices(
-      this.voices.filter(
-        (v) => req.kind === 'chord' || v.kind === 'chord' || (v.instrument === req.instrument && midis.has(v.midi)),
-      ),
-      t0,
-      toPerf,
-    )
-    const bus = busFor(g, req.instrument)
+    this.cutVoices(victims, t0, toPerf)
+    const bus = inputFor(g, accomp ? 'along' : 'click', req.instrument)
     const id = ++this.playId
     const played: SoundingNote[] = []
     const times: number[] = []
@@ -514,7 +762,7 @@ class SoundEngine {
         velocity: n.velocity,
         target: n.target,
       }
-      this.voices.push({ parts, panner, kind: req.kind, instrument: req.instrument, midi: n.midi, note, cut: false })
+      this.voices.push({ parts, panner, kind: req.kind, instrument: req.instrument, midi: n.midi, note, cut: false, accomp })
       played.push(note)
       times.push(when)
     }
@@ -600,7 +848,7 @@ class SoundEngine {
     window.clearTimeout(this.idleTimer)
     this.idleTimer = window.setTimeout(() => {
       const ctx = this.graph?.ctx as AudioContext | undefined
-      if (!ctx || this.voices.length || ctx.state !== 'running') return
+      if (!ctx || this.voices.length || this.drone || this.alongAwake || ctx.state !== 'running') return
       void ctx.suspend().catch(() => undefined)
     }, IDLE_MS)
   }
@@ -614,8 +862,8 @@ export const soundEngine = new SoundEngine()
  */
 export async function renderOffline(req: PlayRequest, seconds = 4, sampleRate = 48000, volume = 1): Promise<AudioBuffer> {
   const ctx = new OfflineAudioContext(2, Math.round(seconds * sampleRate), sampleRate)
-  const g = buildGraph(ctx, volume)
-  const bus = busFor(g, req.instrument)
+  const g = buildGraph(ctx, { click: volume, along: volume })
+  const bus = inputFor(g, 'click', req.instrument)
   for (const n of req.notes) {
     const parts = startVoice(g, req.instrument, req.kind, n, 0.01 + n.offset)
     route(g, parts, panOf(req.instrument, n), bus)

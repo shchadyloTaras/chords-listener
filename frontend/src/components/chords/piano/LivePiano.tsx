@@ -1,11 +1,13 @@
-// "Живе фортепіано": the song's notes falling onto a piano keyboard whose keys go down in sync with the
-// audio (notes transcribed once per track, see lib/transcription — from the instruments stem when the
-// server separated the vocals), plus chord-preview notes and, when the vocals were transcribed, the
-// sung melody as an outlined overlay with its own toggle. Under the title: what the panel is doing,
-// then (notes ready) a legend for the two kinds of bars, or an offer to separate the voice when the
-// notes still come from the full mix.
+// "Живе фортепіано" ("Жива фісгармонія" on the harmonium): the song's notes falling onto a piano
+// keyboard whose keys go down in sync with the audio (notes transcribed once per track, see
+// lib/transcription — from the instruments stem when the server separated the vocals), plus
+// chord-preview notes and, when the vocals were transcribed, the sung melody as an outlined overlay with
+// its own toggle. Under the title: what the panel is doing, then (notes ready) a legend for the two
+// kinds of bars, or an offer to separate the voice when the notes still come from the full mix.
 // Lazy-loaded by LivePianoSlot; rendered under the now-playing hero when the instrument is a keyboard:
-// the piano's keys fitted to the song, the harmonium's own 37 keys (C3–C6).
+// the piano's keys fitted to the song, the harmonium's own 37 keys (C3–C6). The harmonium is played
+// like a harmonium player accompanies a song: the chords' shapes, each held until the next chord
+// (./chordShapes), instead of the transcribed notes — nothing to transcribe.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
@@ -16,7 +18,7 @@ import { onLiveNotes } from '../../../lib/liveNotes'
 import { isMinorQuality } from '../../../lib/music/chord'
 import { keysNotesReady } from '../../../lib/tour/trigger'
 import { useConnection } from '../../../lib/serverMode'
-import { requestNotes, type NotesSource, type NotesState } from '../../../lib/transcription'
+import { requestNotes, type NotesState } from '../../../lib/transcription'
 import { fetchStem, startVocals, useVocals, vocalsSupport, type VocalsState } from '../../../lib/vocals'
 import { useApp } from '../../../store'
 import { useTourFlags, useTourTrigger } from '../../tour/hooks'
@@ -24,8 +26,10 @@ import { useChordModel } from '../model'
 import { usePianoNotes } from '../score/pianoNotes'
 import { useScoreSettings } from '../score/scoreSettings'
 import { IconButton } from '../ui/controls'
+import { useCancelVocals } from '../useCancelVocals'
 import { noteName } from './keyboard'
 import { readPalette } from './palette'
+import { harmoniumShapeNotes } from './chordShapes'
 import { PianoRenderer, type RollChord } from './renderer'
 import { SyncControl } from './SyncControl'
 
@@ -37,9 +41,15 @@ export default function LivePiano() {
   const { track, chords, spelling, rhythm, transpose } = model
   const setSetting = useApp((s) => s.setSetting)
   const keyboard = useApp((s) => (s.instrument === 'harmonium' ? 'harmonium' : 'piano'))
-  const { notes, source } = usePianoNotes(track)
+  const harmonium = keyboard === 'harmonium'
+  /** the panel is named after the instrument: "Live harmonium" on the harmonium */
+  const nameSuffix = harmonium ? '.harmonium' : ''
+  // the harmonium holds the chords' shapes: no transcription
+  const { notes, source } = usePianoNotes(harmonium ? null : track)
+  const shapes = useMemo(() => (harmonium ? harmoniumShapeNotes(chords, transpose) : null), [harmonium, chords, transpose])
+  const songNotes = shapes ?? (notes.status === 'ready' ? notes.index : null)
   // the Live keys tour: the panel is shown with its notes ready (never the demo: it has no audio)
-  const notesReady = keysNotesReady(notes)
+  const notesReady = shapes ? shapes.count > 0 : keysNotesReady(notes)
   useTourFlags({ keysPanel: true, keysReady: notesReady })
   useTourTrigger('keys', notesReady)
   // a track that says it has no vocals is "missing" without asking the server (the offer below); one that
@@ -107,8 +117,8 @@ export default function LivePiano() {
   }, [keyboard])
 
   useEffect(() => {
-    renderer.current?.setNotes(notes.status === 'ready' ? notes.index : null)
-  }, [notes])
+    renderer.current?.setNotes(songNotes)
+  }, [songNotes])
 
   useEffect(() => {
     renderer.current?.setVocals(showVocals && vocals.status === 'ready' ? vocals.index : null)
@@ -153,19 +163,23 @@ export default function LivePiano() {
 
   const hide = useCallback(() => {
     setSetting('liveKeys', false)
-    useApp.getState().toast(t('keys.hidden'), 'info', { label: t('keys.show'), run: () => useApp.getState().setSetting('liveKeys', true) })
-  }, [setSetting, t])
+    useApp.getState().toast(t(`keys.hidden${nameSuffix}`), 'info', { label: t('keys.show'), run: () => useApp.getState().setSetting('liveKeys', true) })
+  }, [setSetting, t, nameSuffix])
 
-  const progress = notes.status === 'computing' ? notes.progress : null
-  const canRecompute = notes.status === 'ready' || notes.status === 'error'
+  const progress = !harmonium && notes.status === 'computing' ? notes.progress : null
+  const canRecompute = !harmonium && (notes.status === 'ready' || notes.status === 'error')
 
   return (
-    <section aria-label={t('keys.title')} className="mt-3 overflow-hidden rounded-[22px] border border-border bg-surface">
+    <section aria-label={t(`keys.title${nameSuffix}`)} className="mt-3 overflow-hidden rounded-[22px] border border-border bg-surface">
       <div className="relative flex items-center gap-2 px-4 py-2 sm:px-5">
         <div className="min-w-0 flex-1">
-          <h2 className="font-display text-[15px] leading-tight font-semibold tracking-tight">{t('keys.title')}</h2>
-          <Status state={notes} onRetry={() => request()} />
-          <VocalsLine notes={notes} source={source} vocals={vocals} showVocals={showVocals} />
+          <h2 className="font-display text-[15px] leading-tight font-semibold tracking-tight">{t(`keys.title${nameSuffix}`)}</h2>
+          {harmonium ? (
+            <p className="truncate text-xs text-muted">{t('keys.harmonium.hint')}</p>
+          ) : (
+            <Status state={notes} onRetry={() => request()} />
+          )}
+          <VocalsLine ready={!!songNotes?.count} offer={!harmonium && source === 'mix'} harmonium={harmonium} vocals={vocals} showVocals={showVocals} />
         </div>
         {vocals.status === 'ready' && (
           <IconButton
@@ -185,7 +199,7 @@ export default function LivePiano() {
             <RotateCcw size={15} />
           </IconButton>
         )}
-        <IconButton label={t('keys.hide')} size="sm" onClick={hide}>
+        <IconButton label={t(`keys.hide${nameSuffix}`)} size="sm" onClick={hide}>
           <X size={16} />
         </IconButton>
         {progress !== null && (
@@ -196,7 +210,7 @@ export default function LivePiano() {
       </div>
       <div ref={wrap} className="relative border-t border-border" data-tour="keys.canvas">
         <canvas ref={canvas} role="img" aria-label={t(keyboard === 'harmonium' ? 'keys.canvas.harmonium' : 'keys.canvas')} className="block w-full" style={{ height: layout.height || undefined }} />
-        {layout.roll > 0 && <RollMessage state={notes} height={layout.roll} />}
+        {layout.roll > 0 && !harmonium && <RollMessage state={notes} height={layout.roll} />}
         <p className="sr-only" aria-live="polite">
           {announce}
         </p>
@@ -254,25 +268,39 @@ function Status({ state, onRetry }: { state: NotesState; onRetry(): void }) {
 
 /**
  * Once the notes are there: what the outlined bars are (the voice, when shown), or — notes from the
- * full mix, voice and instruments together — a one-line offer to separate the voice on the server.
+ * full mix, voice and instruments together (`offer`) — a one-line offer to separate the voice on the
+ * server. On the harmonium the coloured bars are the chords.
  */
-function VocalsLine({ notes, source, vocals, showVocals }: { notes: NotesState; source: NotesSource; vocals: VocalsState; showVocals: boolean }) {
+function VocalsLine({
+  ready,
+  offer,
+  harmonium,
+  vocals,
+  showVocals,
+}: {
+  ready: boolean
+  offer: boolean
+  harmonium: boolean
+  vocals: VocalsState
+  showVocals: boolean
+}) {
   const t = useT()
   const { track } = useChordModel()
   // re-render when the connection (or the cloud's features) change: they decide whether the offer works.
   // Only starting asks the cloud anything (startVocals); showing the offer never does.
   useConnection((s) => s.status)
   useConnection((s) => s.health)
-  if (notes.status !== 'ready' || !notes.index.count) return null
+  const { cancelling, cancel } = useCancelVocals(track)
+  if (!ready) return null
   const line = 'flex min-w-0 items-center gap-1.5 text-xs text-muted'
   switch (vocals.status) {
     case 'ready':
       if (!showVocals) return null
       return (
-        <div className={clsx(line, 'gap-3')} role="note" aria-label={t('keys.legend.aria')}>
+        <div className={clsx(line, 'gap-3')} role="note" aria-label={t(harmonium ? 'keys.legend.aria.harmonium' : 'keys.legend.aria')}>
           <span className="inline-flex items-center gap-1.5" aria-hidden>
             <span className="h-2 w-4 rounded-[3px]" style={{ background: 'linear-gradient(90deg, var(--chord-0), var(--chord-4), var(--chord-8))' }} />
-            {t('keys.legend.instruments')}
+            {t(harmonium ? 'keys.legend.chords' : 'keys.legend.instruments')}
           </span>
           <span className="inline-flex items-center gap-1.5" aria-hidden>
             <span className="h-2 w-4 rounded-[3px] border-[1.5px] border-text bg-text/15" />
@@ -281,7 +309,7 @@ function VocalsLine({ notes, source, vocals, showVocals }: { notes: NotesState; 
         </div>
       )
     case 'missing':
-      if (source !== 'mix' || vocalsSupport(track, { ask: false }) !== 'ok') return null
+      if (!offer || vocalsSupport(track, { ask: false }) !== 'ok') return null
       return (
         <div className={line}>
           <span className="truncate">{t('keys.vocals.hint')}</span>
@@ -304,6 +332,16 @@ function VocalsLine({ notes, source, vocals, showVocals }: { notes: NotesState; 
           <span className="truncate" aria-live="polite">
             {t('keys.vocals.running', { pct: Math.floor(vocals.progress * 100) })}
           </span>
+          <button
+            type="button"
+            onClick={cancel}
+            disabled={cancelling || !vocals.jobId}
+            title={t('score.vocals.cancel.title')}
+            className="inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 font-medium text-text underline-offset-2 hover:underline disabled:opacity-50"
+          >
+            {cancelling ? <LoaderCircle size={12} className="animate-spin" aria-hidden /> : <X size={12} aria-hidden />}
+            {t('score.vocals.cancel')}
+          </button>
         </div>
       )
     case 'error': {

@@ -40,7 +40,6 @@ const FELT_HI = '#3243a6'
 const FELT_LO = '#1e2872'
 const BELLOWS_DARK = '#15110f'
 const BELLOWS_FOLD = '#342a24'
-const MARKER = '#16110e'
 
 const KEYS = harmoniumKeys()
 
@@ -202,8 +201,8 @@ const Body = memo(function Body({ uid }: { uid: string }) {
 })
 
 /**
- * The 37-key hand harmonium (C3–C6) with chord tones lit in the chord color; the bass gets a
- * marker. With `onKey` every key is clickable; `sounding` keys (the chord sound playing them) are
+ * The 37-key hand harmonium (C3–C6) with the right hand's chord shape lit in the chord color (no
+ * bass marker: the left hand pumps the bellows, there is no separate bass). With `onKey` every key is clickable; `sounding` keys (the chord sound playing them) are
  * drawn pressed under a light (dark theme) / deep (light theme) sheen that fades as they are
  * released — like PianoChart.
  */
@@ -249,7 +248,6 @@ export const HarmoniumChart = memo(function HarmoniumChart({
       }}
     />
   )
-  const bassBlack = isHarmoniumBlack(voicing.bass)
 
   return (
     <svg
@@ -281,15 +279,6 @@ export const HarmoniumChart = memo(function HarmoniumChart({
         </g>
       ))}
       {sounding && KEYS.blacks.map((k) => sheen(k, blackPath(k)))}
-      {lit.has(voicing.bass) && (
-        <circle
-          cx={bassBlack ? bx(voicing.bass) + BW / 2 : wx(voicing.bass) + WW / 2}
-          cy={bassBlack ? KEY_Y + BH - 5 : KEY_Y + WH - 6.5}
-          r={2}
-          fill={MARKER}
-          style={{ ...press(voicing.bass, on(voicing.bass)), pointerEvents: 'none' }}
-        />
-      )}
     </svg>
   )
 })

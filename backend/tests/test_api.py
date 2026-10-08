@@ -746,7 +746,7 @@ def test_admin_error_code_table_has_exactly_the_sixteen_new_codes() -> None:
 
     new_codes = set(get_args(ErrorCode)) - {
         "invalid_url", "download_failed", "unsupported_format", "too_long", "too_large", "analysis_failed",
-        "not_found", "internal", "unauthorized", "quota_exceeded", "download_blocked", "unavailable",
+        "not_found", "internal", "unauthorized", "quota_exceeded", "download_blocked", "unavailable", "cancelled",
     }
     assert new_codes == set(ADMIN_ERROR_STATUS)
     assert len(ADMIN_ERROR_STATUS) == 16

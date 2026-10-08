@@ -66,6 +66,7 @@ const SERVER_CODES: readonly ErrorCode[] = [
   'quota_exceeded',
   'download_blocked',
   'unavailable',
+  'cancelled',
 ]
 
 function isServerCode(v: unknown): v is ErrorCode {
@@ -569,6 +570,13 @@ export async function getJob(id: string, signal?: AbortSignal): Promise<Job> {
   if (job.status === 'done' || job.status === 'error') forgetServerJob(job.id)
   // before anyone reacts to it (reloads the list, the vocals): what is kept of its track is already stale
   await noteFinishedJob(job)
+  return serverJob(job)
+}
+
+/** Cancels a server job: it ends with errorCode 'cancelled' at its next progress report. */
+export async function cancelJob(id: string): Promise<Job> {
+  const job = await request<Job>(`/jobs/${enc(id)}/cancel`, { method: 'POST' })
+  forgetServerJob(job.id)
   return serverJob(job)
 }
 
