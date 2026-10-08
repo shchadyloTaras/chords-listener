@@ -123,6 +123,14 @@ class UploadBucket:
         progress(1.0)
         return writer.written
 
+    def upload(self, path: str, src: Path, content_type: Optional[str] = None) -> int:
+        """Store ``src`` as the object ``path`` (chords-fetch → ``fetch/...``); returns its size. Raises SourceError."""
+        try:
+            self._bucket().blob(path).upload_from_filename(str(src), content_type=content_type)
+        except Exception as exc:
+            raise _map_error(exc, "Couldn't store the file") from exc
+        return src.stat().st_size
+
     def delete(self, path: str) -> bool:
         try:
             self._bucket().blob(path).delete()

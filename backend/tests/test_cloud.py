@@ -180,6 +180,10 @@ class FakeBlob:
         self._staged.clear()
         self.gcs.patched.append(self.name)
 
+    def upload_from_filename(self, filename: str, content_type: Optional[str] = None) -> None:
+        self.gcs.put(self.name, Path(filename).read_bytes(), bucket=self.bucket_name,
+                     content_type=content_type or "application/octet-stream")
+
     def reload(self) -> None:
         """The fake always reads the stored object, so there is nothing to refresh."""
 
@@ -1208,3 +1212,11 @@ def test_the_hourly_sweep_removes_old_uploads_and_fragments(tmp_path: Path, monk
         mine = [t for t in upload_sweeps() if t not in others]
         assert [t.daemon for t in mine] == [True]
     wait_for(lambda: not any(t.is_alive() for t in mine))  # the app's shutdown ends the loop
+
+
+def test_bucket_upload(cloud: SimpleNamespace, tmp_path: Path) -> None:
+    src = tmp_path / "source.webm"
+    src.write_bytes(b"abc")
+    assert cloud.app.state.bucket.upload("fetch/0123456789abcdef/source.webm", src, content_type="audio/webm") == 3
+    obj = cloud.gcs.objects[(BUCKET, "fetch/0123456789abcdef/source.webm")]
+    assert obj["data"] == b"abc" and obj["content_type"] == "audio/webm"
