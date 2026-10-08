@@ -332,3 +332,47 @@ def test_local_mode_does_not_warn_about_the_cap(tmp_path, monkeypatch, caplog):
         with TestClient(create_app(settings, analyzer=lambda *_a, **_k: {})):
             pass
     assert not [r for r in caplog.records if "max-instances" in r.getMessage().lower()]
+
+
+# ------------------------------------------------------------------------------------------ T48 (review S2-6, S2-7)
+
+
+def _snapshot(res):
+    headers = {k: v for k, v in res.headers.items() if k not in ("content-length", "allow")}
+    return res.status_code, res.text, headers, sorted(res.headers.get("allow", "").replace(" ", "").split(","))
+
+
+@pytest.mark.parametrize("path", ["/api/admin/me", "/api/admin/users", "/api/internal/sweep"])
+def test_an_unauthenticated_options_to_admin_or_internal_routes_answers_like_an_unknown_route(tmp_path, path):
+    client = TestClient(_cloud_app(tmp_path), base_url="http://localhost")
+    unknown = client.options("/api/admin/zzz-unknown" if "admin" in path else "/api/internal/zzz-unknown")
+    assert _snapshot(client.options(path)) == _snapshot(unknown)
+
+
+def test_a_real_cors_preflight_still_works_for_normal_routes(tmp_path):
+    client = TestClient(_cloud_app(tmp_path), base_url="http://localhost")
+    res = client.options("/api/jobs", headers={"Origin": "http://localhost:5173",
+                                               "Access-Control-Request-Method": "POST"})
+    assert res.status_code == 200
+    assert res.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+class VerifiedLookup(FakeLookup):
+    def __init__(self, accounts: dict[str, str], unverified: set[str]) -> None:
+        super().__init__(accounts)
+        self.unverified = unverified
+
+    def uid_for_email(self, email: str):
+        self.verified = email.lower() not in self.unverified
+        return super().uid_for_email(email)
+
+
+def test_grant_by_email_refuses_an_unverified_email_and_revoke_still_works(capsys):
+    script, db = load_script(), MemDb()
+    lookup = VerifiedLookup({"a@x.io": "uidA"}, {"a@x.io"})
+    assert script.run(["grant", "a@x.io"], db=db, lookup=lookup, now=NOW) == 1
+    assert "not verified" in capsys.readouterr().err and db.docs == {}
+    db.docs["adminAllowlist/uidA"] = {"grantedAt": NOW, "note": None}
+    assert script.run(["revoke", "a@x.io"], db=db, lookup=lookup, now=NOW) == 0
+    assert db.docs == {}
+    assert script.run(["grant", "uidB"], db=db, lookup=lookup, now=NOW) == 0  # a uid argument is as before

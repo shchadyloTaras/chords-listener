@@ -8,7 +8,7 @@ files_hint: ["backend/app/auth.py", "backend/app/main.py", "scripts/admin_grant.
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 9 — review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T48 — Stop leaking admin routes via OPTIONS and require a verified email in the grant script

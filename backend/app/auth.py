@@ -305,6 +305,9 @@ def _unauthorized(detail: str) -> JSONResponse:
     )
 
 
+HIDDEN_PREFIXES = ("/api/admin/", "/api/internal/")
+
+
 class AuthMiddleware:
     """Authenticates ``/api/*`` (except health and docs) and runs the request as that user."""
 
@@ -332,6 +335,10 @@ class AuthMiddleware:
             or path.startswith(PUBLIC_PREFIXES)
             or scope.get("method") == "OPTIONS"
         ):
+            if scope["type"] == "http" and scope.get("method") == "OPTIONS" and path.startswith(HIDDEN_PREFIXES):
+                # an unauthenticated OPTIONS must not tell these routes from an unknown one (review S2-6)
+                unknown = f"/api/{path.split('/')[2]}/zzz-unknown"
+                scope = {**scope, "path": unknown, "raw_path": unknown.encode()}
             await self.app(scope, receive, send)
             return
         if path == SWEEP_PATH:

@@ -75,21 +75,26 @@ class AuthEmailLookup:
             self._factory = session_factory or adc_session_factory(project)
 
     def uid_for_email(self, email: str) -> Optional[str]:
+        self.verified = True
         res = self._factory().post(self._url, json={"email": [email.strip().lower()]}, headers=self._headers,
                                    timeout=TIMEOUT_S)
         if res.status_code != 200:
             raise Refused(f"Firebase Auth answered {res.status_code} when looking the account up: {res.text[:200]}")
         users = res.json().get("users") or []
         uid = users[0].get("localId") if users else None
+        self.verified = bool(users and users[0].get("emailVerified"))
         return uid if isinstance(uid, str) and uid else None
 
 
-def resolve_uid(target: str, lookup: Any) -> str:
+def resolve_uid(target: str, lookup: Any, *, require_verified: bool = False) -> str:
     target = target.strip()
     if "@" in target:
         uid = lookup.uid_for_email(target)
         if not uid:
             raise Refused("no account with that email in Firebase Auth: nothing changed")
+        if require_verified and not getattr(lookup, "verified", True):
+            raise Refused("that account's email is not verified in Firebase Auth: nothing changed "
+                          "(grant by uid once you have checked who owns it)")
         return uid
     if not UID_RE.match(target):
         raise Refused("not a uid (letters, digits, - and _ only) and not an email: nothing changed")
@@ -140,7 +145,7 @@ def run(argv: list[str], *, db: Any = None, lookup: Any = None, now: Optional[da
     try:
         note = check_note(args.note) if args.action == "grant" else None
         lookup = lookup or AuthEmailLookup(args.project)
-        uid = resolve_uid(args.target, lookup)
+        uid = resolve_uid(args.target, lookup, require_verified=args.action == "grant")
         # with the Firestore emulator host set, FirestoreIndex talks to the emulator without credentials
         db = db or FirestoreIndex(args.project, session_factory=None if os.environ.get("FIRESTORE_EMULATOR_HOST")
                                   else adc_session_factory(args.project))
