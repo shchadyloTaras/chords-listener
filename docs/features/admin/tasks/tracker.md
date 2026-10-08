@@ -25,11 +25,11 @@
 | [T18](./t18-api-job-history-stats.md) | Serve listJobHistory and getStats | ports | Тарас Щадило | S | T09, T11 | done |
 | [T19](./t19-api-audit-list.md) | Serve listAudit with email resolution and «видалений» for purged users | ports | Тарас Щадило | S | T09, T10, T16 | done |
 | [T20](./t20-actions-quota-personal-limit.md) | Implement resetQuota and set/remove personal limit | app | Тарас Щадило | M | T09, T10, T14 | done |
-| [T21](./t21-actions-restriction.md) | Implement restrictUser and unrestrictUser as transactions with the audit record | app | Тарас Щадило | S | T20 | todo |
-| [T22](./t22-actions-deletion.md) | Implement scheduleDeletion and cancelDeletion with email confirm, fresh login and the 10-per-60-min cap | app | Тарас Щадило | M | T21 | todo |
+| [T21](./t21-actions-restriction.md) | Implement restrictUser and unrestrictUser as transactions with the audit record | app | Тарас Щадило | S | T20 | done |
+| [T22](./t22-actions-deletion.md) | Implement scheduleDeletion and cancelDeletion with email confirm, fresh login and the 10-per-60-min cap | app | Тарас Щадило | M | T21 | done |
 | [T23](./t23-actions-settings-switches-banner.md) | Implement setDefaultLimits, setSwitch and setBanner with mirrored, audited batched writes | app | Тарас Щадило | M | T09, T10, T13, T15 | done |
 | [T24](./t24-sweep-endpoint-reconcile.md) | Add the OIDC-protected sweep endpoint: slot claim, buffer replay, stale jobs, reconcile+freeze, index sync | app | Тарас Щадило | M | T09, T11, T16 | done |
-| [T25](./t25-purge-deletion.md) | Implement tombstone-first, idempotent account purge with anonymization | app | Тарас Щадило | M | T10, T22, T24 | todo |
+| [T25](./t25-purge-deletion.md) | Implement tombstone-first, idempotent account purge with anonymization | app | Тарас Щадило | M | T10, T22, T24 | done |
 | [T26](./t26-ops-grant-scheduler-alerts.md) | Add the owner grant script, Cloud Scheduler jobs, max-instances guard and alerting | wiring | Тарас Щадило | S | T09, T24 | done |
 | [T27](./t27-ui-admin-entry-csp.md) | Create the admin.html entry with strict CSP, admin shell, sign-in and not-found for non-admins | ui | Тарас Щадило | M | — | done |
 | [T28](./t28-ui-admin-api-client.md) | Build the admin API client with re-auth flow, error-code i18n and the no-polling refresh policy | ui | Тарас Щадило | M | T27 | done |
