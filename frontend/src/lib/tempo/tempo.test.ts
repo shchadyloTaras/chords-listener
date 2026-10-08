@@ -86,6 +86,17 @@ describe('tempo estimation', () => {
     expect(curve[9].bpm).toBeCloseTo(120, 0)
     expect(tempoCurve([], 10)).toEqual([])
   })
+
+  it('tempo curve samples only start..duration of a fragment of a long video', () => {
+    const beats = [...grid(90, 30, 2000), ...grid(120, 30, 2020.5)]
+    const curve = tempoCurve(beats, 2036, 10, 2000)
+    expect(curve).toHaveLength(10)
+    expect(curve[0].t).toBe(2000)
+    expect(curve[9].t).toBe(2036)
+    expect(curve[0].bpm).toBeCloseTo(90, 0)
+    expect(curve[9].bpm).toBeCloseTo(120, 0)
+    expect(curve.filter((p) => p.bpm < 100)).toHaveLength(curve.filter((p) => p.t < 2020).length)
+  })
 })
 
 describe('tempo correction', () => {

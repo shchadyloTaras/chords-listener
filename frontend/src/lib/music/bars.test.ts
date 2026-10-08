@@ -69,6 +69,24 @@ describe('buildBarGrid', () => {
   it('handles empty input', () => {
     expect(buildBarGrid({ duration: 0 })).toEqual([])
   })
+
+  it('covers only start..duration: a fragment of a long video gets its own bars, numbered from 0', () => {
+    // a 30 s fragment at 2070 s of a video, beats only inside it (a pickup of a beat before the first downbeat)
+    const g = grid(30, 0.5)
+    const shift = (xs: number[]) => xs.map((x) => x + 2070)
+    const frames = buildBarGrid({ ...g, start: 2070, duration: 2100, beats: shift(g.beats), downbeats: shift(g.downbeats) })
+    const plain = buildBarGrid(g)
+    expect(frames).toHaveLength(plain.length)
+    frames.forEach((f, i) => {
+      expect(f.index).toBe(i)
+      expect(f.pickup).toBe(plain[i].pickup)
+      expect(f.start).toBeCloseTo(plain[i].start + 2070, 6)
+      expect(f.end).toBeCloseTo(plain[i].end + 2070, 6)
+      f.boundaries.forEach((b, k) => expect(b).toBeCloseTo(plain[i].boundaries[k] + 2070, 6))
+    })
+    expect(frames[0].start).toBe(2070)
+    expect(frames.at(-1)!.end).toBe(2100)
+  })
 })
 
 describe('fillBars', () => {

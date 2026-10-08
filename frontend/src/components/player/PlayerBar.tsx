@@ -41,9 +41,9 @@ export function PlayerBar({ track }: { track: Track }) {
     >
       <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-1 gap-y-0.5 px-3 pt-1.5 pb-2 sm:flex-nowrap sm:gap-x-2 sm:px-5 sm:py-2.5">
         <div className="order-1 flex w-full min-w-0 items-center gap-2.5 sm:order-2 sm:w-auto sm:flex-1 sm:gap-3">
-          <TimeReadout which="current" fallbackDuration={track.duration} />
+          <TimeReadout which="current" track={track} />
           <SeekBar track={track} />
-          <TimeReadout which="duration" fallbackDuration={track.duration} />
+          <TimeReadout which="duration" track={track} />
         </div>
         <div className="order-2 flex flex-1 items-center gap-1 sm:order-3 sm:flex-none">
           <LoopChip />
