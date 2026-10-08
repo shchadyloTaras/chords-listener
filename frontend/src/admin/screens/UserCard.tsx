@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react'
 import { useState } from 'react'
 import { Button } from '../../components/ui/IconButton'
+import { Modal } from '../../components/ui/Modal'
 import { formatBytes, formatTime } from '../../components/ui/format'
 import { useT } from '../../i18n'
-import { adminErrorMessage, getUserCard, listUserTracks } from '../../lib/adminApi'
+import { adminErrorMessage, getUserCard, listUserTracks, removePersonalLimit, resetQuota } from '../../lib/adminApi'
 import type {
   AdminAccountState,
   AdminJobHistoryItem,
@@ -14,6 +15,7 @@ import type {
   AdminTrackMeta,
   AdminUserCard,
 } from '../../types'
+import { LimitForm } from '../actions/LimitForm'
 import { useAdminData } from '../useAdminData'
 
 // The card shows metadata only (AC-06, ADR-0002): no audio, no chords, no edits — and so nothing here opens or
@@ -224,8 +226,68 @@ function Songs({ uid, total, first }: { uid: string; total: number; first: Admin
   )
 }
 
+/** Asks before an action that changes the account; the dialog stays open, with the reason, when the call fails. */
+function ConfirmDialog({
+  title,
+  confirm,
+  children,
+  run,
+  onDone,
+  onClose,
+}: {
+  title: string
+  confirm: string
+  children: ReactNode
+  run(): Promise<AdminAccountState>
+  onDone(account: AdminAccountState): void
+  onClose(): void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<unknown>(null)
+
+  async function go() {
+    setBusy(true)
+    setError(null)
+    try {
+      onDone(await run())
+    } catch (err) {
+      setError(err)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal open title={title} onClose={onClose}>
+      <p className="text-sm text-muted">{children}</p>
+      {error !== null && (
+        <p className="mt-3 text-sm text-danger" role="alert">
+          {adminErrorMessage(error)}
+        </p>
+      )}
+      <div className="mt-4 flex justify-end gap-2">
+        <Button onClick={onClose} disabled={busy}>
+          Скасувати
+        </Button>
+        <Button variant="primary" onClick={go} disabled={busy}>
+          {confirm}
+        </Button>
+      </div>
+    </Modal>
+  )
+}
+
+type Dialog = 'reset' | 'limit' | 'removeLimit' | null
+
 function CardBody({ card, uid, loadedAt }: { card: AdminUserCard; uid: string; loadedAt: number | null }) {
-  const { profile, account } = card
+  const { profile } = card
+  // what an action returned, until a later load of the card brings fresher data
+  const [changed, setChanged] = useState<{ forCard: AdminUserCard; account: AdminAccountState } | null>(null)
+  const [dialog, setDialog] = useState<Dialog>(null)
+  const account = changed && changed.forCard === card ? changed.account : card.account
+  const done = (next: AdminAccountState) => {
+    setChanged({ forCard: card, account: next })
+    setDialog(null)
+  }
   return (
     <>
       <h1 className={`text-lg font-semibold text-text ${USER_TEXT}`}>{profile.email}</h1>
@@ -244,6 +306,47 @@ function CardBody({ card, uid, loadedAt }: { card: AdminUserCard; uid: string; l
           <State account={account} />
         </Field>
       </dl>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button size="sm" onClick={() => setDialog('reset')}>
+          Скинути квоту
+        </Button>
+        <Button size="sm" onClick={() => setDialog('limit')}>
+          {account.personalLimit ? 'Змінити ліміт' : 'Задати ліміт'}
+        </Button>
+        {account.personalLimit && (
+          <Button size="sm" variant="danger" onClick={() => setDialog('removeLimit')}>
+            Зняти ліміт
+          </Button>
+        )}
+      </div>
+      {dialog === 'reset' && (
+        <ConfirmDialog
+          title="Скинути квоту за сьогодні?"
+          confirm="Скинути"
+          run={() => resetQuota(uid)}
+          onDone={done}
+          onClose={() => setDialog(null)}
+        >
+          Лічильники аналізів і розпізнавання вокалу за сьогодні стануть нульовими, і користувач одразу зможе запускати нові. Задачі, що зараз
+          виконуються, і далі рахуються в межу одночасних. У журналі лишиться запис зі старими значеннями.
+        </ConfirmDialog>
+      )}
+      {dialog === 'removeLimit' && (
+        <ConfirmDialog
+          title="Зняти персональний ліміт?"
+          confirm="Зняти"
+          run={() => removePersonalLimit(uid)}
+          onDone={done}
+          onClose={() => setDialog(null)}
+        >
+          Далі діятимуть типові ліміти, не пізніше ніж за хвилину.
+        </ConfirmDialog>
+      )}
+      {dialog === 'limit' && (
+        <Modal open title={account.personalLimit ? 'Змінити персональний ліміт' : 'Задати персональний ліміт'} onClose={() => setDialog(null)}>
+          <LimitForm uid={uid} current={account.personalLimit} onSaved={done} onCancel={() => setDialog(null)} />
+        </Modal>
+      )}
       <RecentJobs jobs={card.recentJobs} />
       {/* keyed by the load: a refresh starts the pager again from the first page */}
       <Songs key={loadedAt ?? 0} uid={uid} total={profile.trackCount} first={card.tracks} />
