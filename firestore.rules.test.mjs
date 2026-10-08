@@ -318,6 +318,23 @@ describe('users/{uid}', () => {
   test('owner can delete their profile', async () => {
     assert.equal(await remove(alice, alice.uid), OK)
   })
+
+  test('a purged account (tombstone) cannot write its profile back with a still-valid token (S2-2)', async () => {
+    const carol = await createUser()
+    assert.equal(await createProfile(carol), OK)
+    await seedDoc(`adminTombstones/${carol.uid}`, { status: 'purging' })
+    assert.equal(await updateProfile(carol), DENIED)
+    assert.equal(await remove(carol, carol.uid), OK)
+    assert.equal(await createProfile(carol), DENIED)
+  })
+
+  test('while a deletion is scheduled the owner cannot delete the profile (S2-1)', async () => {
+    const dave = await createUser()
+    assert.equal(await createProfile(dave), OK)
+    await seedDoc(`adminAccounts/${dave.uid}`, { deletion: { byAdminUid: 'boss' } })
+    assert.equal(await remove(dave, dave.uid), DENIED)
+    assert.equal(await read(dave, dave.uid), OK)
+  })
 })
 
 describe('users/{uid}/tracks/{trackId} (the published library index)', () => {

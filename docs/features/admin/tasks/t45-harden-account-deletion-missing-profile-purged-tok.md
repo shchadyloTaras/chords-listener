@@ -8,7 +8,7 @@ files_hint: ["backend/app/admin/router.py", "backend/app/admin/deletion.py", "ba
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 9 — review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T45 — Harden account deletion: missing profile, purged-token reuse, buffered replay, cancel after purge

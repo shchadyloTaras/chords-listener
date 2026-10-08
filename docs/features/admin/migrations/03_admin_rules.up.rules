@@ -137,18 +137,32 @@ service cloud.firestore {
     // ===============================================================
 
     match /users/{userId} {
+      // A purged account (adminTombstones/{uid} exists) keeps its still-valid ID token for up to an hour: it must
+      // not write its profile back. While a deletion is scheduled (adminAccounts/{uid}.deletion) the owner cannot
+      // delete the profile either, so the admin can still find and cancel the deletion.
+      function isPurged() {
+        return exists(/databases/$(database)/documents/adminTombstones/$(userId));
+      }
+
+      function deletionScheduled() {
+        return exists(/databases/$(database)/documents/adminAccounts/$(userId)) &&
+          get(/databases/$(database)/documents/adminAccounts/$(userId)).data.get('deletion', null) != null;
+      }
+
       // Owner-only; collection queries can never be proven to match, so they are denied.
       allow read: if isOwner(userId);
 
       allow create: if isOwner(userId) &&
+        !isPurged() &&
         isValidUser(request.resource.data) &&
         request.resource.data.createdAt == request.time;
 
       allow update: if isOwner(userId) &&
+        !isPurged() &&
         isValidUser(request.resource.data) &&
         areImmutableFieldsUnchanged(['createdAt']);
 
-      allow delete: if isOwner(userId);
+      allow delete: if isOwner(userId) && !deletionScheduled();
     }
 
     // ===============================================================
