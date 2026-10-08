@@ -51,9 +51,9 @@ if [[ -z "${SKIP_SETUP:-}" ]]; then
 
   # ---------------------------------------------------------------------------- WARP profile
   log "WARP profile (secret $SECRET)"
-  if gc secrets describe "$SECRET" >/dev/null 2>&1; then
+  if gc secrets describe "$SECRET" >/dev/null 2>"$TMP/secret.err"; then
     echo "exists"
-  else
+  elif grep -q NOT_FOUND "$TMP/secret.err"; then
     command -v wgcf >/dev/null || { echo "wgcf is needed once to register the WARP device: brew install wgcf" >&2; exit 1; }
     [[ -t 0 ]] || { echo "registering the WARP device needs your confirmation: run this script in a terminal" >&2; exit 1; }
     echo "This registers ONE new Cloudflare WARP device for chords-fetch and accepts Cloudflare's terms of service"
@@ -64,6 +64,10 @@ if [[ -z "${SKIP_SETUP:-}" ]]; then
     gc secrets create "$SECRET" --replication-policy=automatic --data-file="$TMP/wgcf-profile.conf" >/dev/null
     rm -f "$TMP/wgcf-profile.conf" "$TMP/wgcf-account.toml"
     echo "stored as secret $SECRET"
+  else # any other failure (permissions, network, API): never register a second WARP device on a guess
+    cat "$TMP/secret.err" >&2
+    echo "could not check whether secret $SECRET exists: not registering a WARP device" >&2
+    exit 1
   fi
 
   # ---------------------------------------------------------------------------- Cloud NAT
@@ -157,7 +161,14 @@ print({k: d.get(k) for k in ("title", "start", "end", "size", "code", "message")
 print(d.get("path") or "")
 PY
 )
-  if [[ -n "$OBJECT" ]]; then gc storage rm "gs://$BUCKET/$OBJECT" >/dev/null 2>&1 || true; fi
+  # the answer is not trusted: delete only an object under fetch/, never a pattern
+  if [[ -z "$OBJECT" ]]; then
+    :
+  elif [[ "$OBJECT" == fetch/* && "$OBJECT" != *[*?[]* ]]; then
+    gc storage rm "gs://$BUCKET/$OBJECT" >/dev/null 2>&1 || true
+  else
+    printf 'warning: %s returned an unexpected path %q: deleted nothing\n' "$SERVICE" "$OBJECT" >&2
+  fi
   [[ "$STATUS" == 200 ]] || echo "the direct fragment failed: see the logs of $SERVICE" >&2
 else
   echo "no gcloud identity token (firebase-tools login): skipped the direct fragment; run scripts/smoke_fetch.py"

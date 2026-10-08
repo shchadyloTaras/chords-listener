@@ -88,7 +88,7 @@ JSON
   fi
   for attempt in 1 2 3 4 5 6; do # a new service account takes a moment to become usable in IAM
     if gc storage buckets add-iam-policy-binding "gs://$BUCKET" --member="serviceAccount:$RUNTIME_SA" \
-        --role=roles/storage.objectUser >/dev/null 2>"$TMP/iam.err"; then
+        --role=roles/storage.objectUser --condition=None >/dev/null 2>"$TMP/iam.err"; then
       echo "roles/storage.objectUser on gs://$BUCKET"; break
     fi
     [[ $attempt == 6 ]] && { cat "$TMP/iam.err" >&2; exit 1; }
