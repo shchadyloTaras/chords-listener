@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import os
 import re
 import shutil
 import threading
@@ -29,9 +30,11 @@ from app.engine import engine_info
 
 from .admin.audit import AuditFailure
 from .admin.authz import ADMIN_PREFIX, AdminAuthz, HiddenFromCaller, ReauthRequired, unguarded_admin_routes
+from .admin.directory import Directory
 from .admin.history import Projections, pending_path
 from .admin.router import router as admin_router_default
-from .auth import AuthMiddleware, FirebaseTokenVerifier, MediaSigner
+from .admin.sweeps import Sweeper, internal_router
+from .auth import AuthMiddleware, FirebaseTokenVerifier, MediaSigner, SchedulerTokenVerifier
 from .firestore import FirestoreIndex
 from .gcs import UploadBucket, default_client
 from .jobs import Analyzer, JobManager, too_long_message
@@ -72,6 +75,16 @@ from .users import current_uid
 log = logging.getLogger("chords.api")
 
 PUBLISH_SWEEP_INTERVAL_S = 600.0  # how often the pending publishes (publish-pending.json) are retried
+_UNSET: Any = object()  # "not given" for create_app arguments where None means "none"
+
+
+def _scheduler_verifier_from_env() -> Optional[SchedulerTokenVerifier]:
+    """The check of Cloud Scheduler's OIDC token (``CHORDS_SCHEDULER_AUDIENCE`` = this service's URL,
+    ``CHORDS_SCHEDULER_EMAIL`` = ``chords-scheduler@...``); None unless both are set: the sweep endpoint then
+    answers 404 to everyone."""
+    audience = os.environ.get("CHORDS_SCHEDULER_AUDIENCE", "").strip()
+    email = os.environ.get("CHORDS_SCHEDULER_EMAIL", "").strip()
+    return SchedulerTokenVerifier(audience, email) if audience and email else None
 
 STATUS_BY_CODE: dict[str, int] = {
     "invalid_url": 400,
@@ -245,13 +258,19 @@ def create_app(
     admin_db: Any = None,
     admin_authz: Optional[AdminAuthz] = None,
     admin_router: Optional[APIRouter] = None,
+    sweeper: Any = _UNSET,
+    scheduler_verifier: Any = _UNSET,
+    wake_sweep: Optional[bool] = None,
 ) -> FastAPI:
     """``token_verifier`` (``.verify(token) -> uid``) and ``gcs_client_factory`` replace the Firebase token
     check and the google-cloud-storage client (tests); ``vocal_transcriber`` replaces app.vocals.transcribe;
     ``publisher_factory(store)`` replaces the ``Publisher`` that publishes track changes in cloud mode
     (tests; ``CHORDS_PUBLISH`` off still wins). ``admin_db`` (``.get(path)``; default ``FirestoreIndex`` in cloud
     mode) holds the admin allowlist, ``admin_authz`` replaces the allowlist check and probe limiter built from it,
-    ``admin_router`` replaces ``app.admin.router.router`` (tests)."""
+    ``admin_router`` replaces ``app.admin.router.router`` (tests). ``sweeper`` (default: built on ``admin_db``;
+    None = no sweep endpoint) runs ``POST /api/internal/sweep``, which only ``scheduler_verifier`` (``.verify(token)``;
+    default: from ``CHORDS_SCHEDULER_*``; None = nobody) may call. ``wake_sweep`` runs the first-wake sweep of the
+    UTC day at start-up (default: on Cloud Run, i.e. when ``K_SERVICE`` is set)."""
     settings = settings or Settings.from_env()
     ensure_tool_path()
     if not logging.getLogger().handlers:
@@ -266,10 +285,15 @@ def create_app(
     store = TrackStore(settings, signer=signer)
     if admin_db is None and settings.cloud:
         admin_db = FirestoreIndex(settings.firebase_project)
+    # one instance per app of what the job history and the sweep share (docs/features/admin): the projections buffer
+    # file (admin/projections-pending.json) is filled by JobManager and replayed by the sweep through the same
+    # ``Projections``; the email index the admin routes search is the one the sweep rebuilds. None without a database.
+    projections = Projections(admin_db, pending_path(settings.data_dir)) if admin_db is not None else None
+    admin_directory = Directory(admin_db) if admin_db is not None else None
     jobs = JobManager(
         settings, store, fetcher or YtDlpFetcher(settings.max_upload_bytes), analyzer, vocal_transcriber=vocal_transcriber,
         # admin job history and the late-job discard of purged accounts (docs/features/admin): none without a database
-        projections=Projections(admin_db, pending_path(settings.data_dir)) if admin_db is not None else None,
+        projections=projections,
         is_tombstoned=(lambda uid: admin_db.get(f"adminTombstones/{uid}") is not None) if admin_db is not None else None,
     )
     bucket = (
@@ -309,6 +333,8 @@ def create_app(
                 publisher=None if isinstance(publisher, NullPublisher) else publisher,
                 stop=stop_background,
             )
+            if sweeper is not None and wake_sweep_on:  # the first natural wake of the UTC day runs the -wake slot
+                threading.Thread(target=sweeper.run_wake, name="chords-wake-sweep", daemon=True).start()
         try:
             yield
         finally:
@@ -330,6 +356,13 @@ def create_app(
     app.state.publisher = publisher
     app.state.admin_db = admin_db
     app.state.admin_authz = admin_authz or AdminAuthz(admin_db)
+    app.state.admin_directory = admin_directory  # the admin router's ``directory`` (app.admin.router)
+    if sweeper is _UNSET:
+        sweeper = Sweeper(admin_db, projections, admin_directory) if admin_db is not None else None
+    app.state.sweeper = sweeper
+    if scheduler_verifier is _UNSET:
+        scheduler_verifier = _scheduler_verifier_from_env() if settings.cloud else None
+    wake_sweep_on = settings.cloud and (bool(os.environ.get("K_SERVICE")) if wake_sweep is None else wake_sweep)
 
     if settings.cloud:  # innermost: CORS (below) also decorates its 401 responses
         app.add_middleware(
@@ -337,6 +370,7 @@ def create_app(
             verifier=token_verifier or FirebaseTokenVerifier(settings.firebase_project),
             signer=signer,
             smoke_key=settings.smoke_key,
+            scheduler_verifier=scheduler_verifier,
         )
     app.add_middleware(
         CORSMiddleware,
@@ -366,6 +400,7 @@ def create_app(
     if unguarded:
         raise RuntimeError("admin routes without the admin guard (use new_admin_router): " + "; ".join(unguarded))
     app.include_router(admin)  # before the API router: its catch-all would shadow it
+    app.include_router(internal_router)  # POST /api/internal/sweep: AuthMiddleware lets only the scheduler through
     app.include_router(api)
     _install_frontend(app, settings)
     return app

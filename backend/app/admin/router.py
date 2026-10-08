@@ -126,8 +126,8 @@ def _shared(app: FastAPI, name: str, build: Callable[[FirestoreIndex], Any]) -> 
 @dataclass
 class AdminServices:
     """What the admin handlers share, built once per app from ``app.state.admin_db`` (``get_services``). Its
-    ``directory`` and ``settings`` are the app's one email-index cache and one settings cache
-    (``app.state.admin_directory`` / ``app.state.admin_settings``, which the background sweep shares). Tests replace a
+    ``directory`` is ``app.state.admin_directory`` (the app's one email-index cache, which the background sweep
+    rebuilds) and its ``settings`` is ``app.state.admin_settings`` (the app's one settings cache). Tests replace a
     field (or the whole object in ``app.state.admin_services``) to fake the one thing they cannot run for real."""
 
     db: Any
