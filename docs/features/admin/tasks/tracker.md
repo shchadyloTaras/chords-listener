@@ -24,7 +24,7 @@
 | [T17](./t17-api-search-card-tracks.md) | Serve searchUsers, getUserCard and listUserTracks with view journaling | ports | Тарас Щадило | M | T05, T09, T10, T16 | done |
 | [T18](./t18-api-job-history-stats.md) | Serve listJobHistory and getStats | ports | Тарас Щадило | S | T09, T11 | done |
 | [T19](./t19-api-audit-list.md) | Serve listAudit with email resolution and «видалений» for purged users | ports | Тарас Щадило | S | T09, T10, T16 | done |
-| [T20](./t20-actions-quota-personal-limit.md) | Implement resetQuota and set/remove personal limit | app | Тарас Щадило | M | T09, T10, T14 | todo |
+| [T20](./t20-actions-quota-personal-limit.md) | Implement resetQuota and set/remove personal limit | app | Тарас Щадило | M | T09, T10, T14 | done |
 | [T21](./t21-actions-restriction.md) | Implement restrictUser and unrestrictUser as transactions with the audit record | app | Тарас Щадило | S | T20 | todo |
 | [T22](./t22-actions-deletion.md) | Implement scheduleDeletion and cancelDeletion with email confirm, fresh login and the 10-per-60-min cap | app | Тарас Щадило | M | T21 | todo |
 | [T23](./t23-actions-settings-switches-banner.md) | Implement setDefaultLimits, setSwitch and setBanner with mirrored, audited batched writes | app | Тарас Щадило | M | T09, T10, T13, T15 | done |
@@ -42,7 +42,7 @@
 | [T35](./t35-ui-settings-screen.md) | Build the service-settings screen: default limits, switches and maintenance banner | ui | Тарас Щадило | M | T28 | done |
 | [T36](./t36-ui-site-service-status-banner.md) | Read the public service status on the site: maintenance banner and YouTube-off fallback | ui | Тарас Щадило | M | — | done |
 | [T37](./t37-ui-site-admission-refusals.md) | Show admission refusals on the site and send the origin hint | ui | Тарас Щадило | S | T36 | done |
-| [T38](./t38-nfr-security-verification.md) | Add the NFR and security verification suite | tests | Тарас Щадило | M | T02, T15, T17, T18, T19, T23, T29, T30, T36 | todo |
-| [T39](./t39-docs-admin-runbook.md) | Document the admin: CLOUD.md section, grant/revoke runbook, migration order and alerts | docs | Тарас Щадило | S | T26 | todo |
+| [T38](./t38-nfr-security-verification.md) | Add the NFR and security verification suite | tests | Тарас Щадило | M | T02, T15, T17, T18, T19, T23, T29, T30, T36 | done |
+| [T39](./t39-docs-admin-runbook.md) | Document the admin: CLOUD.md section, grant/revoke runbook, migration order and alerts | docs | Тарас Щадило | S | T26 | done |
 
 **Total:** 39 tasks, ~30 person-days.
