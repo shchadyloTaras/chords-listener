@@ -46,7 +46,7 @@ export const cloud: Dict = {
     'cloud.input.hintGuestNoTab':
       'Файли й мікрофон працюють без акаунта. Відео з YouTube відкриємо тут і підкажемо, як його послухати. Посилання з інших сайтів — після входу.',
     'cloud.input.hintYoutubeHere': 'Відео з YouTube — відкриємо його тут і підкажемо, як його послухати',
-    // a YouTube playlist, channel or clip: nothing to listen to (and the cloud never gets YouTube links)
+    // a YouTube playlist, channel or clip: not one video, so nothing to listen to and no fragment to pick
     'cloud.input.notVideo': 'Це не окреме відео — відкрий на YouTube саме відео й скопіюй його посилання',
 
     // "listen in the tab" (YouTube)

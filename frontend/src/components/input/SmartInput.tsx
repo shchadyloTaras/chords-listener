@@ -226,8 +226,8 @@ export function SmartInput({ className }: { className?: string }) {
   }
 
   // signed in from the notice: once the cloud is connected, start the waiting link (editing, clearing or
-  // dismissing it, another submit or leaving the page forgets it). Never a YouTube link: the cloud is not sent
-  // those (a video opens the capture page without an account).
+  // dismissing it, another submit or leaving the page forgets it). Never a YouTube link: a guest's video opens
+  // the capture page (no account needed), a signed-in user's opens the fragment picker.
   const submitRef = useRef(submit)
   useEffect(() => {
     submitRef.current = submit

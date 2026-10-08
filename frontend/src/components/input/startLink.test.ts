@@ -68,7 +68,8 @@ describe('linkTarget', () => {
     expect(linkTarget(url, conn)).toBe(target)
   })
 
-  // every shape the server reads as a single video (backend/app/sources.py) is listened to here, never sent
+  // every shape the server reads as a single video (backend/app/sources.py) is a video here: the cloud gets a fragment of
+  // it (the picker), a guest listens to it on the capture page, a local server downloads it
   const VIDEOS = [
     'https://www.youtube.com/attribution_link?u=%2Fwatch%3Fv%3DdQw4w9WgXcQ',
     'https://www.youtube.com/attribution_link?a=x&u=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DdQw4w9WgXcQ',

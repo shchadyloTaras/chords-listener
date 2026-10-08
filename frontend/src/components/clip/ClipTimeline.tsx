@@ -24,7 +24,7 @@ export function ClipTimeline({ start, duration, now, onChange, disabled, label }
   const pct = (t: number) => (total ? `${Math.min(100, Math.max(0, (t / total) * 100))}%` : '0%')
 
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
-    if (disabled || !total) return
+    if (disabled || !total || e.button !== 0) return // only the primary button: a right click does not move the window
     e.currentTarget.setPointerCapture(e.pointerId)
     drag.current = { x: e.clientX, origin: range.start, moved: false }
   }
@@ -46,7 +46,7 @@ export function ClipTimeline({ start, duration, now, onChange, disabled, label }
     if (at < range.start || at > range.end) onChange(startFromTap(fraction, total))
   }
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (disabled) return
+    if (disabled || e.metaKey || e.ctrlKey || e.altKey) return // Cmd/Alt+← is the browser's Back; Shift is a 5 s step
     const step = e.shiftKey ? 5 : 1
     if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') onChange(nudgeStart(start, -step, total))
     else if (e.key === 'ArrowRight' || e.key === 'ArrowUp') onChange(nudgeStart(start, step, total))
