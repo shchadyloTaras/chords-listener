@@ -47,10 +47,23 @@ _TRANSIENT_STATUS = {408, 429, 500, 502, 503, 504}
 _pending_lock = threading.Lock()  # guards every read-modify-write of a publish-pending.json (a leaf lock)
 
 
-def summary_doc(track: Track, version: int) -> dict[str, Any]:
-    """The index document: the TrackSummary JSON fields of ``GET /api/tracks`` + ``version`` + ``publishedAt``."""
+def summary_doc(track: Track, version: int, size_bytes: int) -> dict[str, Any]:
+    """The index document: the TrackSummary JSON fields of ``GET /api/tracks`` + ``version`` + ``publishedAt``
+    + ``sizeBytes`` (the track directory's bytes; the admin card sums it, clients ignore it)."""
     doc = TrackSummary.model_validate(track.model_dump()).model_dump(mode="json")
-    return {**doc, "version": version, "publishedAt": datetime.now(timezone.utc)}
+    return {**doc, "version": version, "publishedAt": datetime.now(timezone.utc), "sizeBytes": size_bytes}
+
+
+def dir_size(path: Path) -> int:
+    """Bytes of every file under ``path`` (audio, stems, track.json, edits); a file that vanishes mid-walk counts 0."""
+    total = 0
+    for f in path.rglob("*"):
+        try:
+            if f.is_file():
+                total += f.stat().st_size
+        except FileNotFoundError:
+            continue
+    return total
 
 
 def track_file(track: Track, version: int, media: dict[str, Any]) -> dict[str, Any]:
@@ -257,7 +270,8 @@ class Publisher:
             track = store.get_track(track_id)
             media = self._ensure_media(track_id, track)
             write_json_atomic(store.track_dir(track_id) / TRACK_FILE, track_file(track, version, media))
-            self.index.upsert(uid, track_id, summary_doc(track, version))
+            size = dir_size(store.track_dir(track_id))  # after track.json, so the migration counts the same bytes
+            self.index.upsert(uid, track_id, summary_doc(track, version, size))
 
     def _pin_created_at(self, track_id: str) -> None:
         """A track whose meta has no ``createdAt`` shows "now" in the API; the index gets the directory's mtime

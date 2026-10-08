@@ -8,16 +8,12 @@ unpublished). Run from ``backend/`` with the service's environment:
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 from _fsrest import Rest
 from app.models import Settings
+from app.publish import dir_size  # the publish path's own count, so the backfill and new publishes agree
 from app.storage import TrackStore
 from app.users import valid_uid
-
-
-def dir_size(path: Path) -> int:
-    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
 
 
 def main() -> int:
