@@ -80,6 +80,14 @@ class Admission:
         """The default limits in force (analyses, vocals, jobs ...)."""
         return self._settings().limits
 
+    def size_limits(self) -> Optional[tuple[float, float]]:
+        """The admin-set ``(max duration min, max upload MB)``; ``None`` while ``adminConfig/settings`` is absent
+        (the deploy-time env values then apply as they are, not clamped to the admin ranges)."""
+        runtime = self._settings()
+        if self._runtime.from_env:
+            return None
+        return float(runtime.limits.max_duration_min), float(runtime.limits.max_upload_mb)
+
     def personal(self, uid: str) -> Optional[Mapping[str, Any]]:
         return self.state(uid).personal
 

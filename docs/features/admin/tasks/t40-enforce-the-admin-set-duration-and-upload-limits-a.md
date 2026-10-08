@@ -8,7 +8,7 @@ files_hint: ["backend/app/jobs.py", "backend/app/main.py", "backend/app/admin/se
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 9 — review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T40 — Enforce the admin-set duration and upload limits at every check

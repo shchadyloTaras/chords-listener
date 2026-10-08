@@ -713,7 +713,8 @@ def _api_router(
     async def upload_job(request: Request) -> Job:
         """Multipart upload streamed straight to disk; deduplicated by content sha1. Cloud mode caps the
         body at ~30 MB (Cloud Run allows 32 MiB per request): bigger files go through POST /jobs/storage."""
-        limit = min(settings.max_upload_bytes, settings.max_request_bytes) if settings.cloud else settings.max_upload_bytes
+        limits = jobs.effective_limits()
+        limit = min(limits.upload_bytes, settings.max_request_bytes) if settings.cloud else limits.upload_bytes
         work = store.new_work_dir("upload")
         try:
             try:
@@ -725,8 +726,8 @@ def _api_router(
             probe = await run_in_threadpool(probe_media, upload.path)
             if not probe.has_audio:
                 raise SourceError("unsupported_format", "This file has no audio track")
-            if probe.duration and probe.duration > settings.max_duration_s:
-                raise SourceError("too_long", too_long_message(probe.duration, settings.max_duration_min))
+            if probe.duration and probe.duration > limits.duration_s:
+                raise SourceError("too_long", too_long_message(probe.duration, limits.duration_min))
         except BaseException:
             shutil.rmtree(work, ignore_errors=True)
             raise
@@ -747,9 +748,10 @@ def _api_router(
         info = bucket.stat(path)
         if info is None:
             raise ApiException("not_found", "The upload was not found (it may have been processed already)")
-        if info.size > settings.max_upload_bytes:
+        limits = jobs.effective_limits()
+        if info.size > limits.upload_bytes:
             bucket.delete(path)
-            raise ApiException("too_large", f"The file is larger than the {settings.max_upload_mb:g} MB limit")
+            raise ApiException("too_large", f"The file is larger than the {limits.upload_mb:g} MB limit")
         if info.size == 0:
             bucket.delete(path)
             raise ApiException("unsupported_format", "The uploaded file is empty")

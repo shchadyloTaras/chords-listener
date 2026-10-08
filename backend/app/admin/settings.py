@@ -109,6 +109,7 @@ class RuntimeSettings:
         self._lock = threading.Lock()
         self._value: Optional[Settings] = None
         self._loaded_at = 0.0
+        self.from_env = False   # True while the cached values came from the env (``adminConfig/settings`` absent)
 
     # ----------------------------------------------------------------------- read
 
@@ -134,6 +135,7 @@ class RuntimeSettings:
         doc = self._db.get(SETTINGS_PATH)
         public = self._db.get(PUBLIC_STATUS_PATH)
         data = doc.data if doc is not None else {}
+        self.from_env = doc is None
         if doc is None:
             log.info("%s is absent: using the CHORDS_* env values", SETTINGS_PATH)
         return Settings(

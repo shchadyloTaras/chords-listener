@@ -627,3 +627,51 @@ def test_quota_helpers_for_feature_code_still_work_without_the_gate(tmp_path: Pa
             jobs.admit("vocals")
         assert info.value.code == "quota_exceeded"
     jobs.shutdown()
+
+
+# --------------------------------------------------------------------------- the admin-set size limits (T40, AC-24/25)
+
+
+@pytest.fixture(scope="module")
+def long_media(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    from test_cloud import _ffmpeg
+    path = tmp_path_factory.mktemp("long-media") / "long.mp3"
+    _ffmpeg("-f", "lavfi", "-i", "sine=frequency=220:duration=90", "-c:a", "libmp3lame", "-b:a", "32k", str(path))
+    return path
+
+
+def test_upload_longer_than_the_admin_set_duration_is_refused(make_cloud, long_media) -> None:
+    env = make_env(make_cloud)  # deploy-time limit: 30 min
+    set_config(env, limits={"maxDurationMin": 1})
+    assert_error(upload(env.client, long_media, H("alice")), 422, "too_long")
+
+
+def test_upload_within_a_raised_admin_duration_is_accepted(make_cloud, media) -> None:
+    env = make_env(make_cloud, max_duration_min=0.05)  # the env fallback would refuse the 4 s file
+    set_config(env, limits={"maxDurationMin": 1})
+    res = upload(env.client, media.a, H("alice"))
+    assert res.status_code == 201, res.text
+
+
+def test_deploy_time_duration_is_the_fallback_while_settings_are_absent(make_cloud, media) -> None:
+    env = make_env(make_cloud, max_duration_min=0.05)
+    assert_error(upload(env.client, media.a, H("alice")), 422, "too_long")
+
+
+def test_storage_file_larger_than_the_admin_set_size_is_refused(make_cloud) -> None:
+    env = make_env(make_cloud)  # deploy-time limit: 500 MB
+    set_config(env, limits={"maxUploadMb": 1})
+    path = env.gcs.put("users/alice/uploads/big/Song.mp3", b"\0" * (1024 * 1024 + 1))
+    res = env.client.post("/api/jobs/storage", json={"path": path}, headers=H("alice"))
+    assert res.status_code == 413, res.text
+    assert res.json()["code"] == "too_large"
+
+
+def test_storage_job_longer_than_the_admin_set_duration_fails_too_long(make_cloud, long_media) -> None:
+    env = make_env(make_cloud)
+    set_config(env, limits={"maxDurationMin": 1})
+    path = env.gcs.put("users/alice/uploads/long/Song.mp3", long_media.read_bytes())
+    res = env.client.post("/api/jobs/storage", json={"path": path}, headers=H("alice"))
+    assert res.status_code == 201, res.text
+    job = wait_job(env.client, res.json()["id"], H("alice"))
+    assert job["status"] == "error" and job["errorCode"] == "too_long", job

@@ -46,7 +46,7 @@
 | [T39](./t39-docs-admin-runbook.md) | Document the admin: CLOUD.md section, grant/revoke runbook, migration order and alerts | docs | Тарас Щадило | S | T26 | done |
 
 **Total:** 39 tasks, ~30 person-days.
-| [T40](./t40-enforce-the-admin-set-duration-and-upload-limits-a.md) | Enforce the admin-set duration and upload limits at every check | app | Тарас Щадило | S | T14, T23 | todo |
+| [T40](./t40-enforce-the-admin-set-duration-and-upload-limits-a.md) | Enforce the admin-set duration and upload limits at every check | app | Тарас Щадило | S | T14, T23 | done |
 | [T41](./t41-apply-the-youtube-switch-to-youtube-links-only-and.md) | Apply the YouTube switch to YouTube links only and filter the history by source type | app | Тарас Щадило | S | T40 | todo |
 | [T42](./t42-mark-quiet-and-pre-launch-days-as-restored-and-omi.md) | Mark quiet and pre-launch days as restored and omit empty days from /stats | app | Тарас Щадило | S | T41 | todo |
 | [T43](./t43-make-the-list-endpoints-match-the-contract-before.md) | Make the list endpoints match the contract: before cursor, truncated, 422 cases | ports | Тарас Щадило | S | T42 | todo |

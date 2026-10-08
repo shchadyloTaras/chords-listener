@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Optional, get_args
+from typing import TYPE_CHECKING, Any, Callable, NamedTuple, Optional, get_args
 
 from app.engine import analyze
 
@@ -120,6 +120,19 @@ class JobRecord:
                 "createdAt": self.created_at,
             }
         )
+
+
+class SizeLimits(NamedTuple):
+    duration_min: float
+    upload_mb: float
+
+    @property
+    def duration_s(self) -> float:
+        return self.duration_min * 60.0
+
+    @property
+    def upload_bytes(self) -> int:
+        return int(self.upload_mb * 1024 * 1024)
 
 
 class JobManager:
@@ -654,7 +667,7 @@ class JobManager:
         media: RemoteMedia = self.fetcher.probe(url)
         self._check_cancel(rec)
         self._update(rec, title=media.title, thumbnail=media.thumbnail or rec.thumbnail, source=media.source())
-        if media.duration and media.duration > self.settings.max_duration_s:
+        if media.duration and media.duration > self.effective_limits().duration_s:
             raise JobFailed("too_long", self._too_long_message(media.duration))
         track_id = media.track_id
         self._claim(rec, self._ukey(f"track:{track_id}", rec.uid))
@@ -754,7 +767,7 @@ class JobManager:
                     size=size,
                     progress=lambda f: self._update(rec, progress=self._scaled((0.01, DOWNLOAD_RANGE[1]), f)),
                     cancel=rec.cancel,
-                    max_bytes=self.settings.max_upload_bytes,
+                    max_bytes=self.effective_limits().upload_bytes,
                 )
             finally:
                 bucket.delete(path)  # the upload is consumed whatever happens next
@@ -803,7 +816,7 @@ class JobManager:
         probe = probe or probe_media(src)
         if not probe.has_audio:
             raise JobFailed("unsupported_format", "This media has no audio track")
-        if probe.duration and probe.duration > self.settings.max_duration_s:
+        if probe.duration and probe.duration > self.effective_limits().duration_s:
             raise JobFailed("too_long", self._too_long_message(probe.duration))
 
         staged = work / "track"
@@ -817,7 +830,7 @@ class JobManager:
         playback = probe_media(audio)
         if playback.duration is None or playback.duration < 0.5:
             raise JobFailed("unsupported_format", "The audio is empty or too short")
-        if playback.duration > self.settings.max_duration_s:
+        if playback.duration > self.effective_limits().duration_s:
             raise JobFailed("too_long", self._too_long_message(playback.duration))
 
         analysis = self._analyze(rec, audio)
@@ -954,7 +967,19 @@ class JobManager:
             raise JobFailed("analysis_failed", "Chord analysis returned an invalid result") from exc
 
     def _too_long_message(self, duration: float) -> str:
-        return too_long_message(duration, self.settings.max_duration_min)
+        return too_long_message(duration, self.effective_limits().duration_min)
+
+    def effective_limits(self) -> "SizeLimits":
+        """The duration and upload-size limits in force: the admin-set ones (RuntimeSettings, 30 s cache) when there
+        is an admission gate (cloud), else - or if they cannot be read - the deploy-time env values (AC-24/25)."""
+        if self.admission is not None:
+            try:
+                admin_set = self.admission.size_limits()
+                if admin_set is not None:
+                    return SizeLimits(*admin_set)
+            except Exception:  # noqa: BLE001 - unreadable settings: the env values still bound the input
+                log.warning("could not read the admin limits, using the env ones", exc_info=True)
+        return SizeLimits(self.settings.max_duration_min, self.settings.max_upload_mb)
 
 
 def _upload_origin(hint: Optional[str]) -> str:
