@@ -6,7 +6,8 @@
 * ``MediaSigner`` signs media URLs (``?u=<uid>&exp=<unix>&sig=<hmac>``) so ``<audio>`` elements can
   load them without an Authorization header.
 * ``AuthMiddleware`` guards ``/api/*``: Bearer token, signed media URL or ``X-Smoke-Key``;
-  sets the request's uid (``app.users``). Missing/invalid credentials → 401 ``unauthorized``.
+  sets the request's uid (``app.users``) and its sign-in time (``auth_time_of``).
+  Missing/invalid credentials → 401 ``unauthorized``.
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ from typing import Any, Callable, Optional
 from urllib.parse import parse_qs, quote
 
 from starlette.concurrency import run_in_threadpool
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -33,6 +35,7 @@ from .users import SMOKE_UID, reset_current_uid, set_current_uid, valid_uid
 log = logging.getLogger("chords.auth")
 
 GOOGLE_CERTS_URL = "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com"
+AUTH_TIME_KEY = "auth_time"  # request.scope["state"] key set by AuthMiddleware
 CertsFetcher = Callable[[], tuple[dict[str, str], float]]  # -> ({kid: PEM}, max-age seconds)
 
 
@@ -107,6 +110,11 @@ class FirebaseTokenVerifier:
             return certs
 
     def verify(self, token: str) -> str:
+        return self.verify_claims(token)[0]
+
+    def verify_claims(self, token: str) -> tuple[str, Optional[float]]:
+        """``(uid, auth_time)``: ``auth_time`` is when the user last typed their credentials (Unix seconds),
+        None when the token carries none."""
         token = (token or "").strip()
         parts = token.split(".")
         if len(parts) != 3 or not parts[0] or not parts[1]:
@@ -134,7 +142,9 @@ class FirebaseTokenVerifier:
                 raise AuthError(f"Invalid token: {exc}") from exc
         else:
             raise AuthError("Unsupported token")
-        return self._check_claims(claims)
+        uid = self._check_claims(claims)
+        auth_time = claims.get("auth_time")
+        return uid, float(auth_time) if isinstance(auth_time, (int, float)) and not isinstance(auth_time, bool) else None
 
     def _check_times(self, claims: dict[str, Any]) -> None:
         now = self._clock()
@@ -156,6 +166,13 @@ class FirebaseTokenVerifier:
         if not isinstance(uid, str) or not valid_uid(uid):
             raise AuthError("Token has no usable subject")
         return uid
+
+
+def auth_time_of(request: Request) -> Optional[float]:
+    """When the signed-in user last entered their credentials (the ID token's ``auth_time``, Unix seconds);
+    None for a signed media URL, the smoke key, a verifier that doesn't report it, or outside ``AuthMiddleware``."""
+    value = request.scope.get("state", {}).get(AUTH_TIME_KEY)
+    return float(value) if isinstance(value, (int, float)) else None
 
 
 # --------------------------------------------------------------------------- signed media URLs
@@ -242,37 +259,41 @@ class AuthMiddleware:
             await self.app(scope, receive, send)
             return
         try:
-            uid = await self._authenticate(scope, path)
+            uid, auth_time = await self._authenticate(scope, path)
         except AuthError as exc:
             await _unauthorized(str(exc) or "Sign in to use the cloud server")(scope, receive, send)
             return
         except AuthUnavailable as exc:
             await JSONResponse({"detail": str(exc), "code": "internal"}, status_code=503)(scope, receive, send)
             return
+        scope.setdefault("state", {})[AUTH_TIME_KEY] = auth_time
         token = set_current_uid(uid)
         try:
             await self.app(scope, receive, send)
         finally:
             reset_current_uid(token)
 
-    async def _authenticate(self, scope: Scope, path: str) -> str:
+    async def _authenticate(self, scope: Scope, path: str) -> tuple[str, Optional[float]]:
         headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
         if scope.get("method") in ("GET", "HEAD") and self.signer is not None and MEDIA_PATH_RE.fullmatch(path):
             query = parse_qs(scope.get("query_string", b"").decode("latin-1"))
             if "sig" in query:
                 uid, exp, sig = (query.get(k, [""])[0] for k in ("u", "exp", "sig"))
                 if self.signer.verify(uid, path, exp, sig):
-                    return uid
+                    return uid, None
                 raise AuthError("This media link has expired or is invalid - reload the track")
         authorization = headers.get("authorization", "")
         if authorization:
             scheme, _, token = authorization.partition(" ")
             if scheme.lower() != "bearer" or not token.strip():
                 raise AuthError("Use an Authorization: Bearer <Firebase ID token> header")
-            return await run_in_threadpool(self.verifier.verify, token.strip())
+            verify_claims = getattr(self.verifier, "verify_claims", None)
+            if verify_claims is not None:
+                return await run_in_threadpool(verify_claims, token.strip())
+            return await run_in_threadpool(self.verifier.verify, token.strip()), None
         smoke = headers.get("x-smoke-key", "")
         if smoke:
             if self.smoke_key and hmac.compare_digest(smoke.encode("utf-8"), self.smoke_key):
-                return SMOKE_UID
+                return SMOKE_UID, None
             raise AuthError("Invalid smoke-test key")
         raise AuthError("Sign in to use the cloud server")

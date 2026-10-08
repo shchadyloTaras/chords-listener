@@ -27,6 +27,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.engine import engine_info
 
+from .admin.authz import ADMIN_PREFIX, AdminAuthz, HiddenFromCaller, ReauthRequired, unguarded_admin_routes
+from .admin.router import router as admin_router_default
 from .auth import AuthMiddleware, FirebaseTokenVerifier, MediaSigner
 from .firestore import FirestoreIndex
 from .gcs import UploadBucket, default_client
@@ -124,7 +126,12 @@ def error_response(
 
 
 def _is_admin_path(path: str) -> bool:
-    return path == "/api/admin" or path.startswith("/api/admin/")
+    return path == ADMIN_PREFIX or path.startswith(ADMIN_PREFIX + "/")
+
+
+def _unknown_endpoint(path: str) -> str:
+    """The detail of the 404 for an address no route serves; also what a non-admin gets from /api/admin/*."""
+    return f"Unknown API endpoint: {path}"
 
 
 def _validation_fields(errors: list[Any]) -> dict[str, str]:
@@ -233,11 +240,16 @@ def create_app(
     gcs_client_factory: Optional[Callable[[], Any]] = None,
     vocal_transcriber: Optional[Callable[..., dict]] = None,
     publisher_factory: Optional[Callable[[TrackStore], Any]] = None,
+    admin_db: Any = None,
+    admin_authz: Optional[AdminAuthz] = None,
+    admin_router: Optional[APIRouter] = None,
 ) -> FastAPI:
     """``token_verifier`` (``.verify(token) -> uid``) and ``gcs_client_factory`` replace the Firebase token
     check and the google-cloud-storage client (tests); ``vocal_transcriber`` replaces app.vocals.transcribe;
     ``publisher_factory(store)`` replaces the ``Publisher`` that publishes track changes in cloud mode
-    (tests; ``CHORDS_PUBLISH`` off still wins)."""
+    (tests; ``CHORDS_PUBLISH`` off still wins). ``admin_db`` (``.get(path)``; default ``FirestoreIndex`` in cloud
+    mode) holds the admin allowlist, ``admin_authz`` replaces the allowlist check and probe limiter built from it,
+    ``admin_router`` replaces ``app.admin.router.router`` (tests)."""
     settings = settings or Settings.from_env()
     ensure_tool_path()
     if not logging.getLogger().handlers:
@@ -309,6 +321,10 @@ def create_app(
     app.state.jobs = jobs
     app.state.bucket = bucket
     app.state.publisher = publisher
+    if admin_db is None and settings.cloud:
+        admin_db = FirestoreIndex(settings.firebase_project)
+    app.state.admin_db = admin_db
+    app.state.admin_authz = admin_authz or AdminAuthz(admin_db)
 
     if settings.cloud:  # innermost: CORS (below) also decorates its 401 responses
         app.add_middleware(
@@ -339,7 +355,13 @@ def create_app(
     )
 
     _install_error_handlers(app)
-    app.include_router(_api_router(settings, store, jobs, get_engine_info, bucket))
+    admin = admin_router or admin_router_default
+    api = _api_router(settings, store, jobs, get_engine_info, bucket)
+    unguarded = unguarded_admin_routes(admin, api)  # a new admin route without the guard stops the start-up
+    if unguarded:
+        raise RuntimeError("admin routes without the admin guard (use new_admin_router): " + "; ".join(unguarded))
+    app.include_router(admin)  # before the API router: its catch-all would shadow it
+    app.include_router(api)
     _install_frontend(app, settings)
     return app
 
@@ -422,6 +444,14 @@ def _install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(SourceError)
     async def _source_exc(_: Request, exc: SourceError) -> JSONResponse:
         return error_response(exc.status or STATUS_BY_CODE.get(exc.code, 500), exc.code, exc.message)
+
+    @app.exception_handler(HiddenFromCaller)
+    async def _admin_hidden(_: Request, exc: HiddenFromCaller) -> JSONResponse:
+        return error_response(404, "not_found", _unknown_endpoint(exc.path))
+
+    @app.exception_handler(ReauthRequired)
+    async def _admin_reauth(_: Request, exc: ReauthRequired) -> JSONResponse:
+        return error_response(401, "reauth_required", str(exc))
 
     @app.exception_handler(TrackNotFound)
     async def _track_missing(_: Request, __: TrackNotFound) -> JSONResponse:
@@ -780,7 +810,7 @@ def _api_router(
 
     @api.api_route("/{rest:path}", methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"], include_in_schema=False)
     def api_not_found(rest: str) -> Response:
-        raise ApiException("not_found", f"Unknown API endpoint: /api/{rest}")
+        raise ApiException("not_found", _unknown_endpoint(f"/api/{rest}"))
 
     return api
 
