@@ -18,7 +18,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { t as tNow, useT } from '../../i18n'
-import { openAuthDialog } from '../../lib/auth'
+import { openAuthDialog, useAuth } from '../../lib/auth'
 import { useApp } from '../../store'
 import { useDocumentTitle } from '../../hooks/useDocumentTitle'
 import { useJobs } from '../../hooks/useJobs'
@@ -172,6 +172,7 @@ export function CapturePage({ videoId, blocked, start }: { videoId: string; bloc
   const t = useT()
   const url = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`
   const cloudInvite = useCloudInvite()
+  const signedIn = useAuth((s) => !!s.user)
   const tabCapture = useCanListenInTab()
 
   const mountRef = useRef<HTMLDivElement>(null)
@@ -210,6 +211,18 @@ export function CapturePage({ videoId, blocked, start }: { videoId: string; bloc
     },
   })
   const { state, dispatch, current } = capture
+
+  // A guest who signs in from the hint above goes on to the fragment picker: the tab / microphone page is what that
+  // hint promised to spare (a phone cannot listen in a tab at all). Only the change counts: someone who was signed
+  // in when the page opened (a blocked fragment is sent here on purpose) stays.
+  const wasInvited = useRef(cloudInvite)
+  useEffect(() => {
+    const was = wasInvited.current
+    wasInvited.current = cloudInvite
+    if (was && !cloudInvite && signedIn && state.phase === 'idle') {
+      navigate(paths.clip(videoId, { t: position }), { replace: true })
+    }
+  }, [cloudInvite, signedIn, state.phase, videoId, position])
 
   // "listen in the tab" only where the tab can be heard: elsewhere it is just the video, with other ways to listen
   const pageLabel = t(tabCapture ? 'cloud.capture.title' : 'cloud.capture.videoBadge')

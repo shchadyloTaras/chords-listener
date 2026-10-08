@@ -153,6 +153,9 @@ export function ClipPage({ videoId, start: initialStart }: { videoId: string; st
       const { code } = toApiError(e)
       // this cloud cannot download YouTube fragments: listen to the video in the tab, from the same place
       if (code === 'unavailable') navigate(paths.capture(videoId, { blocked: true, t: range.start }), { replace: true })
+      // a guest (a bookmark, a shared link, after signing out): nothing was blocked, the capture page's own hint
+      // offers the sign-in
+      else if (code === 'server_required') navigate(paths.capture(videoId, { t: range.start }), { replace: true })
       else if (code !== 'aborted') useApp.getState().toast(errorText(code), 'error')
     } finally {
       setBusy(false)
