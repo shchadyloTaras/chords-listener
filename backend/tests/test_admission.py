@@ -566,9 +566,9 @@ def test_quota_reset_and_concurrent_admission_never_lose_an_analysis(unit) -> No
     order: list[int] = []  # the analyses counter as saved, in lock order: 0 is the reset
     real_save = unit.quotas._save
 
-    def spy(uid: str, counters: dict) -> None:
+    def spy(uid: str, counters: dict, **kw) -> None:
         order.append(counters["analyses"])
-        real_save(uid, counters)
+        real_save(uid, counters, **kw)
 
     unit.quotas._save = spy  # type: ignore[method-assign]
     for _ in range(5):

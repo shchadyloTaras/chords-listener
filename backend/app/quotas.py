@@ -17,7 +17,7 @@ import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Mapping, Optional, Protocol
+from typing import Any, Callable, Mapping, Optional, Protocol
 
 from .models import Settings
 from .sources import SourceError
@@ -175,20 +175,31 @@ class Quotas:
             raise QuotaExceeded(f"You already have {jobs} songs in progress - wait for one to finish")
         self.consume(kind, uid)
 
-    def reset(self, uid: str) -> dict[str, int]:
+    def reset(self, uid: str, journal: Optional[Callable[[dict[str, int]], None]] = None) -> dict[str, int]:
         """Admin reset (AC-12, AC-12b): today's counters of ``uid`` become zero; returns the values they had. Under
         the lock ``consume`` takes, so an analysis admitted at the same moment is counted either before the reset
-        (and cleared with it) or after it (and kept), never lost. Jobs that are running are not touched."""
+        (and cleared with it) or after it (and kept), never lost. Jobs that are running are not touched.
+
+        ``journal(old)`` is called under the lock with the old counters, BEFORE anything changes (journal first,
+        ADR-0007): if it raises, the counters stay as they were. The new counters must reach ``quota.json`` too: if
+        that write fails ``OSError`` is raised and the counters (memory and file) stay as they were."""
         with self._lock:
             counters = self._load(uid)
             old = {k: counters[k] for k in KINDS}
-            for k in KINDS:
-                counters[k] = 0
-            self._save(uid, counters)
+            if journal is not None:
+                journal(dict(old))
+            fresh = {**counters, **{k: 0 for k in KINDS}}
+            self._save(uid, fresh, strict=True)
+            counters.update(fresh)
             return old
 
-    def _save(self, uid: str, counters: dict[str, Any]) -> None:
+    def _save(self, uid: str, counters: dict[str, Any], *, strict: bool = False) -> None:
+        """Persist ``counters``. A failure is logged and the memory copy is kept (the user is held to the counters
+        either way) - unless ``strict``: then ``OSError`` is raised (the admin reset must not claim a change that
+        did not reach the file)."""
         try:
             write_json_atomic(self.store.user_dir(uid) / QUOTA_FILE, counters)
         except OSError:
+            if strict:
+                raise
             log.exception("could not persist the quota of %s (kept in memory)", uid)

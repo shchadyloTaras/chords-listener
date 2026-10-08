@@ -16,6 +16,8 @@ Served here:
 * ``listAudit`` (``GET /audit``, AC-10, AC-10b, AC-11): the admin action journal, read-only.
 * ``setDefaultLimits``, ``setSwitch`` and ``setBanner`` (``PUT /settings/...``, AC-13b, AC-24..AC-30, AC-34): the
   service settings, each written with its journal record in one commit (``actions.py``).
+* ``resetQuota`` (``POST /users/{uid}/quota/reset``, AC-12, AC-12b), ``setPersonalLimit`` and ``removePersonalLimit``
+  (``PUT`` / ``DELETE /users/{uid}/limit``, AC-13..AC-15): each answers the account's state after the change.
 """
 from __future__ import annotations
 
@@ -816,3 +818,49 @@ def set_banner(body: models.BannerIn, request: Request) -> Settings:
     svc = get_services(request.app)
     admin_uid = current_admin_uid(request)
     return actions.set_banner(svc, admin_uid=admin_uid, admin_email=_admin_email(svc, admin_uid), banner=body)
+
+
+# --------------------------------------------------------------------------- user actions: quota reset, personal limit
+
+
+def _acting_user(request: Request, uid: str) -> tuple[AdminServices, str, str]:
+    """(services, who acts, their email) for an action on ``uid``; an unknown or purged account is a 404 and nothing is
+    written or journaled."""
+    svc = get_services(request.app)
+    if _live_user(svc, uid) is None:
+        _refuse("not_found", "User not found")
+    admin_uid = current_admin_uid(request)
+    return svc, admin_uid, _admin_email(svc, admin_uid)
+
+
+def _forget_account(request: Request, uid: str) -> None:
+    """Drop the admission gate's cached state of ``uid``: a changed limit is in force from the next job on this server
+    (other instances see it within the cache's minute, AC-24)."""
+    admission = getattr(request.app.state, "admission", None)
+    if admission is not None:
+        admission.invalidate(uid)
+
+
+@router.post("/users/{uid}/quota/reset", response_model=AccountState, operation_id="resetQuota")
+def reset_quota(uid: str, request: Request) -> AccountState:
+    """Today's analyses and vocals counters of the user become 0 (the running jobs are untouched). Journal first, under
+    the lock admission takes; a failure at either step is 503 ``not_applied``."""
+    svc, admin_uid, admin_email = _acting_user(request, uid)
+    actions.reset_quota(svc, request.app.state.jobs.quotas, admin_uid=admin_uid, admin_email=admin_email, uid=uid)
+    return _account_state(svc, request, uid)
+
+
+@router.put("/users/{uid}/limit", response_model=AccountState, operation_id="setPersonalLimit")
+def set_personal_limit(uid: str, body: models.PersonalLimitIn, request: Request) -> AccountState:
+    svc, admin_uid, admin_email = _acting_user(request, uid)
+    actions.set_personal_limit(svc, admin_uid=admin_uid, admin_email=admin_email, uid=uid, limit=body, now=utc_now())
+    _forget_account(request, uid)
+    return _account_state(svc, request, uid)
+
+
+@router.delete("/users/{uid}/limit", response_model=AccountState, operation_id="removePersonalLimit")
+def remove_personal_limit(uid: str, request: Request) -> AccountState:
+    svc, admin_uid, admin_email = _acting_user(request, uid)
+    actions.remove_personal_limit(svc, admin_uid=admin_uid, admin_email=admin_email, uid=uid)
+    _forget_account(request, uid)
+    return _account_state(svc, request, uid)
