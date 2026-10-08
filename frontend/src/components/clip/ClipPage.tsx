@@ -10,14 +10,25 @@ import { navigate, paths } from '../../hooks/useRoute'
 import { toApiError } from '../../lib/api'
 import { useApp } from '../../store'
 import { errorText } from '../jobs/errorText'
-import { isEmbedBlockedError, loadYouTubeApi, videoTitle, YT_STATE, type YTPlayer } from '../player/sources/youtubeApi'
+import { isEmbedBlockedError, loadYouTubeApi, videoTitle, type YTPlayer } from '../player/sources/youtubeApi'
 import { Button } from '../ui/IconButton'
 import { VideoSiteIcon } from '../ui/Logo'
-import { formatRange } from '../ui/format'
+import { formatRange, formatTime } from '../ui/format'
 import { ClipTimeline } from './ClipTimeline'
 import { CLIP_SECONDS, clampStart, clipWindow, startAt } from './clipWindow'
 
 type PlayerStatus = 'loading' | 'ready' | 'embed' | 'error'
+
+/** The video's length once the player knows it: getDuration() is 0 until the metadata has loaded (on a phone often
+ *  only after play starts), and a real 0 must never reach the window math. */
+function playerLength(p: YTPlayer): number | null {
+  try {
+    const d = p.getDuration()
+    return d > 0 && Number.isFinite(d) ? d : null
+  } catch {
+    return null
+  }
+}
 
 export function ClipPage({ videoId, start: initialStart }: { videoId: string; start: number | null }) {
   const t = useT()
@@ -44,8 +55,8 @@ export function ClipPage({ videoId, start: initialStart }: { videoId: string; st
     let cancelled = false
     let player: YTPlayer | null = null
     const learnDuration = (p: YTPlayer) => {
-      const d = p.getDuration()
-      if (d > 0) setDuration(d)
+      const d = playerLength(p)
+      if (d) setDuration(d)
     }
     loadYouTubeApi()
       .then((YT) => {
@@ -67,7 +78,8 @@ export function ClipPage({ videoId, start: initialStart }: { videoId: string; st
               learnDuration(e.target)
             },
             onStateChange: (e) => {
-              if (cancelled || e.data !== YT_STATE.PLAYING) return
+              // any state: the metadata can arrive with a buffering / cued / paused change as well as with play
+              if (cancelled) return
               setTitle((prev) => prev ?? videoTitle(e.target))
               learnDuration(e.target)
             },
@@ -92,12 +104,15 @@ export function ClipPage({ videoId, start: initialStart }: { videoId: string; st
     }
   }, [videoId])
 
-  // ---- the playhead; «Прослухати» stops at the window's end
+  // ---- the playhead; «Прослухати» stops at the window's end; the video's length is picked up here too while it is
+  // still unknown (the player gives it only once its metadata has loaded, and no event is guaranteed to say when)
   useEffect(() => {
     const id = window.setInterval(() => {
       const p = playerRef.current
       if (!p) return
       try {
+        const length = playerLength(p)
+        if (length) setDuration((known) => known ?? length)
         const time = p.getCurrentTime() || 0
         setNow(time)
         if (previewEnd.current !== null && time >= previewEnd.current) {
@@ -172,7 +187,7 @@ export function ClipPage({ videoId, start: initialStart }: { videoId: string; st
         )}
         {playerBroken && (
           <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-white/80">
-            {t(playerStatus === 'embed' ? 'core.video.blocked' : 'core.video.failed')}
+            {t(playerStatus === 'embed' ? 'clip.embedBlocked' : 'clip.embedFailed', { time: formatTime(range.start) })}
           </div>
         )}
       </div>
@@ -192,6 +207,7 @@ export function ClipPage({ videoId, start: initialStart }: { videoId: string; st
           disabled={!duration}
           label={t('clip.windowLabel')}
         />
+        {ready && !duration && <p className="mt-2 text-sm text-muted">{t('clip.needLength')}</p>}
         <div className="mt-4 flex flex-wrap gap-2">
           <Button icon={<ArrowDownToLine className="size-4" />} onClick={fromHere} disabled={!ready}>
             {t('clip.fromHere')}
