@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { useApp, type ThemePref } from '../store'
+import { useApp, type Lang, type ThemePref } from '../store'
 import { useMediaQuery } from './useMediaQuery'
 
 export type ResolvedTheme = 'dark' | 'light'
@@ -16,9 +16,10 @@ export function resolveTheme(pref: ThemePref, prefersLight: boolean): ResolvedTh
 }
 
 /** Applies html[data-theme], html[lang] and the browser chrome color. Mount once in App. */
-export function useDocumentTheme() {
+export function useDocumentTheme(pinnedLang?: Lang) {
   const theme = useResolvedTheme()
-  const lang = useApp((s) => s.lang)
+  const siteLang = useApp((s) => s.lang)
+  const lang = pinnedLang ?? siteLang
 
   useEffect(() => {
     const root = document.documentElement

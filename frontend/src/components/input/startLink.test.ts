@@ -28,6 +28,7 @@ vi.mock('../../hooks/useRoute', async (importOriginal) => ({
 }))
 
 import { useConnection, type ConnectionState } from '../../lib/serverMode'
+import { parseServiceStatus, resetServiceStatusForTests, useServiceStatus } from '../../lib/serviceStatus'
 import { linkTarget, startLink, submitWhenConnected } from './startLink'
 import { parseYouTubeId, parseYouTubeStart } from './url'
 
@@ -49,6 +50,7 @@ beforeEach(() => {
   live.canListenInTab.mockReset().mockReturnValue(true)
   route.navigate.mockReset()
   auth.user = null
+  resetServiceStatusForTests()
 })
 
 afterEach(() => {
@@ -109,6 +111,25 @@ describe('linkTarget', () => {
   it('a look-alike host is another site', () => {
     expect(linkTarget('https://youtube.com.example.org/watch?v=dQw4w9WgXcQ', CLOUD_CONN)).toBe('server')
     expect(linkTarget('https://notyoutube.com/watch?v=dQw4w9WgXcQ', GUEST)).toBe('account')
+  })
+})
+
+// the cloud is never sent a YouTube video from this site (listened to in the tab), so the admin's switch is
+// already honoured: pinned here so that turning the cloud's own download on has to consult it (AC-27)
+describe('YouTube switched off by the admin (publicStatus/current, AC-27)', () => {
+  const OFF = { switches: { youtubeEnabled: false } }
+  it('signed in on the cloud: «Слухати у вкладці» is offered at once, without a request', async () => {
+    cloud()
+    useServiceStatus.setState({ status: parseServiceStatus(OFF) })
+    expect(await startLink(VIDEO)).toEqual({ kind: 'capture', videoId: 'dQw4w9WgXcQ' })
+    expect(route.navigate).toHaveBeenCalledWith('/listen/youtube/dQw4w9WgXcQ')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('a link to another site is not affected by the YouTube switch', async () => {
+    cloud()
+    useServiceStatus.setState({ status: parseServiceStatus(OFF) })
+    expect(await startLink('https://soundcloud.com/artist/song')).toMatchObject({ kind: 'job' })
   })
 })
 

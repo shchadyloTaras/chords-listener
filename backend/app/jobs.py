@@ -15,11 +15,13 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Optional, get_args
+from typing import TYPE_CHECKING, Any, Callable, NamedTuple, Optional, get_args
 
 from app.engine import analyze
 
+from .admin.history import AcceptedJob, FinishedJob
 from .models import AnalysisResult, ErrorCode, Job, JobStatus, Settings, VocalNotes
 from .quotas import QuotaExceeded, Quotas
 from .sources import (
@@ -46,6 +48,8 @@ from .storage import AUDIO_FILE, TrackStore, summary_fields, utc_now
 from .users import current_uid
 
 if TYPE_CHECKING:
+    from .admin.history import Projections
+    from .admission import Admission
     from .gcs import UploadBucket
 
 log = logging.getLogger("chords.jobs")
@@ -55,6 +59,7 @@ Analyzer = Callable[..., dict]
 VocalTranscriber = Callable[..., dict]
 
 ERROR_CODES = frozenset(get_args(ErrorCode))
+ORIGINS = ("link", "file", "mic", "tab")  # where a job's audio came from (admin history ``origin``)
 DOWNLOAD_RANGE = (0.0, 0.35)
 DECODE_RANGE = (0.35, 0.45)
 ANALYZE_RANGE = (0.45, 1.0)
@@ -90,6 +95,7 @@ class JobRecord:
     keys: set[str] = field(default_factory=set)
     created_ts: float = field(default_factory=time.time)
     uid: Optional[str] = None  # owner (cloud mode); None in local mode
+    origin: str = "file"  # "link" | "file" | "mic" | "tab" (admin job history)
     clip: Optional[dict[str, float]] = None  # YouTube fragment jobs: {"start", "end"} in video seconds
 
     @property
@@ -116,6 +122,19 @@ class JobRecord:
         )
 
 
+class SizeLimits(NamedTuple):
+    duration_min: float
+    upload_mb: float
+
+    @property
+    def duration_s(self) -> float:
+        return self.duration_min * 60.0
+
+    @property
+    def upload_bytes(self) -> int:
+        return int(self.upload_mb * 1024 * 1024)
+
+
 class JobManager:
     def __init__(
         self,
@@ -124,14 +143,25 @@ class JobManager:
         fetcher: UrlFetcher,
         analyzer: Optional[Analyzer] = None,
         vocal_transcriber: Optional[VocalTranscriber] = None,
+        projections: Optional["Projections"] = None,
+        is_tombstoned: Optional[Callable[[str], bool]] = None,
+        admission: Optional["Admission"] = None,
         clip_fetcher: Optional[ClipFetcher] = None,
     ) -> None:
+        """``projections`` (admin job history, docs/features/admin) is told when a job is taken on and when it ends;
+        ``is_tombstoned(uid)`` tells whether the user's account is being purged: the result of such a job is
+        discarded instead of written (ADR-0011). Both are optional and never fail a job. ``admission`` (the gate of
+        ADR-0008) refuses a job before its quota unit is counted and supplies the effective limits; without it the
+        env limits apply and nothing is refused but by quota."""
         self.settings = settings
         self.store = store
         self.fetcher = fetcher
         self.clip_fetcher = clip_fetcher  # YouTube fragments (None: this server can't download them)
         self.analyzer: Analyzer = analyzer or analyze
         self.vocal_transcriber = vocal_transcriber  # None: app.vocals.transcribe when the extra is installed
+        self.projections = projections
+        self._is_tombstoned = is_tombstoned
+        self.admission = admission
         self._lock = threading.RLock()
         self._jobs: dict[str, JobRecord] = {}
         self._active: dict[str, str] = {}  # dedup key ("track:<id>" / "url:<url>") -> job id
@@ -139,7 +169,7 @@ class JobManager:
         self._executor = ThreadPoolExecutor(max_workers=settings.max_workers, thread_name_prefix="chords-job")
         self._fetch_executor = ThreadPoolExecutor(max_workers=CLIP_FETCH_WORKERS, thread_name_prefix="chords-clip-fetch")
         self._closed = False
-        self.quotas = Quotas(settings, store)
+        self.quotas = Quotas(settings, store, limits=admission)
 
     # ------------------------------------------------------------------ per-user helpers (cloud mode)
 
@@ -157,19 +187,40 @@ class JobManager:
             # a job being cancelled stops at its next progress report: it no longer counts
             return sum(1 for r in self._jobs.values() if r.uid == uid and not r.finished and not r.cancel.is_set())
 
-    def admit(self, quota: Optional[str] = "analyses") -> None:
-        """Cloud mode: may the current user start one more job now? Checks the running-jobs limit, then
-        counts one unit of the daily ``quota`` ("analyses" | "vocals" | None). Raises QuotaExceeded (429).
-        Feature code that creates its own jobs (e.g. vocals) calls this right before submitting."""
+    def running_records(self) -> list[JobRecord]:
+        """Every job accepted and not yet finished (queued or running; one being cancelled no longer counts), of all
+        users, oldest first. The admin overview lists them (docs/features/admin AC-01)."""
+        with self._lock:
+            live = [r for r in self._jobs.values() if not r.finished and not r.cancel.is_set()]
+        return sorted(live, key=lambda r: r.created_ts)
+
+    def admit(
+        self, quota: Optional[str] = "analyses", *, kind: Optional[str] = None, origin: str = "file", youtube: bool = False
+    ) -> None:
+        """Cloud mode: may the current user start one more job now? The admission gate (restriction, switches,
+        effective limits) decides, then one unit of the daily ``quota`` ("analyses" | "vocals") is counted. Raises
+        ``SourceError`` (403 / 503 from the gate, 429 ``QuotaExceeded``); a refusal counts nothing.
+        ``kind`` ("analysis" | "reanalysis" | "vocals"; default from ``quota``) and ``origin`` ("link" | "file" |
+        "mic" | "tab") and ``youtube`` (the link is a YouTube one) tell the gate what is being started. Feature code that creates its own jobs calls this right
+        before submitting."""
         if not self.settings.cloud:
             return
+        uid = current_uid()
+        if self.admission is not None and uid and quota is not None:
+            self.admission.prepare(uid)  # its database reads (a cache miss) happen before the lock below
         with self._lock:
-            if self.running_count() >= self.settings.max_user_jobs:
-                raise QuotaExceeded(
-                    f"You already have {self.settings.max_user_jobs} songs in progress - wait for one to finish"
+            running = self.running_count(uid)
+            if quota is None:  # a job outside the daily quotas: only the limit of parallel jobs applies
+                jobs = self.quotas.effective_limits(uid).jobs
+                if running >= jobs:
+                    raise QuotaExceeded(f"You already have {jobs} songs in progress - wait for one to finish")
+            elif self.admission is not None and uid:
+                self.admission.check(
+                    uid, kind or ("vocals" if quota == "vocals" else "analysis"), origin,
+                    running=running, quotas=self.quotas, youtube=youtube,
                 )
-            if quota:
-                self.quotas.consume(quota)
+            else:
+                self.quotas.admit(quota, running, uid)
 
     # ------------------------------------------------------------------ queries
 
@@ -205,10 +256,11 @@ class JobManager:
             running = self._find_active(keys)
             if running:
                 return running.to_model()
-            self.admit()
+            self.admit(origin="link", youtube=bool(url.youtube_id))
             rec = self._new_record(
                 "url",
                 options,
+                origin="link",
                 source=source,
                 thumbnail=youtube_thumbnail(url.youtube_id) if url.youtube_id else None,
                 keys=keys,
@@ -233,10 +285,11 @@ class JobManager:
             running = self._find_active(keys)
             if running:
                 return running.to_model()
-            self.admit()
+            self.admit(origin="link", youtube=True)
             rec = self._new_record(
                 "url",
                 options,
+                origin="link",
                 source={"type": "youtube", "url": youtube_url(video_id), "videoId": video_id, "filename": None},
                 thumbnail=youtube_thumbnail(video_id),
                 clip={"start": float(start), "end": float(start + self.settings.clip_s)},
@@ -245,8 +298,10 @@ class JobManager:
             self._submit(rec, lambda: self._run_clip(rec, video_id, start, track_id), fetch=True)
             return rec.to_model()
 
-    def submit_upload(self, upload: ReceivedUpload, probe: ProbeResult, options: dict[str, Any]) -> Job:
-        """Takes ownership of ``upload.work_dir`` (removed when the job ends)."""
+    def submit_upload(
+        self, upload: ReceivedUpload, probe: ProbeResult, options: dict[str, Any], origin: str = "file"
+    ) -> Job:
+        """Takes ownership of ``upload.work_dir`` (removed when the job ends). ``origin``: "file" | "mic"."""
         track_id = upload.sha1[:12]
         if self.store.exists(track_id):
             shutil.rmtree(upload.work_dir, ignore_errors=True)
@@ -258,13 +313,14 @@ class JobManager:
                 shutil.rmtree(upload.work_dir, ignore_errors=True)
                 return running.to_model()
             try:
-                self.admit()
-            except QuotaExceeded:
+                self.admit(origin=_upload_origin(origin))
+            except SourceError:
                 shutil.rmtree(upload.work_dir, ignore_errors=True)
                 raise
             rec = self._new_record(
                 "upload",
                 options,
+                origin=_upload_origin(origin),
                 source={"type": "file", "url": None, "videoId": None, "filename": upload.filename},
                 title=probe.title or display_name(upload.filename),
                 keys=keys,
@@ -283,10 +339,11 @@ class JobManager:
             running = self._find_active(keys)
             if running:
                 return running.to_model()
-            self.admit()
+            self.admit(kind="reanalysis", origin=_meta_origin(meta))
             rec = self._new_record(
                 "reanalyze",
                 options,
+                origin=_meta_origin(meta),
                 source=meta.get("source"),
                 title=meta.get("title"),
                 thumbnail=meta.get("thumbnail"),
@@ -305,11 +362,13 @@ class JobManager:
         video_id: Optional[str],
         start_offset: float,
         options: dict[str, Any],
+        origin: str = "file",
     ) -> Job:
         """Ingest a client upload from the bucket (``users/<uid>/uploads/...``, cloud mode). The job
         downloads it, deletes the object, dedups by content sha1 and analyzes it like an upload.
-        ``video_id`` links the track to a YouTube video; ``start_offset`` (video time where the
-        recording begins) shifts every analysis time so chords line up with the video."""
+        ``video_id`` links the track to a YouTube video (a tab capture, origin "tab"); ``start_offset`` (video
+        time where the recording begins) shifts every analysis time so chords line up with the video.
+        ``origin`` ("file" | "mic") is the client's hint for anything that is not a tab capture."""
         filename = path.rsplit("/", 1)[-1] or "audio"
         if video_id:
             source = {"type": "youtube", "url": youtube_url(video_id), "videoId": video_id, "filename": None}
@@ -320,10 +379,11 @@ class JobManager:
             running = self._find_active(keys)
             if running:
                 return running.to_model()
-            self.admit()
+            self.admit(origin="tab" if video_id else _upload_origin(origin))
             rec = self._new_record(
                 "upload",
                 options,
+                origin="tab" if video_id else _upload_origin(origin),
                 source=source,
                 title=(title or "").strip() or (None if video_id else display_name(filename)),
                 thumbnail=youtube_thumbnail(video_id) if video_id else None,
@@ -351,10 +411,11 @@ class JobManager:
             running = self._find_active(keys)
             if running:
                 return running.to_model()
-            self.admit("vocals")
+            self.admit("vocals", origin=_meta_origin(meta))
             rec = self._new_record(
                 "vocals",
                 {},
+                origin=_meta_origin(meta),
                 source=meta.get("source"),
                 title=meta.get("title"),
                 thumbnail=meta.get("thumbnail"),
@@ -401,6 +462,8 @@ class JobManager:
 
     def _new_record(self, kind: str, options: dict[str, Any], *, keys: set[str], **fields: Any) -> JobRecord:
         fields.setdefault("uid", current_uid())
+        # Every submit path passes its origin; a record made without one (already-analyzed, tests) takes it from the source.
+        fields.setdefault("origin", "link" if (fields.get("source") or {}).get("type") in ("youtube", "url") else "file")
         rec = JobRecord(id=secrets.token_hex(8), kind=kind, created_at=utc_now(), options=dict(options), **fields)
         with self._lock:
             self._jobs[rec.id] = rec
@@ -427,7 +490,7 @@ class JobManager:
         """A track that is "already analyzed" may predate publishing: publish it if the index lacks it. Cloud
         mode only; call it outside ``self._lock`` (the publisher may take a while)."""
         uid = current_uid()
-        if self.settings.cloud and uid:
+        if self.settings.cloud and uid and not self._tombstoned(uid):  # never republish for a purged account
             self.store.publisher.ensure_published(uid, track_id)
 
     def _find_active(self, keys: set[str]) -> Optional[JobRecord]:
@@ -507,6 +570,7 @@ class JobManager:
         """Run one phase of ``rec``'s job. The dedup keys are released when the job ends: after its ``last``
         phase, or whenever it has failed or been cancelled before that."""
         started = time.monotonic()
+        self._project_accept(rec)
         try:
             self._check_cancel(rec)
             fn()
@@ -538,9 +602,57 @@ class JobManager:
                     self._release(rec)
                 with self._lock:
                     self._prune()
+                if last or rec.finished:
+                    self._project_finish(rec)
 
     def _fail(self, rec: JobRecord, code: ErrorCode, message: str) -> None:
         self._update(rec, status="error", error_code=code, error=message, message=message)
+
+    # ------------------------------------------------------------------ admin hooks (docs/features/admin)
+
+    def _project_accept(self, rec: JobRecord) -> None:
+        """Record the job in the admin history. Cloud jobs only; never raises (a failed write is buffered).
+        Nothing here looks at the account's restriction: a job the server accepted always runs (AC-19)."""
+        if self.projections is None or not rec.uid:
+            return
+        try:
+            self.projections.accept(AcceptedJob(
+                id=rec.id, uid=rec.uid, kind="vocals" if rec.kind == "vocals" else "analysis",
+                origin=rec.origin if rec.origin in ORIGINS else "file",  # type: ignore[arg-type]
+                accepted_at=datetime.fromtimestamp(rec.created_ts, timezone.utc), title=rec.title,
+                source_type="youtube" if (rec.source or {}).get("type") == "youtube" else "other",
+            ))
+        except Exception:
+            log.warning("admin history: could not record job %s", rec.id, exc_info=True)
+
+    def _project_finish(self, rec: JobRecord) -> None:
+        if self.projections is None or not rec.uid or not rec.finished:
+            return
+        try:
+            self.projections.finish(FinishedJob(
+                id=rec.id, status="done" if rec.status == "done" else "error", finished_at=datetime.now(timezone.utc),
+                error_code=rec.error_code, error_text=rec.error, track_id=rec.track_id,
+            ))
+        except Exception:
+            log.warning("admin history: could not settle job %s", rec.id, exc_info=True)
+
+    def _tombstoned(self, uid: Optional[str]) -> bool:
+        """Is the account being purged (ADR-0011)? A check that cannot be made says no: the purge repeats its erase
+        steps on its next run, so a result that slipped through is erased again."""
+        if self._is_tombstoned is None or not uid:
+            return False
+        try:
+            return bool(self._is_tombstoned(uid))
+        except Exception:
+            log.warning("could not check the tombstone of %s", uid, exc_info=True)
+            return False
+
+    def _discard_if_tombstoned(self, rec: JobRecord) -> None:
+        """Late-job discard: called right before a result is written, so the song of a purged account does not
+        come back."""
+        if self._tombstoned(rec.uid):
+            log.info("job %s: its account is being purged, the result is discarded", rec.id)
+            raise JobFailed("cancelled", "The account was removed")
 
     def _track_lock(self, track_id: str) -> threading.Lock:
         with self._lock:
@@ -558,7 +670,7 @@ class JobManager:
         media: RemoteMedia = self.fetcher.probe(url)
         self._check_cancel(rec)
         self._update(rec, title=media.title, thumbnail=media.thumbnail or rec.thumbnail, source=media.source())
-        if media.duration and media.duration > self.settings.max_duration_s:
+        if media.duration and media.duration > self.effective_limits().duration_s:
             raise JobFailed("too_long", self._too_long_message(media.duration))
         track_id = media.track_id
         self._claim(rec, self._ukey(f"track:{track_id}", rec.uid))
@@ -575,6 +687,7 @@ class JobManager:
                 work,
                 lambda f: self._update(rec, progress=self._scaled((0.02, DOWNLOAD_RANGE[1]), f)),
                 rec.cancel,
+                max_bytes=self.effective_limits().upload_bytes,   # the admin-set size, read for this job (AC-25)
             )
             self._check_cancel(rec)
             meta = {
@@ -603,6 +716,7 @@ class JobManager:
                 work,
                 lambda f: self._update(rec, progress=self._scaled((0.01, DOWNLOAD_RANGE[1]), f)),
                 rec.cancel,
+                max_bytes=self.effective_limits().upload_bytes,   # the admin-set size, read for this job (AC-25)
             )
             self._check_cancel(rec)
             span = {"start": clip.start, "end": clip.end}
@@ -658,7 +772,7 @@ class JobManager:
                     size=size,
                     progress=lambda f: self._update(rec, progress=self._scaled((0.01, DOWNLOAD_RANGE[1]), f)),
                     cancel=rec.cancel,
-                    max_bytes=self.settings.max_upload_bytes,
+                    max_bytes=self.effective_limits().upload_bytes,
                 )
             finally:
                 bucket.delete(path)  # the upload is consumed whatever happens next
@@ -707,7 +821,7 @@ class JobManager:
         probe = probe or probe_media(src)
         if not probe.has_audio:
             raise JobFailed("unsupported_format", "This media has no audio track")
-        if probe.duration and probe.duration > self.settings.max_duration_s:
+        if probe.duration and probe.duration > self.effective_limits().duration_s:
             raise JobFailed("too_long", self._too_long_message(probe.duration))
 
         staged = work / "track"
@@ -721,7 +835,7 @@ class JobManager:
         playback = probe_media(audio)
         if playback.duration is None or playback.duration < 0.5:
             raise JobFailed("unsupported_format", "The audio is empty or too short")
-        if playback.duration > self.settings.max_duration_s:
+        if playback.duration > self.effective_limits().duration_s:
             raise JobFailed("too_long", self._too_long_message(playback.duration))
 
         analysis = self._analyze(rec, audio)
@@ -739,6 +853,7 @@ class JobManager:
             "updatedAt": now,
             "analyzedAt": now,
             "options": rec.options,
+            "origin": rec.origin,
             "engine": analysis.engine,
             "audio": {"codec": "mp3", "bitrate": 192000, "sampleRate": 44100, "channels": 2,
                       "duration": playback.duration},
@@ -748,6 +863,7 @@ class JobManager:
             full_meta["duration"] = playback.duration
         with self._track_lock(track_id):
             self._check_cancel(rec)
+            self._discard_if_tombstoned(rec)
             installed = self.store.install_track(staged, track_id, full_meta, analysis)
         if not installed:
             log.info("job %s: track %s was completed by another job meanwhile", rec.id, track_id)
@@ -762,6 +878,7 @@ class JobManager:
         self._update(rec, message="Saving")
         with self._track_lock(track_id):
             self._check_cancel(rec)
+            self._discard_if_tombstoned(rec)
             self.store.save_reanalysis(track_id, analysis, rec.options)
         self._update(rec, status="done", progress=1.0, message="Done", track_id=track_id)
 
@@ -811,6 +928,7 @@ class JobManager:
             self._update(rec, message="Saving")
             with self._track_lock(track_id):
                 self._check_cancel(rec)
+                self._discard_if_tombstoned(rec)
                 self.store.install_vocals(track_id, stems, vocals)
             self._update(rec, status="done", progress=1.0, message="Done", track_id=track_id)
         finally:
@@ -854,7 +972,33 @@ class JobManager:
             raise JobFailed("analysis_failed", "Chord analysis returned an invalid result") from exc
 
     def _too_long_message(self, duration: float) -> str:
-        return too_long_message(duration, self.settings.max_duration_min)
+        return too_long_message(duration, self.effective_limits().duration_min)
+
+    def effective_limits(self) -> "SizeLimits":
+        """The duration and upload-size limits in force: the admin-set ones (RuntimeSettings, 30 s cache) when there
+        is an admission gate (cloud), else - or if they cannot be read - the deploy-time env values (AC-24/25)."""
+        if self.admission is not None:
+            try:
+                admin_set = self.admission.size_limits()
+                if admin_set is not None:
+                    return SizeLimits(*admin_set)
+            except Exception:  # noqa: BLE001 - unreadable settings: the env values still bound the input
+                log.warning("could not read the admin limits, using the env ones", exc_info=True)
+        return SizeLimits(self.settings.max_duration_min, self.settings.max_upload_mb)
+
+
+def _upload_origin(hint: Optional[str]) -> str:
+    """The client's hint for an uploaded file: "mic" for a recording, anything else (or none) is "file"."""
+    return "mic" if hint == "mic" else "file"
+
+
+def _meta_origin(meta: dict[str, Any]) -> str:
+    """Re-analysis and vocal transcription inherit the origin of their track (tracks that predate it: a YouTube
+    source is a link, anything else a file)."""
+    origin = meta.get("origin")
+    if origin in ORIGINS:
+        return origin
+    return "link" if (meta.get("source") or {}).get("type") == "youtube" else "file"
 
 
 def _file_sha1(path: Path) -> str:

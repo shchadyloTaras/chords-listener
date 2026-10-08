@@ -5,16 +5,13 @@ from __future__ import annotations
 
 import base64
 import errno
-import fnmatch
 import hashlib
 import json
 import logging
 import os
-import shutil
-import subprocess
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Optional
@@ -27,310 +24,37 @@ import app.jobs as jobs_module
 import app.quotas as quotas_module
 import app.storage as storage_module
 from app.auth import AuthError, FirebaseTokenVerifier, MediaSigner
+from app.admin import history, stats
 from app.firestore import IndexError_
 from app.main import create_app
 from app.models import AnalysisResult, Settings
 from app.publish import NullPublisher, Publisher
-from app.sources import NormalizedUrl, RemoteMedia, SourceError, _map_ytdlp_error, find_executable, youtube_thumbnail
+from app.sources import SourceError, _map_ytdlp_error, youtube_thumbnail
 from app.users import SMOKE_UID, current_uid, user_context
 
+from admin.fixtures import MemDb
+from cloud_fixtures import (  # noqa: F401  (cloud, make_cloud, media: fixtures)
+    BUCKET,
+    PAGES,
+    PROJECT,
+    SIGNING_KEY,
+    SMOKE_KEY,
+    VIDEO_ID,
+    FakeEngine,
+    FakeGcs,
+    FakeVerifier,
+    H,
+    assert_error,
+    cloud,
+    make_cloud,
+    media,
+    needs_ffmpeg,
+    upload,
+    upload_and_wait,
+    wait_job,
+)
+
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
-
-FFMPEG = find_executable("ffmpeg")
-needs_ffmpeg = pytest.mark.skipif(not FFMPEG or not find_executable("ffprobe"), reason="ffmpeg/ffprobe not installed")
-
-PROJECT = "build-chords-listener"
-BUCKET = "build-chords-listener.firebasestorage.app"
-PAGES = "https://shchadylotaras.github.io"
-SIGNING_KEY = "test-signing-key-0123456789abcdef"
-SMOKE_KEY = "test-smoke-key-0123456789abcdef"
-VIDEO_ID = "dQw4w9WgXcQ"
-ENGINE_INFO = {"name": "fake", "version": "1.0", "features": {}}
-
-
-# --------------------------------------------------------------------------- fixtures & fakes
-
-
-def _ffmpeg(*args: str) -> None:
-    subprocess.run([FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", *args], check=True)
-
-
-@pytest.fixture(scope="module")
-def media(tmp_path_factory: pytest.TempPathFactory) -> SimpleNamespace:
-    if not FFMPEG:
-        pytest.skip("ffmpeg not installed")
-    d = tmp_path_factory.mktemp("cloud-media")
-    files = {}
-    for name, freq, seconds in (("a", 261.63, 4), ("b", 329.63, 3), ("c", 392.0, 3)):
-        path = d / f"{name}.mp3"
-        _ffmpeg("-f", "lavfi", "-i", f"sine=frequency={freq}:duration={seconds}", "-c:a", "libmp3lame", "-b:a", "96k",
-                "-metadata", f"title=Tone {name.upper()}", str(path))
-        files[name] = path
-    return SimpleNamespace(**files)
-
-
-class FakeEngine:
-    def __init__(self) -> None:
-        self.calls: list[str] = []
-        self.gate: Optional[threading.Event] = None
-
-    def __call__(self, path: str, progress: Optional[Callable[[float, str], None]] = None, options: Optional[dict] = None) -> dict:
-        self.calls.append(path)
-        if self.gate is not None:
-            deadline = time.monotonic() + 10
-            while not self.gate.is_set() and time.monotonic() < deadline:
-                if progress:
-                    progress(0.5, "Waiting")
-                time.sleep(0.02)
-        out = subprocess.run(
-            [find_executable("ffprobe"), "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", path],
-            capture_output=True, text=True, check=True,
-        )
-        duration = float(out.stdout.strip())
-        half = duration / 2
-        return {
-            "duration": duration,
-            "tempo": 120.0,
-            "timeSignature": 4,
-            "beats": [0.0, 0.5, 1.0],
-            "downbeats": [0.0],
-            "chords": [
-                {"start": 0.0, "end": half, "label": "C", "root": "C", "quality": "maj", "confidence": 0.9},
-                {"start": half, "end": duration, "label": "Am", "root": "A", "quality": "min", "confidence": 0.8},
-            ],
-            "key": {"tonic": "C", "mode": "major", "name": "C", "confidence": 0.7},
-            "waveform": [0.5] * 100,
-            "engine": "fake 1.0",
-        }
-
-
-class FakeFetcher:
-    def __init__(self, audio: Path) -> None:
-        self.audio = audio
-        self.error: Optional[Exception] = None
-
-    def offline_key(self, url: NormalizedUrl) -> Optional[str]:
-        return f"youtube:{url.youtube_id}" if url.youtube_id else None
-
-    def probe(self, url: NormalizedUrl) -> RemoteMedia:
-        if self.error:
-            raise self.error
-        return RemoteMedia(url=url.url, extractor="youtube", media_id=url.youtube_id or "x", title="Fake Song",
-                           duration=4.0, thumbnail=youtube_thumbnail(url.youtube_id or "x"), video_id=url.youtube_id)
-
-    def download(self, media: RemoteMedia, dest_dir: Path, progress: Callable[[float], None], cancel: threading.Event) -> Path:
-        dest = dest_dir / "source.mp3"
-        shutil.copy(self.audio, dest)
-        return dest
-
-
-class FakeVerifier:
-    """Bearer tok-<uid> -> uid."""
-
-    def verify(self, token: str) -> str:
-        if token.startswith("tok-") and len(token) > 4:
-            return token[4:]
-        raise AuthError("Invalid token")
-
-
-class NotFound(Exception):  # same class name as google.api_core.exceptions.NotFound
-    pass
-
-
-class FakeBlob:
-    def __init__(self, gcs: FakeGcs, bucket: str, name: str) -> None:
-        self.gcs, self.bucket_name, self.name = gcs, bucket, name
-        self._staged: dict[str, Any] = {}
-
-    @property
-    def _obj(self) -> dict[str, Any]:
-        obj = self.gcs.objects.get((self.bucket_name, self.name))
-        if obj is None:
-            raise NotFound(self.name)
-        return obj
-
-    @property
-    def size(self) -> int:
-        return len(self._obj["data"])
-
-    @property
-    def content_type(self) -> str:
-        return self._staged.get("content_type", self._obj["content_type"])
-
-    @content_type.setter
-    def content_type(self, value: str) -> None:
-        self._staged["content_type"] = value
-
-    @property
-    def metadata(self) -> Optional[dict[str, str]]:
-        meta = self._staged.get("metadata", self._obj.get("metadata"))
-        return None if meta is None else dict(meta)
-
-    @metadata.setter
-    def metadata(self, value: Optional[dict[str, str]]) -> None:
-        self._staged["metadata"] = value
-
-    @property
-    def time_created(self) -> datetime:
-        return self._obj["created"]
-
-    def patch(self) -> None:
-        """Send the staged content type / metadata to the object (like the real client, nothing is stored before)."""
-        self._obj.update(self._staged)
-        self._staged.clear()
-        self.gcs.patched.append(self.name)
-
-    def upload_from_filename(self, filename: str, content_type: Optional[str] = None,
-                             if_generation_match: Optional[int] = None) -> None:
-        self.gcs.uploads.append({"name": self.name, "if_generation_match": if_generation_match})
-        self.gcs.put(self.name, Path(filename).read_bytes(), bucket=self.bucket_name,
-                     content_type=content_type or "application/octet-stream")
-
-    def reload(self) -> None:
-        """The fake always reads the stored object, so there is nothing to refresh."""
-
-    def download_to_file(self, fh: Any) -> None:
-        data = self._obj["data"]
-        for i in range(0, len(data), 4096):
-            fh.write(data[i:i + 4096])
-
-    def delete(self) -> None:
-        self._obj  # noqa: B018 - raises NotFound
-        del self.gcs.objects[(self.bucket_name, self.name)]
-        self.gcs.deleted.append(self.name)
-
-
-class FakeBucket:
-    def __init__(self, gcs: FakeGcs, name: str) -> None:
-        self.gcs, self.name = gcs, name
-
-    def blob(self, name: str) -> FakeBlob:
-        return FakeBlob(self.gcs, self.name, name)
-
-    def get_blob(self, name: str) -> Optional[FakeBlob]:
-        return FakeBlob(self.gcs, self.name, name) if (self.name, name) in self.gcs.objects else None
-
-
-class FakeGcs:
-    def __init__(self) -> None:
-        self.objects: dict[tuple[str, str], dict[str, Any]] = {}
-        self.deleted: list[str] = []
-        self.patched: list[str] = []
-        self.uploads: list[dict[str, Any]] = []  # upload_from_filename calls: the name and its generation precondition
-
-    def put(self, name: str, data: bytes, *, bucket: str = BUCKET, age_s: float = 0, content_type: str = "audio/mpeg",
-            metadata: Optional[dict[str, str]] = None) -> str:
-        created = datetime.now(timezone.utc) - timedelta(seconds=age_s)
-        self.objects[(bucket, name)] = {"data": data, "content_type": content_type, "created": created,
-                                        "metadata": metadata}
-        return name
-
-    def bucket(self, name: str) -> FakeBucket:
-        return FakeBucket(self, name)
-
-    def list_blobs(self, bucket: str, match_glob: Optional[str] = None) -> list[FakeBlob]:
-        return [FakeBlob(self, b, n) for (b, n) in list(self.objects)
-                if b == bucket and (match_glob is None or fnmatch.fnmatch(n, match_glob.replace("**", "*")))]
-
-
-class FakeIndex:
-    """Stands in for ``FirestoreIndex``: the documents by (uid, trackId). ``fail`` makes the next that many
-    upserts / deletes raise (``retryable`` tells whether a retry may help)."""
-
-    def __init__(self) -> None:
-        self.docs: dict[tuple[str, str], dict[str, Any]] = {}
-        self.fail, self.retryable, self.calls = 0, True, 0
-
-    def _check(self) -> None:
-        self.calls += 1
-        if self.fail:
-            self.fail -= 1
-            raise IndexError_("down", retryable=self.retryable)
-
-    def upsert(self, uid: str, tid: str, data: dict[str, Any]) -> None:
-        self._check()
-        self.docs[(uid, tid)] = data
-
-    def delete(self, uid: str, tid: str) -> None:
-        self._check()
-        self.docs.pop((uid, tid), None)
-
-    def exists(self, uid: str, tid: str) -> bool:
-        return (uid, tid) in self.docs
-
-
-@pytest.fixture
-def make_cloud(tmp_path: Path, media: SimpleNamespace):
-    clients: list[TestClient] = []
-
-    def factory(data_dir: Optional[Path] = None, *, verifier: Any = None, cloud: bool = True, **overrides: Any) -> SimpleNamespace:
-        clip_fetcher = overrides.pop("clip_fetcher", None)
-        defaults: dict[str, Any] = {
-            "auth": "firebase" if cloud else "off",
-            "signing_key": SIGNING_KEY,
-            "smoke_key": SMOKE_KEY,
-            "upload_bucket": BUCKET,
-            "scratch_dir": tmp_path / "scratch",
-            "allowed_hosts": ("testserver", "*.run.app", "localhost"),
-        }
-        defaults.update(overrides)
-        settings = Settings(data_dir=data_dir or tmp_path / "data", frontend_dist=tmp_path / "no-dist", **defaults)
-        engine, fetcher, gcs, index = FakeEngine(), FakeFetcher(media.a), FakeGcs(), FakeIndex()
-        app = create_app(
-            settings, analyzer=engine, fetcher=fetcher, clip_fetcher=clip_fetcher, engine_info_fn=lambda: ENGINE_INFO,
-            token_verifier=verifier or FakeVerifier(), gcs_client_factory=lambda: gcs,
-            publisher_factory=lambda store: Publisher(store, index, bucket=BUCKET, gcs_client_factory=lambda: gcs,
-                                                      backoff_s=0),
-        )
-        client = TestClient(app)
-        client.__enter__()
-        clients.append(client)
-        return SimpleNamespace(client=client, engine=engine, fetcher=fetcher, gcs=gcs, index=index,
-                               settings=settings, app=app)
-
-    yield factory
-    for c in clients:
-        c.__exit__(None, None, None)
-
-
-@pytest.fixture
-def cloud(make_cloud) -> SimpleNamespace:
-    return make_cloud()
-
-
-def H(uid: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer tok-{uid}"}
-
-
-def assert_error(res: Any, status: int, code: str) -> dict:
-    assert res.status_code == status, res.text
-    body = res.json()
-    assert body["code"] == code and body["detail"], body
-    return body
-
-
-def wait_job(client: TestClient, job_id: str, headers: dict[str, str], timeout: float = 30.0) -> dict:
-    deadline = time.monotonic() + timeout
-    job: dict = {}
-    while time.monotonic() < deadline:
-        job = client.get(f"/api/jobs/{job_id}", headers=headers).json()
-        if job.get("status") in ("done", "error"):
-            return job
-        time.sleep(0.03)
-    raise AssertionError(f"job {job_id} did not finish: {job}")
-
-
-def upload(client: TestClient, path: Path, headers: dict[str, str]) -> Any:
-    with open(path, "rb") as fh:
-        return client.post("/api/jobs/upload", files={"file": (path.name, fh, "audio/mpeg")}, headers=headers)
-
-
-def upload_and_wait(env: SimpleNamespace, path: Path, uid: str) -> tuple[dict, dict]:
-    res = upload(env.client, path, H(uid))
-    assert res.status_code == 201, res.text
-    job = wait_job(env.client, res.json()["id"], H(uid))
-    assert job["status"] == "done", job
-    return job, env.client.get(f"/api/tracks/{job['trackId']}", headers=H(uid)).json()
 
 
 # --------------------------------------------------------------------------- auth
@@ -1156,6 +880,182 @@ def test_storage_helpers_need_a_user_in_cloud_mode(cloud: SimpleNamespace) -> No
         assert store.track_dir("0123456789ab") == cloud.settings.data_dir / "users" / "alice" / "tracks" / "0123456789ab"
         assert store.upload_prefix() == "users/alice/uploads/"
         assert store.media_url("0123456789ab", "stems/vocals").startswith("/api/tracks/0123456789ab/stems/vocals?u=alice&")
+
+
+# --------------------------------------------------------------------------- admin projections (docs/features/admin, T12)
+
+
+@pytest.fixture
+def admin_cloud(make_cloud) -> SimpleNamespace:
+    """A cloud server whose admin database is the in-memory Firestore; ``jobs()`` / ``today()`` read what it holds."""
+    db = MemDb()
+    env = make_cloud(admin_db=db)
+    env.db = db
+    env.jobs = lambda: {k.split("/", 1)[1]: v for k, v in db.docs.items() if k.startswith("adminJobs/")}
+    env.today = lambda: db.docs.get(f"adminStats/{stats.utc_day(datetime.now(timezone.utc))}")
+    return env
+
+
+def settled(env: SimpleNamespace, expected: int = 1) -> list[dict[str, Any]]:
+    """The ``adminJobs`` records once ``expected`` of them exist and none is still running (the finish lands a
+    moment after the job reads as done)."""
+    deadline = time.monotonic() + 10
+    jobs: list[dict[str, Any]] = []
+    while time.monotonic() < deadline:
+        jobs = list(env.jobs().values())
+        if len(jobs) >= expected and all(j["status"] != "running" for j in jobs):
+            break
+        time.sleep(0.02)
+    assert len(jobs) == expected and all(j["status"] != "running" for j in jobs), jobs
+    return jobs
+
+
+def upload_with(client: TestClient, path: Path, uid: str, **fields: str) -> Any:
+    with open(path, "rb") as fh:
+        return client.post("/api/jobs/upload", files={"file": (path.name, fh, "audio/mpeg")}, data=fields or None,
+                           headers=H(uid))
+
+
+@needs_ffmpeg
+def test_accepted_job_is_recorded_and_counted_then_settled(admin_cloud: SimpleNamespace, media: SimpleNamespace) -> None:
+    env = admin_cloud
+    env.engine.gate = threading.Event()
+    res = upload_with(env.client, media.a, "alice")
+    assert res.status_code == 201, res.text
+    job_id = res.json()["id"]
+    deadline = time.monotonic() + 10
+    while not env.jobs() and time.monotonic() < deadline:  # the accept lands as the worker takes the job on
+        time.sleep(0.02)
+    rec = env.jobs()[job_id]
+    assert (rec["uid"], rec["kind"], rec["origin"], rec["status"], rec["service"]) == ("alice", "analysis", "file", "running", False)
+    day = env.today()
+    assert day["analyses"]["file"] == 1 and day["active"] == 1 and day["failed"] == 0
+
+    env.engine.gate.set()
+    done = wait_job(env.client, job_id, H("alice"))
+    assert done["status"] == "done"
+    (rec,) = settled(env)
+    assert rec["status"] == "done" and rec["trackId"] == done["trackId"] and rec["finishedAt"] is not None
+    assert env.today()["failed"] == 0
+
+
+@needs_ffmpeg
+def test_failed_job_records_its_reason_and_counts_a_failure(admin_cloud: SimpleNamespace) -> None:
+    env = admin_cloud
+    env.fetcher.error = SourceError("download_failed", "The video cannot be fetched")
+    res = env.client.post("/api/jobs", json={"url": f"https://youtu.be/{VIDEO_ID}"}, headers=H("alice"))
+    assert res.status_code == 201, res.text
+    assert wait_job(env.client, res.json()["id"], H("alice"))["status"] == "error"
+    (rec,) = settled(env)
+    assert (rec["origin"], rec["status"], rec["reason"]) == ("link", "error", "download_failed")
+    assert rec["errorText"] == "The video cannot be fetched"
+    day = env.today()
+    assert day["analyses"]["link"] == 1 and day["failed"] == 1 and day["failedByReason"] == {"download_failed": 1}
+
+
+@needs_ffmpeg
+def test_upload_origin_hint_is_file_or_mic_and_defaults_to_file(admin_cloud: SimpleNamespace, media: SimpleNamespace) -> None:
+    env = admin_cloud
+    for path, fields in ((media.a, {}), (media.b, {"origin": "mic"}), (media.c, {"origin": "bogus"})):
+        res = upload_with(env.client, path, "alice", **fields)
+        assert res.status_code == 201, res.text
+        wait_job(env.client, res.json()["id"], H("alice"))
+    assert sorted(j["origin"] for j in settled(env, 3)) == ["file", "file", "mic"]
+    assert env.today()["analyses"] == {"link": 0, "file": 2, "mic": 1, "tab": 0}
+
+
+@needs_ffmpeg
+def test_storage_origin_hint_and_tab_capture(admin_cloud: SimpleNamespace, media: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(jobs_module, "youtube_oembed", lambda vid: ("Tab song", "Someone"))
+    env = admin_cloud
+    bodies = [
+        (media.a, {}),                                                                     # absent -> file
+        (media.b, {"origin": "mic"}),                                                      # the hint
+        (media.c, {"origin": "mic", "source": {"type": "youtube", "videoId": VIDEO_ID}}),  # a tab capture ignores it
+    ]
+    for i, (audio, body) in enumerate(bodies):
+        path = env.gcs.put(f"users/alice/uploads/u{i}/rec.webm", Path(audio).read_bytes())
+        res = env.client.post("/api/jobs/storage", json={"path": path, **body}, headers=H("alice"))
+        assert res.status_code == 201, res.text
+        wait_job(env.client, res.json()["id"], H("alice"))
+    assert sorted(j["origin"] for j in settled(env, 3)) == ["file", "mic", "tab"]
+    bad = env.gcs.put("users/alice/uploads/u9/rec.webm", b"x" * 10)
+    res = env.client.post("/api/jobs/storage", json={"path": bad, "origin": "tab"}, headers=H("alice"))
+    assert res.status_code == 422  # only file | mic may be hinted
+
+
+@needs_ffmpeg
+def test_reanalysis_inherits_the_origin_of_its_track(admin_cloud: SimpleNamespace, media: SimpleNamespace) -> None:
+    env = admin_cloud
+    res = upload_with(env.client, media.a, "alice", origin="mic")
+    track_id = wait_job(env.client, res.json()["id"], H("alice"))["trackId"]
+    again = env.client.post(f"/api/tracks/{track_id}/reanalyze", headers=H("alice"))
+    assert wait_job(env.client, again.json()["id"], H("alice"))["status"] == "done"
+    assert [j["origin"] for j in settled(env, 2)] == ["mic", "mic"]
+
+
+@needs_ffmpeg
+def test_projection_failure_does_not_fail_the_job(admin_cloud: SimpleNamespace, media: SimpleNamespace) -> None:
+    env = admin_cloud
+
+    def refuse(*_a: Any, **_k: Any) -> Any:
+        raise IndexError_("Firestore is down", retryable=True)
+
+    env.db.run_transaction = refuse  # type: ignore[method-assign]
+    job, track = upload_and_wait(env, media.a, "alice")
+    assert job["status"] == "done" and track["id"] == job["trackId"]
+    assert env.jobs() == {}
+    pending = history.pending_path(env.settings.data_dir)
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:  # the finish is buffered a moment after the job reads as done
+        if pending.exists() and '"finish"' in pending.read_text("utf-8"):
+            break
+        time.sleep(0.02)
+    ops = json.loads(pending.read_text("utf-8"))["ops"]
+    assert [op["op"] for op in ops] == ["accept", "finish"]
+
+
+@needs_ffmpeg
+def test_jobs_accepted_before_a_restriction_complete_into_the_library(admin_cloud: SimpleNamespace, media: SimpleNamespace) -> None:
+    """AC-19: nothing in the lifecycle hooks looks at the restriction an administrator sets after the accept."""
+    env = admin_cloud
+    env.engine.gate = threading.Event()
+    res = upload_with(env.client, media.a, "alice")
+    job_id = res.json()["id"]
+    env.db.docs["adminAccounts/alice"] = {
+        "restriction": {"reason": "abuse", "since": "2026-10-08T00:00:00Z", "byAdminUid": "admin-1"},
+        "deletion": None, "personalLimit": None,
+    }
+    env.engine.gate.set()
+    done = wait_job(env.client, job_id, H("alice"))
+    assert done["status"] == "done", done
+    assert [t["id"] for t in env.client.get("/api/tracks", headers=H("alice")).json()] == [done["trackId"]]
+
+
+@needs_ffmpeg
+def test_late_job_result_for_a_tombstoned_user_is_discarded(admin_cloud: SimpleNamespace, media: SimpleNamespace) -> None:
+    """AC-22 / ADR-0011: a job that finishes after the purge began does not bring the song back."""
+    env = admin_cloud
+    env.engine.gate = threading.Event()
+    res = upload_with(env.client, media.a, "alice")
+    job_id = res.json()["id"]
+    env.db.docs["adminTombstones/alice"] = {
+        "status": "purging", "purgeAfter": "2026-10-01T00:00:00Z", "startedAt": "2026-10-08T00:00:00Z", "doneAt": None,
+    }
+    env.engine.gate.set()
+    done = wait_job(env.client, job_id, H("alice"))
+    assert done["status"] == "error" and done["trackId"] is None, done
+    assert env.client.get("/api/tracks", headers=H("alice")).json() == []
+    assert env.index.docs == {} and not list(env.settings.data_dir.glob("users/alice/tracks/*"))
+    assert list(env.settings.work_dir.iterdir()) == []
+
+
+@needs_ffmpeg
+def test_a_tombstone_of_one_user_does_not_touch_another(admin_cloud: SimpleNamespace, media: SimpleNamespace) -> None:
+    env = admin_cloud
+    env.db.docs["adminTombstones/alice"] = {"status": "done"}
+    job, _ = upload_and_wait(env, media.a, "bob")
+    assert job["status"] == "done"
 
 
 # --------------------------------------------------------------------------- YouTube fragments

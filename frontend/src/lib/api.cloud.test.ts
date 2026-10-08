@@ -37,9 +37,11 @@ vi.mock('./engine', () => ({
 }))
 
 import * as api from './api'
+import { errorText, errorTitle } from '../components/jobs/errorText'
 import { recentServerJobs } from './cloud/activity'
 import { createMemoryRepo, getLocalJob, setLocalRepo } from './local'
 import { useConnection, type ConnectionState } from './serverMode'
+import { SUPPORT_EMAIL } from '../i18n/cloud'
 
 const CLOUD = 'https://chords-api-abc123-ew.a.run.app'
 const fetchMock = vi.fn<typeof fetch>()
@@ -216,6 +218,58 @@ describe('cloud requests', () => {
   })
 })
 
+// Admission refusals the admin causes (AC-18, AC-26, AC-27, AC-28): the server answers with a code and no
+// quota is spent; the site words each one and still offers the browser (or the tab) instead.
+describe('admission refusals', () => {
+  const REFUSALS = [
+    ['cloud_restricted', 403],
+    ['analyses_paused', 503],
+    ['youtube_disabled', 503],
+    ['vocals_disabled', 503],
+  ] as const
+
+  it.each(REFUSALS)('keep %s from the server (status %i) instead of a generic network or http failure', async (code, status) => {
+    fetchMock.mockResolvedValueOnce(json({ detail: 'refused', code }, status))
+    await expect(api.createJob('https://soundcloud.com/a/b')).rejects.toMatchObject({ code, status })
+  })
+
+  it('keep vocals_disabled when a vocals transcription is refused', async () => {
+    fetchMock.mockResolvedValueOnce(json({ detail: 'off', code: 'vocals_disabled' }, 503))
+    await expect(api.reanalyzeTrack('0123456789ab')).rejects.toMatchObject({ code: 'vocals_disabled' })
+  })
+
+  it('explain a restricted account with the support address and the browser, never the admin’s reason', () => {
+    const uk = errorText('cloud_restricted', 'uk')
+    expect(errorTitle('cloud_restricted', 'uk')).toBe('Хмарний аналіз для вашого акаунта обмежено')
+    expect(uk).toContain(SUPPORT_EMAIL)
+    expect(uk).toContain('браузері')
+    expect(errorTitle('cloud_restricted', 'en')).toBe('Cloud analysis is restricted for your account')
+    expect(errorText('cloud_restricted', 'en')).toContain(SUPPORT_EMAIL)
+    expect(errorText('cloud_restricted', 'en')).toContain('browser')
+  })
+
+  it('show only our wording, not the server’s detail text', async () => {
+    fetchMock.mockResolvedValueOnce(json({ detail: 'abuse reported by ops', code: 'cloud_restricted' }, 403))
+    const err = await api.createJob('https://soundcloud.com/a/b').catch((e) => e)
+    expect(errorText(err.code, 'uk')).not.toContain('abuse')
+    expect(errorText(err.code, 'en')).not.toContain('abuse')
+  })
+
+  it.each([
+    ['analyses_paused', 'uk', 'на паузі', 'браузері'],
+    ['analyses_paused', 'en', 'paused', 'browser'],
+    ['youtube_disabled', 'uk', 'YouTube', 'вкладці'],
+    ['youtube_disabled', 'en', 'YouTube', 'tab'],
+    ['vocals_disabled', 'uk', 'тимчасово недоступна', 'акорди'],
+    ['vocals_disabled', 'en', 'unavailable', 'chords'],
+  ] as const)('word %s in %s (%s … %s)', (code, lang, a, b) => {
+    const text = errorText(code, lang)
+    expect(text).toContain(a)
+    expect(text.toLowerCase()).toContain(b.toLowerCase())
+    expect(errorTitle(code, lang)).not.toBe(errorTitle('internal', lang))
+  })
+})
+
 describe('cloud uploads', () => {
   it('go through Firebase Storage, then POST /jobs/storage with the recording’s link and offset', async () => {
     storage.uploadToStorage.mockImplementation(async (file: Blob, opts: { uid: string; onProgress?(l: number, t: number): void }) => {
@@ -243,6 +297,7 @@ describe('cloud uploads', () => {
       title: 'Song',
       source: { type: 'youtube', videoId: 'dQw4w9WgXcQ', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' },
       startOffset: 12.346,
+      origin: 'file',
     })
     expect(progress).toEqual([0.5, 1])
   })
@@ -250,6 +305,45 @@ describe('cloud uploads', () => {
   it('leave out empty fields of the storage job', () => {
     expect(api.storageJobBody('users/u/uploads/x/a.mp3')).toEqual({ path: 'users/u/uploads/x/a.mp3' })
     expect(api.storageJobBody('p', { title: '  ', startOffset: 0 })).toEqual({ path: 'p' })
+  })
+
+  it('say whether the file is a microphone recording or a file (origin hint, absent means file)', async () => {
+    storage.uploadToStorage.mockResolvedValue('users/uid42/uploads/abc/a.mp3')
+    fetchMock.mockImplementation(async () => json(job, 201))
+    await api.uploadFile(new File(['x'], 'a.mp3'))
+    await api.uploadFile(new File(['x'], 'rec.webm'), undefined, { meta: { title: 'Rec', origin: 'mic' } })
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).origin).toBe('file')
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body)).origin).toBe('mic')
+  })
+
+  it('send the origin hint with a direct multipart upload too', async () => {
+    storage.uploadToStorage.mockRejectedValue(new Error('rules'))
+    let sent: FormData | null = null
+    class FakeXhr {
+      status = 201
+      statusText = 'Created'
+      responseText = JSON.stringify(job)
+      responseType = ''
+      upload: { onprogress: unknown } = { onprogress: null }
+      onload: (() => void) | null = null
+      onerror: (() => void) | null = null
+      onabort: (() => void) | null = null
+      open() {}
+      setRequestHeader() {}
+      getResponseHeader() {
+        return 'application/json'
+      }
+      abort() {}
+      send(form: FormData) {
+        sent = form
+        queueMicrotask(() => this.onload?.())
+      }
+    }
+    vi.stubGlobal('XMLHttpRequest', FakeXhr)
+    await api.uploadFile(new File(['x'], 'rec.webm'), undefined, { meta: { origin: 'mic' } })
+    expect((sent as FormData | null)?.get('origin')).toBe('mic')
+    await api.uploadFile(new File(['x'], 'a.mp3'))
+    expect((sent as FormData | null)?.get('origin')).toBe('file')
   })
 
   it('need a signed-in user', async () => {

@@ -225,9 +225,11 @@ class FetchedClip:
 
 class ClipFetcher(Protocol):
     def fetch(
-        self, video_id: str, start: int, length: int, dest_dir: Path, progress: ProgressCb, cancel: threading.Event
+        self, video_id: str, start: int, length: int, dest_dir: Path, progress: ProgressCb, cancel: threading.Event,
+        max_bytes: Optional[int] = None,
     ) -> FetchedClip:
-        """Download ``length`` seconds of the video from ``start`` into dest_dir. Raises SourceError / Cancelled."""
+        """Download ``length`` seconds of the video from ``start`` into dest_dir, at most ``max_bytes`` (None: the
+        fetcher's own cap; a job passes the admin-set limit in force). Raises SourceError / Cancelled."""
 
 
 # --------------------------------------------------------------------------- remote media (yt-dlp)
@@ -267,8 +269,12 @@ class UrlFetcher(Protocol):
     def probe(self, url: NormalizedUrl) -> RemoteMedia:
         """Fetch metadata only. Raises SourceError."""
 
-    def download(self, media: RemoteMedia, dest_dir: Path, progress: ProgressCb, cancel: threading.Event) -> Path:
-        """Download the best audio into dest_dir and return the file path. Raises SourceError/Cancelled."""
+    def download(
+        self, media: RemoteMedia, dest_dir: Path, progress: ProgressCb, cancel: threading.Event,
+        max_bytes: Optional[int] = None,
+    ) -> Path:
+        """Download the best audio into dest_dir and return the file path, at most ``max_bytes`` (None: the fetcher's
+        own cap; a job passes the admin-set limit in force). Raises SourceError/Cancelled."""
 
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -369,7 +375,8 @@ def _strip_topic(name: Optional[str]) -> Optional[str]:
 
 
 class YtDlpFetcher:
-    """UrlFetcher backed by the yt-dlp Python API."""
+    """UrlFetcher backed by the yt-dlp Python API. ``max_bytes`` caps a download that is not given its own cap (the
+    jobs pass the limit in force with every download, so an admin's change applies without a restart)."""
 
     def __init__(self, max_bytes: int, proxy: Optional[str] = None, ffmpeg_proxy: Optional[str] = None) -> None:
         self.max_bytes = max_bytes
@@ -459,11 +466,15 @@ class YtDlpFetcher:
             info=info,
         )
 
-    def download(self, media: RemoteMedia, dest_dir: Path, progress: ProgressCb, cancel: threading.Event) -> Path:
-        return self._download(media, dest_dir, progress, cancel)
+    def download(
+        self, media: RemoteMedia, dest_dir: Path, progress: ProgressCb, cancel: threading.Event,
+        max_bytes: Optional[int] = None,
+    ) -> Path:
+        return self._download(media, dest_dir, progress, cancel, max_bytes)
 
     def download_clip(
-        self, media: RemoteMedia, start: float, end: float, dest_dir: Path, progress: ProgressCb, cancel: threading.Event
+        self, media: RemoteMedia, start: float, end: float, dest_dir: Path, progress: ProgressCb, cancel: threading.Event,
+        max_bytes: Optional[int] = None,
     ) -> Path:
         """Only ``[start, end]`` of the media: yt-dlp's download_ranges has ffmpeg fetch and cut just that part."""
         from yt_dlp.utils import download_range_func
@@ -478,12 +489,15 @@ class YtDlpFetcher:
         extra["external_downloader_args"] = {
             "ffmpeg_i": [*(["-http_proxy", self.ffmpeg_proxy] if self.ffmpeg_proxy else []), "-rw_timeout", "20000000"]
         }
-        return self._download(media, dest_dir, progress, cancel, **extra)
+        return self._download(media, dest_dir, progress, cancel, max_bytes, **extra)
 
     def _download(
-        self, media: RemoteMedia, dest_dir: Path, progress: ProgressCb, cancel: threading.Event, **extra: Any
+        self, media: RemoteMedia, dest_dir: Path, progress: ProgressCb, cancel: threading.Event,
+        max_bytes: Optional[int] = None, **extra: Any,
     ) -> Path:
         import yt_dlp
+
+        cap = self.max_bytes if max_bytes is None else max_bytes
 
         def hook(d: dict[str, Any]) -> None:
             if cancel.is_set():
@@ -503,7 +517,7 @@ class YtDlpFetcher:
             outtmpl={"default": "source.%(ext)s"},
             paths={"home": str(dest_dir), "temp": str(dest_dir)},
             progress_hooks=[hook],
-            max_filesize=self.max_bytes,
+            max_filesize=cap,
             overwrites=True,
             continuedl=False,
             writethumbnail=False,
@@ -543,7 +557,7 @@ class YtDlpFetcher:
             if path.is_file() and path.suffix not in (".part", ".ytdl", ".tmp") and path.stat().st_size > 0:
                 return path
         size = (result or {}).get("filesize") or (result or {}).get("filesize_approx")
-        if isinstance(size, (int, float)) and size > self.max_bytes:
+        if isinstance(size, (int, float)) and size > cap:
             raise SourceError("too_large", "The media file is too large")
         raise SourceError("download_failed", "The download produced no audio file")
 
@@ -555,7 +569,8 @@ class LocalClipFetcher:
         self.ytdlp = ytdlp
 
     def fetch(
-        self, video_id: str, start: int, length: int, dest_dir: Path, progress: ProgressCb, cancel: threading.Event
+        self, video_id: str, start: int, length: int, dest_dir: Path, progress: ProgressCb, cancel: threading.Event,
+        max_bytes: Optional[int] = None,
     ) -> FetchedClip:
         if not _YT_ID_RE.fullmatch(video_id or ""):
             raise SourceError("invalid_url", "This YouTube link doesn't point to a video")
@@ -563,7 +578,7 @@ class LocalClipFetcher:
         end = clip_end(start, length, media.duration)
         if cancel.is_set():
             raise Cancelled()
-        path = self.ytdlp.download_clip(media, float(start), end, dest_dir, progress, cancel)
+        path = self.ytdlp.download_clip(media, float(start), end, dest_dir, progress, cancel, max_bytes)
         return FetchedClip(
             path=path,
             title=media.title,
@@ -690,6 +705,7 @@ class ReceivedUpload:
     size: int
     sha1: str
     options: Optional[dict[str, Any]] = None
+    origin: str = "file"  # the client's hint: "file" | "mic" (anything else reads as "file")
 
     @property
     def work_dir(self) -> Path:
@@ -827,7 +843,10 @@ async def receive_upload(request: Request, dest_dir: Path, max_bytes: int) -> Re
         except ValueError:
             log.warning("ignoring malformed upload options: %.100s", fields["options"])
     filename = (result.get("filename") or "").replace("\\", "/").rsplit("/", 1)[-1].strip() or "audio"
-    return ReceivedUpload(path=out["path"], filename=filename[:255], size=out["size"], sha1=hasher.hexdigest(), options=options)
+    origin = "mic" if fields.get("origin", "").strip() == "mic" else "file"
+    return ReceivedUpload(
+        path=out["path"], filename=filename[:255], size=out["size"], sha1=hasher.hexdigest(), options=options, origin=origin
+    )
 
 
 def _too_large_message(max_bytes: int) -> str:

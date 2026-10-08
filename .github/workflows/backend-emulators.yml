@@ -1,0 +1,72 @@
+# Backend tests against the Firebase emulators (docs/features/admin, T50 / review S2-5; T59).
+# Without the emulators the ~170 integration and NFR tests (admin, admission, grant, firestore) are skipped, so a plain
+# `pytest` run proves much less than it seems. Here one `emulators:exec` starts Firestore + Auth, runs the whole backend
+# suite with FIRESTORE_EMULATOR_HOST / FIREBASE_AUTH_EMULATOR_HOST set, then the security-rules tests, and stops.
+# CHORDS_FAIL_ON_SKIP=1 makes a test skipped for want of ffmpeg or an emulator fail the job (backend/tests/strict_skips.py):
+# the admission tests (AC-16 among them) once skipped here without ffmpeg and the job stayed green.
+# firebase-tools is pinned to its major version, so a new major cannot change the emulators unnoticed.
+# Locally: README → "Розробка" / docs/CLOUD.md → "Running the emulator suites".
+name: Backend and rules tests (emulators)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-emulators-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  emulators:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FIREBASE_PROJECT: build-chords-listener
+      CHORDS_FAIL_ON_SKIP: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      # the Firestore emulator needs a JRE (firebase-tools asks for 21+)
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      # the tests that decode audio (admission, cloud, clips) need ffmpeg and ffprobe; the runner image has neither
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      # madmom is built from git (as in backend/Dockerfile): git and a compiler are on the runner image
+      - name: Install backend dependencies
+        working-directory: backend
+        run: uv sync --frozen
+
+      - name: Backend tests under the Firestore and Auth emulators
+        run: >
+          npx -y firebase-tools@15 emulators:exec --only auth,firestore --project "$FIREBASE_PROJECT"
+          "cd backend && uv run pytest -q -p no:cacheprovider"
+
+      - name: Firestore security-rules tests
+        run: >
+          npx -y firebase-tools@15 emulators:exec --only auth,firestore --project "$FIREBASE_PROJECT"
+          "node --test firestore.rules.test.mjs"
+
+      # storage.rules reads Firestore (a purged account's tombstone refuses its uploads), so Firestore runs too
+      - name: Storage security-rules tests
+        run: >
+          npx -y firebase-tools@15 emulators:exec --only auth,firestore,storage --project "$FIREBASE_PROJECT"
+          "node --test storage.rules.test.mjs"

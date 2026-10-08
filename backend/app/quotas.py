@@ -3,13 +3,21 @@
 Counters live in ``<data>/users/<uid>/quota.json`` (``{"day": "YYYY-MM-DD", "analyses": n, "vocals": m}``)
 so they survive restarts; the UTC day rolls them over. Local mode has no quotas.
 Exceeded → ``QuotaExceeded`` (HTTP 429, code ``quota_exceeded``).
+
+The limit in force for a user (docs/features/admin, AC-13, AC-13b, AC-15, AC-24) is ``effective_limits``: each field
+of the user's personal limit that is set wins over the default limit, until the personal limit's end date
+(inclusive, UTC); a field that is not set follows the default. The defaults and the personal limit come from a
+``LimitSource`` (the admission gate); without one the ``CHORDS_QUOTA_*`` values of ``Settings`` are the defaults and
+nobody has a personal limit. ``reset`` clears a user's counters under the same lock as ``consume``.
 """
 from __future__ import annotations
 
 import logging
+import re
 import threading
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Mapping, Optional, Protocol
 
 from .models import Settings
 from .sources import SourceError
@@ -20,6 +28,41 @@ log = logging.getLogger("chords.quotas")
 
 QUOTA_FILE = "quota.json"
 KINDS = ("analyses", "vocals")
+_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+@dataclass(frozen=True)
+class EffectiveLimits:
+    analyses: int   # per UTC day
+    vocals: int     # per UTC day
+    jobs: int       # running at once
+
+
+class LimitSource(Protocol):
+    """Where the limits come from when the admin console is on (``app.admission.Admission``)."""
+
+    def defaults(self) -> Any: ...   # anything with ``analyses`` / ``vocals`` / ``jobs``
+
+    def personal(self, uid: str) -> Optional[Mapping[str, Any]]: ...
+
+
+def _positive_int(value: Any) -> Optional[int]:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 1 else None
+
+
+def effective_limits(defaults: Any, personal: Any, today: str) -> EffectiveLimits:
+    """``defaults`` (anything with ``analyses`` / ``vocals`` / ``jobs``) with the set fields of ``personal`` laid over.
+    A personal limit past its ``until`` day (``YYYY-MM-DD``, the last day it applies, inclusive; UTC) or not
+    understood changes nothing; so does a field that is not a positive whole number."""
+    values = {name: int(getattr(defaults, name)) for name in ("analyses", "vocals", "jobs")}
+    if isinstance(personal, Mapping):
+        until = personal.get("until")
+        if until is None or (isinstance(until, str) and _DAY.fullmatch(until) and today <= until):
+            for name in values:
+                chosen = _positive_int(personal.get(name))
+                if chosen is not None:
+                    values[name] = chosen
+    return EffectiveLimits(**values)
 
 
 class QuotaExceeded(SourceError):
@@ -32,9 +75,10 @@ def utc_day() -> str:
 
 
 class Quotas:
-    def __init__(self, settings: Settings, store: TrackStore) -> None:
+    def __init__(self, settings: Settings, store: TrackStore, limits: Optional[LimitSource] = None) -> None:
         self.settings = settings
         self.store = store
+        self._limits = limits
         self._lock = threading.Lock()
         self._cache: dict[str, dict[str, Any]] = {}  # uid -> counters of the current day
 
@@ -42,8 +86,17 @@ class Quotas:
     def enabled(self) -> bool:
         return self.settings.cloud
 
-    def limit(self, kind: str) -> int:
-        return {"analyses": self.settings.quota_analyses, "vocals": self.settings.quota_vocals}[kind]
+    def effective_limits(self, uid: Optional[str] = None) -> EffectiveLimits:
+        """The limits in force for ``uid`` (default: the current user) today. Reads the gate's cached state, never
+        takes the counters' lock."""
+        uid = uid or current_uid()
+        if self._limits is None or not uid:
+            s = self.settings
+            return EffectiveLimits(s.quota_analyses, s.quota_vocals, s.max_user_jobs)
+        return effective_limits(self._limits.defaults(), self._limits.personal(uid), utc_day())
+
+    def limit(self, kind: str, uid: Optional[str] = None) -> int:
+        return getattr(self.effective_limits(uid), kind)
 
     def _load(self, uid: str) -> dict[str, Any]:
         day = utc_day()
@@ -65,13 +118,24 @@ class Quotas:
         return counters
 
     def usage(self, uid: Optional[str] = None) -> dict[str, Any]:
-        """``{"day": ..., "analyses": {"used", "limit"}, "vocals": {...}}`` for the current user."""
+        """``{"day": ..., "analyses": {"used", "limit"}, "vocals": {...}, "jobs": {"limit"}}`` for the current user.
+        Shown to the user: when the admin state cannot be read the env limits are shown rather than an error."""
         uid = uid or current_uid()
         if not self.enabled or not uid:
             return {}
+        try:
+            limits = self.effective_limits(uid)
+        except SourceError:
+            log.warning("usage of %s shown with the env limits: the admin state is unavailable", uid)
+            s = self.settings
+            limits = EffectiveLimits(s.quota_analyses, s.quota_vocals, s.max_user_jobs)
         with self._lock:
             counters = dict(self._load(uid))
-        return {"day": counters["day"], **{k: {"used": counters[k], "limit": self.limit(k)} for k in KINDS}}
+        return {
+            "day": counters["day"],
+            **{k: {"used": counters[k], "limit": getattr(limits, k)} for k in KINDS},
+            "jobs": {"limit": limits.jobs},
+        }
 
     def consume(self, kind: str, uid: Optional[str] = None) -> None:
         """Count one unit of ``kind`` ("analyses" | "vocals") for today, or raise QuotaExceeded."""
@@ -80,9 +144,9 @@ class Quotas:
         uid = uid or current_uid()
         if not self.enabled or not uid:
             return
+        limit = self.limit(kind, uid)  # outside the lock: the gate's cache may have to read the database
         with self._lock:
             counters = self._load(uid)
-            limit = self.limit(kind)
             if counters[kind] >= limit:
                 what = "song analyses" if kind == "analyses" else "vocal transcriptions"
                 raise QuotaExceeded(f"Daily limit reached: {limit} {what} per day. It resets at 00:00 UTC.")
@@ -99,8 +163,43 @@ class Quotas:
                 counters[kind] -= 1
                 self._save(uid, counters)
 
-    def _save(self, uid: str, counters: dict[str, Any]) -> None:
+    def admit(self, kind: str, running: int, uid: Optional[str] = None) -> None:
+        """One more job of ``kind`` ("analyses" | "vocals") for ``uid``, who has ``running`` jobs in progress: refused
+        (``QuotaExceeded``) when that is the user's limit of parallel jobs or today's ``kind`` quota is spent; else
+        counts it. Nothing is counted for a refusal."""
+        uid = uid or current_uid()
+        if not self.enabled or not uid:
+            return
+        jobs = self.effective_limits(uid).jobs
+        if running >= jobs:
+            raise QuotaExceeded(f"You already have {jobs} songs in progress - wait for one to finish")
+        self.consume(kind, uid)
+
+    def reset(self, uid: str, journal: Optional[Callable[[dict[str, int]], None]] = None) -> dict[str, int]:
+        """Admin reset (AC-12, AC-12b): today's counters of ``uid`` become zero; returns the values they had. Under
+        the lock ``consume`` takes, so an analysis admitted at the same moment is counted either before the reset
+        (and cleared with it) or after it (and kept), never lost. Jobs that are running are not touched.
+
+        ``journal(old)`` is called under the lock with the old counters, BEFORE anything changes (journal first,
+        ADR-0007): if it raises, the counters stay as they were. The new counters must reach ``quota.json`` too: if
+        that write fails ``OSError`` is raised and the counters (memory and file) stay as they were."""
+        with self._lock:
+            counters = self._load(uid)
+            old = {k: counters[k] for k in KINDS}
+            if journal is not None:
+                journal(dict(old))
+            fresh = {**counters, **{k: 0 for k in KINDS}}
+            self._save(uid, fresh, strict=True)
+            counters.update(fresh)
+            return old
+
+    def _save(self, uid: str, counters: dict[str, Any], *, strict: bool = False) -> None:
+        """Persist ``counters``. A failure is logged and the memory copy is kept (the user is held to the counters
+        either way) - unless ``strict``: then ``OSError`` is raised (the admin reset must not claim a change that
+        did not reach the file)."""
         try:
             write_json_atomic(self.store.user_dir(uid) / QUOTA_FILE, counters)
         except OSError:
+            if strict:
+                raise
             log.exception("could not persist the quota of %s (kept in memory)", uid)

@@ -7,6 +7,7 @@ import { ClipPage } from './components/clip/ClipPage'
 import { AppHeader } from './components/layout/AppHeader'
 import { DropOverlay } from './components/layout/DropOverlay'
 import { HealthBanner } from './components/layout/HealthBanner'
+import { ServiceBanner } from './components/layout/ServiceBanner'
 import { HomePage } from './components/layout/HomePage'
 import { NotFoundPage } from './components/layout/NotFoundPage'
 import { ShortcutsModal } from './components/layout/ShortcutsModal'
@@ -93,6 +94,7 @@ export default function App() {
       <div className="flex min-h-full flex-col">
         <AppHeader route={route} onHelp={openHelp} onGuide={guide ? openGuide : undefined} />
         {route.name !== 'demo' && <HealthBanner />}
+        {route.name !== 'demo' && <ServiceBanner />}
         <main className="flex flex-1 flex-col">
           <Page route={route} />
         </main>

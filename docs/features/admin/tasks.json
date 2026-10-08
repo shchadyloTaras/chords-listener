@@ -1,0 +1,1296 @@
+{
+  "slug": "admin",
+  "tasks": [
+    {
+      "id": "T01",
+      "title": "Extend the Firestore REST client with batched writes, transactions, queries and aggregations",
+      "layer": "infra",
+      "deps": [],
+      "acs": [
+        "AC-33"
+      ],
+      "dod": "Emulator tests prove an atomic multi-doc commit with exists/updateMask preconditions, a read-write transaction with retry, a structured query with filters+order+cursor, and count()/sum() aggregations.",
+      "files_hint": [
+        "backend/app/firestore.py",
+        "backend/tests/test_firestore.py"
+      ]
+    },
+    {
+      "id": "T02",
+      "title": "Add admin test fixtures, hostile strings and an emulator seeder",
+      "layer": "tests",
+      "deps": [
+        "T01"
+      ],
+      "acs": [
+        "AC-05"
+      ],
+      "dod": "Fixture factories from data-model §Test fixtures exist and a smoke test seeds 1 000 users × 20 tracks into the emulator.",
+      "files_hint": [
+        "backend/tests/admin/__init__.py",
+        "backend/tests/admin/fixtures.py",
+        "backend/tests/conftest.py"
+      ]
+    },
+    {
+      "id": "T03",
+      "title": "Register the 16 admin error codes and map admin validation errors to invalid_value",
+      "layer": "domain",
+      "deps": [],
+      "acs": [
+        "AC-14",
+        "AC-25",
+        "AC-30"
+      ],
+      "dod": "All 16 new codes exist in ErrorCode with their STATUS_BY_CODE status, and a 422 on any /api/admin/* route returns code invalid_value with details.fields per field.",
+      "files_hint": [
+        "backend/app/models.py",
+        "backend/app/main.py",
+        "backend/tests/test_api.py"
+      ]
+    },
+    {
+      "id": "T04",
+      "title": "Define admin request/response models with the spec'd validation ranges",
+      "layer": "domain",
+      "deps": [
+        "T03"
+      ],
+      "acs": [
+        "AC-04",
+        "AC-09",
+        "AC-14",
+        "AC-25",
+        "AC-30"
+      ],
+      "dod": "Pydantic models mirror every openapi.yaml schema and unit tests reject each out-of-range value named in AC-04/09/14/25/30.",
+      "files_hint": [
+        "backend/app/admin/__init__.py",
+        "backend/app/admin/models.py",
+        "backend/tests/admin/test_models.py"
+      ]
+    },
+    {
+      "id": "T05",
+      "title": "Promote migration 01 (tracks.sizeBytes backfill) and write sizeBytes on publish",
+      "layer": "migration",
+      "deps": [],
+      "acs": [
+        "AC-03"
+      ],
+      "dod": "The staged 01 pair is promoted, up then down runs cleanly on the emulator, and a newly published track carries sizeBytes.",
+      "files_hint": [
+        "docs/features/admin/migrations/01_add_track_size.up.py",
+        "docs/features/admin/migrations/01_add_track_size.down.py",
+        "docs/features/admin/migrations/_fsrest.py",
+        "backend/app/publish.py",
+        "backend/tests/test_publish.py"
+      ]
+    },
+    {
+      "id": "T06",
+      "title": "Promote migrations 02–03: composite indexes, TTL/exemptions and Firestore rules",
+      "layer": "migration",
+      "deps": [
+        "T05"
+      ],
+      "acs": [
+        "AC-07",
+        "AC-10",
+        "AC-11",
+        "AC-29",
+        "AC-31",
+        "AC-35"
+      ],
+      "dod": "firestore.indexes.json and firestore.rules carry the staged content, and rules tests prove publicStatus is publicly readable but not writable and every admin* collection is denied to clients.",
+      "files_hint": [
+        "docs/features/admin/migrations/02_admin_indexes_and_ttl.up.json",
+        "docs/features/admin/migrations/02_admin_indexes_and_ttl.down.json",
+        "docs/features/admin/migrations/03_admin_rules.up.rules",
+        "docs/features/admin/migrations/03_admin_rules.down.rules",
+        "firestore.rules.test.mjs"
+      ]
+    },
+    {
+      "id": "T07",
+      "title": "Promote migrations 04–05: seed runtime config + public status and build the email index",
+      "layer": "migration",
+      "deps": [
+        "T06"
+      ],
+      "acs": [
+        "AC-03",
+        "AC-24",
+        "AC-26",
+        "AC-29"
+      ],
+      "dod": "On the emulator, 04 creates adminConfig/settings from env and publicStatus/current with only banner/switches/updatedAt, 05 builds shards matching users, and both down scripts remove what they created.",
+      "files_hint": [
+        "docs/features/admin/migrations/04_seed_runtime_config.up.py",
+        "docs/features/admin/migrations/04_seed_runtime_config.down.py",
+        "docs/features/admin/migrations/05_build_email_index.up.py",
+        "docs/features/admin/migrations/05_build_email_index.down.py"
+      ]
+    },
+    {
+      "id": "T08",
+      "title": "Promote migration 06: restore pre-launch daily stats from tracks",
+      "layer": "migration",
+      "deps": [
+        "T07"
+      ],
+      "acs": [
+        "AC-08"
+      ],
+      "dod": "On the emulator, 06 with --before <day> writes state=restored days with restoredTracks by source.type only, never touches live/frozen days, and down removes only restored days.",
+      "files_hint": [
+        "docs/features/admin/migrations/06_restore_stats_from_tracks.up.py",
+        "docs/features/admin/migrations/06_restore_stats_from_tracks.down.py"
+      ]
+    },
+    {
+      "id": "T09",
+      "title": "Mount the admin router behind allowlist authz, 404-identical denial, probe rate limit and fresh-login check",
+      "layer": "app",
+      "deps": [
+        "T01",
+        "T03"
+      ],
+      "acs": [
+        "AC-31",
+        "AC-32",
+        "AC-34",
+        "AC-36"
+      ],
+      "dod": "A contract test iterates every /api/admin/* route and gets a response byte-identical to FastAPI's 404 for a non-admin, removing a uid from the allowlist denies within 60 s, the 31st non-admin request in 60 s is refused unprocessed, and auth_time older than 15 min yields reauth_required on fresh-login routes.",
+      "files_hint": [
+        "backend/app/admin/router.py",
+        "backend/app/admin/authz.py",
+        "backend/app/auth.py",
+        "backend/app/main.py",
+        "backend/tests/admin/test_authz.py"
+      ]
+    },
+    {
+      "id": "T10",
+      "title": "Implement the audit writer: atomic with Firestore changes, journal-first otherwise, before any view response",
+      "layer": "app",
+      "deps": [
+        "T01",
+        "T04"
+      ],
+      "acs": [
+        "AC-10b",
+        "AC-33",
+        "AC-33b"
+      ],
+      "dod": "Fault-injection tests show a failed audit write leaves state unchanged and returns not_applied/audit_unavailable, a journal-first effect failure writes a not_applied follow-up with refId, and validation errors are never journaled.",
+      "files_hint": [
+        "backend/app/admin/audit.py",
+        "backend/tests/admin/test_audit.py"
+      ]
+    },
+    {
+      "id": "T11",
+      "title": "Build job-history and daily-stats projections with the failure-reason map and the pending buffer",
+      "layer": "app",
+      "deps": [
+        "T01",
+        "T04"
+      ],
+      "acs": [
+        "AC-01",
+        "AC-07",
+        "AC-08"
+      ],
+      "dod": "Unit+emulator tests show accept/finish are idempotent on replay, a frozen day never changes, ErrorCode maps to the fixed 7-reason list, the smoke uid is flagged service and excluded, and a failed write lands in projections-pending.json and replays.",
+      "files_hint": [
+        "backend/app/admin/history.py",
+        "backend/app/admin/stats.py",
+        "backend/tests/admin/test_projections.py"
+      ]
+    },
+    {
+      "id": "T12",
+      "title": "Hook projections into JobManager, accept the origin hint and discard results for tombstoned uids",
+      "layer": "wiring",
+      "deps": [
+        "T11"
+      ],
+      "acs": [
+        "AC-01",
+        "AC-19",
+        "AC-22"
+      ],
+      "dod": "An API test shows an accepted job creates adminJobs + bumps today's counters, a finished job records the outcome, a job whose uid has a tombstone does not republish, and /api/jobs/upload and /api/jobs/storage accept origin file|mic (absent → file).",
+      "files_hint": [
+        "backend/app/jobs.py",
+        "backend/app/main.py",
+        "backend/tests/test_api.py",
+        "backend/tests/test_api_origins.py"
+      ]
+    },
+    {
+      "id": "T13",
+      "title": "Implement runtime settings: 30 s lazy cache, env fallback and the public-status mirror writer",
+      "layer": "app",
+      "deps": [
+        "T01",
+        "T04"
+      ],
+      "acs": [
+        "AC-24",
+        "AC-27",
+        "AC-29"
+      ],
+      "dod": "Tests show a settings change is seen by the server within 30 s without polling, env values are used only when the doc is absent, and the mirror writer refuses any field outside banner/switches/updatedAt and writes with an updateMask.",
+      "files_hint": [
+        "backend/app/admin/settings.py",
+        "backend/tests/admin/test_settings.py"
+      ]
+    },
+    {
+      "id": "T14",
+      "title": "Gate all five cloud-job entries through one admission check before Quotas.consume",
+      "layer": "app",
+      "deps": [
+        "T03",
+        "T12",
+        "T13"
+      ],
+      "acs": [
+        "AC-12b",
+        "AC-13",
+        "AC-13b",
+        "AC-15",
+        "AC-18",
+        "AC-24",
+        "AC-26",
+        "AC-27",
+        "AC-28"
+      ],
+      "dod": "API tests for each of the five entries show restriction/deletion → cloud_restricted, pause → analyses_paused, YouTube off → youtube_disabled, vocals off → vocals_disabled, each with quota unchanged, and the effective limit is personal-over-default per field until the inclusive end date.",
+      "files_hint": [
+        "backend/app/admission.py",
+        "backend/app/quotas.py",
+        "backend/app/jobs.py",
+        "backend/app/main.py",
+        "backend/tests/test_admission.py"
+      ]
+    },
+    {
+      "id": "T15",
+      "title": "Serve getOverview and getSettings",
+      "layer": "ports",
+      "deps": [
+        "T09",
+        "T11",
+        "T13"
+      ],
+      "acs": [
+        "AC-01"
+      ],
+      "dod": "getOverview returns today's UTC totals by origin, vocals, failed, active and new users, running jobs from JobManager and switch states within ≤ 200 emulator reads, and getSettings returns limits, switches and banner.",
+      "files_hint": [
+        "backend/app/admin/router.py",
+        "backend/tests/admin/test_api_overview.py"
+      ]
+    },
+    {
+      "id": "T16",
+      "title": "Implement the email-index directory: shard load, incremental catch-up and in-memory substring search",
+      "layer": "infra",
+      "deps": [
+        "T01"
+      ],
+      "acs": [
+        "AC-03",
+        "AC-04"
+      ],
+      "dod": "With 10 000 synthetic users, a case-insensitive substring search returns matches in p95 ≤ 1 s with ≤ 10 shard reads, users created after the cursor are found, and full_sync rebuilds shards ≤ 20 000 entries each.",
+      "files_hint": [
+        "backend/app/admin/directory.py",
+        "backend/tests/admin/test_directory.py"
+      ]
+    },
+    {
+      "id": "T17",
+      "title": "Serve searchUsers, getUserCard and listUserTracks with view journaling",
+      "layer": "ports",
+      "deps": [
+        "T05",
+        "T09",
+        "T10",
+        "T16"
+      ],
+      "acs": [
+        "AC-03",
+        "AC-04",
+        "AC-05",
+        "AC-06",
+        "AC-10b",
+        "AC-15",
+        "AC-16",
+        "AC-33b"
+      ],
+      "dod": "API tests show search < 3 chars → query_too_short without journaling, a search and a card view are journaled before the response (and withheld if journaling fails), the card shows quota vs effective limit, personal limit (incl. «завершився»), state and lastLoginAt, and track pages of 50 newest-first contain metadata only.",
+      "files_hint": [
+        "backend/app/admin/router.py",
+        "backend/tests/admin/test_api_users.py"
+      ]
+    },
+    {
+      "id": "T18",
+      "title": "Serve listJobHistory and getStats",
+      "layer": "ports",
+      "deps": [
+        "T09",
+        "T11"
+      ],
+      "acs": [
+        "AC-07",
+        "AC-08",
+        "AC-09"
+      ],
+      "dod": "Filtering by status=error and origin=link returns only such jobs with per-reason counts, a period > 90 days or end < start returns invalid_period, and a 30-day range returns one entry per day with restored days flagged.",
+      "files_hint": [
+        "backend/app/admin/router.py",
+        "backend/tests/admin/test_api_history.py"
+      ]
+    },
+    {
+      "id": "T19",
+      "title": "Serve listAudit with email resolution and «видалений» for purged users",
+      "layer": "ports",
+      "deps": [
+        "T09",
+        "T10",
+        "T16"
+      ],
+      "acs": [
+        "AC-10",
+        "AC-10b",
+        "AC-11"
+      ],
+      "dod": "The journal lists records newest-first filtered by admin/user/action with who/when/target/before/after, a tombstoned target is shown as deleted without email, and no route can update or delete a record.",
+      "files_hint": [
+        "backend/app/admin/router.py",
+        "backend/tests/admin/test_api_audit.py"
+      ]
+    },
+    {
+      "id": "T20",
+      "title": "Implement resetQuota and set/remove personal limit",
+      "layer": "app",
+      "deps": [
+        "T09",
+        "T10",
+        "T14"
+      ],
+      "acs": [
+        "AC-12",
+        "AC-12b",
+        "AC-13",
+        "AC-14",
+        "AC-15",
+        "AC-33"
+      ],
+      "dod": "A concurrency test shows reset and an analysis accepted in parallel end with usage = analyses accepted after the reset, reset keeps running jobs counted, the journal holds old counters, and personal-limit set/remove is one batched write with its audit record (remove when unset → not_set).",
+      "files_hint": [
+        "backend/app/admin/actions.py",
+        "backend/app/admin/router.py",
+        "backend/app/quotas.py",
+        "backend/tests/admin/test_actions_limits.py"
+      ]
+    },
+    {
+      "id": "T21",
+      "title": "Implement restrictUser and unrestrictUser as transactions with the audit record",
+      "layer": "app",
+      "deps": [
+        "T20"
+      ],
+      "acs": [
+        "AC-10b",
+        "AC-16",
+        "AC-17",
+        "AC-19",
+        "AC-23b",
+        "AC-33"
+      ],
+      "dod": "Tests show restrict stores reason/since/by with an applied audit record and new jobs are refused within 60 s, self-target → self_target journaled as rejected, restrict/unrestrict during a scheduled deletion → deletion_pending journaled as rejected, and unrestrict when not restricted → not_set.",
+      "files_hint": [
+        "backend/app/admin/actions.py",
+        "backend/app/admin/router.py",
+        "backend/tests/admin/test_actions_restriction.py"
+      ]
+    },
+    {
+      "id": "T22",
+      "title": "Implement scheduleDeletion and cancelDeletion with email confirm, fresh login and the 10-per-60-min cap",
+      "layer": "app",
+      "deps": [
+        "T21"
+      ],
+      "acs": [
+        "AC-17",
+        "AC-20",
+        "AC-21",
+        "AC-23",
+        "AC-34",
+        "AC-35"
+      ],
+      "dod": "Tests show schedule sets purgeAfter = +7 d and an immediate restriction while saving the prior restriction, a wrong email → confirm_email_mismatch (not journaled), stale login → reauth_required, the 11th schedule in 60 min across admins → deletion_rate_limit (journaled), and cancel restores the prior restriction exactly.",
+      "files_hint": [
+        "backend/app/admin/actions.py",
+        "backend/app/admin/router.py",
+        "backend/tests/admin/test_actions_deletion.py"
+      ]
+    },
+    {
+      "id": "T23",
+      "title": "Implement setDefaultLimits, setSwitch and setBanner with mirrored, audited batched writes",
+      "layer": "app",
+      "deps": [
+        "T09",
+        "T10",
+        "T13",
+        "T15"
+      ],
+      "acs": [
+        "AC-13b",
+        "AC-24",
+        "AC-25",
+        "AC-26",
+        "AC-27",
+        "AC-28",
+        "AC-29",
+        "AC-30",
+        "AC-34"
+      ],
+      "dod": "Tests show a limits change is one commit of config + audit (before/after) and applies within 60 s, a switch change writes config + publicStatus + audit in one commit, enabling the pause needs a fresh login, and an invalid limit or banner returns invalid_value with per-field details without journaling.",
+      "files_hint": [
+        "backend/app/admin/actions.py",
+        "backend/app/admin/router.py",
+        "backend/tests/admin/test_actions_settings.py"
+      ]
+    },
+    {
+      "id": "T24",
+      "title": "Add the OIDC-protected sweep endpoint: slot claim, buffer replay, stale jobs, reconcile+freeze, index sync",
+      "layer": "app",
+      "deps": [
+        "T09",
+        "T11",
+        "T16"
+      ],
+      "acs": [
+        "AC-08"
+      ],
+      "dod": "Tests show a non-scheduler token gets the 404 response, a second call for the same slot is a no-op, running jobs older than 2 h close as other, yesterday is recomputed from adminJobs (service excluded) and frozen only when no job is still running, and stats_mismatch is logged when totals differ.",
+      "files_hint": [
+        "backend/app/admin/sweeps.py",
+        "backend/app/auth.py",
+        "backend/app/main.py",
+        "backend/tests/admin/test_sweeps.py"
+      ]
+    },
+    {
+      "id": "T25",
+      "title": "Implement tombstone-first, idempotent account purge with anonymization",
+      "layer": "app",
+      "deps": [
+        "T10",
+        "T22",
+        "T24"
+      ],
+      "acs": [
+        "AC-11",
+        "AC-22"
+      ],
+      "dod": "An emulator test purges a seeded user and then finds no track, audio, quota, users doc, adminAccounts, index entry or Auth account, finds adminJobs with title/trackId null and audit with reasons and matching search queries redacted, frozen days unchanged, a re-run is a no-op, and a publish-pending retry for the uid is dropped.",
+      "files_hint": [
+        "backend/app/admin/deletion.py",
+        "backend/app/admin/sweeps.py",
+        "backend/app/publish.py",
+        "backend/tests/admin/test_purge.py"
+      ]
+    },
+    {
+      "id": "T26",
+      "title": "Add the owner grant script, Cloud Scheduler jobs, max-instances guard and alerting",
+      "layer": "wiring",
+      "deps": [
+        "T09",
+        "T24"
+      ],
+      "acs": [
+        "AC-22",
+        "AC-32"
+      ],
+      "dod": "admin_grant.py grant/revoke writes/deletes adminAllowlist/{uid} with the owner's ADC (tested against the emulator), deploy_cloud.sh fails if max-instances ≠ 1 and creates two scheduler jobs at 00:15/12:15 UTC with the scheduler SA, and log-based metrics + alerts for deletion_overdue and stats_mismatch are defined.",
+      "files_hint": [
+        "scripts/admin_grant.py",
+        "scripts/deploy_cloud.sh",
+        "backend/app/main.py",
+        "backend/tests/test_admin_grant.py"
+      ]
+    },
+    {
+      "id": "T27",
+      "title": "Create the admin.html entry with strict CSP, admin shell, sign-in and not-found for non-admins",
+      "layer": "ui",
+      "deps": [],
+      "acs": [
+        "AC-05",
+        "AC-31"
+      ],
+      "dod": "The Vite build emits admin.html with a CSP meta forbidding inline scripts and eval, the admin bundle contains no TF.js/model assets (CI check), an oxlint rule fails on dangerouslySetInnerHTML/innerHTML under src/admin, and a non-admin sees only NotFoundPage.",
+      "files_hint": [
+        "frontend/admin.html",
+        "frontend/vite.config.ts",
+        "frontend/src/admin/main.tsx",
+        "frontend/src/admin/AdminApp.tsx",
+        "frontend/src/admin/useAdminRoute.ts",
+        "frontend/.oxlintrc.json",
+        ".github/workflows/pages.yml"
+      ]
+    },
+    {
+      "id": "T28",
+      "title": "Build the admin API client with re-auth flow, error-code i18n and the no-polling refresh policy",
+      "layer": "ui",
+      "deps": [
+        "T27"
+      ],
+      "acs": [
+        "AC-02",
+        "AC-33",
+        "AC-33b",
+        "AC-34"
+      ],
+      "dod": "vitest shows each call sends the ID token, reauth_required triggers re-login then retries once, every new error code maps to uk/en text, and useAdminData refetches only on mount, on tab return after ≥ 60 s, or on Refresh — no timers.",
+      "files_hint": [
+        "frontend/src/lib/adminApi.ts",
+        "frontend/src/lib/adminApi.test.ts",
+        "frontend/src/admin/useAdminData.ts",
+        "frontend/src/types.ts",
+        "frontend/src/i18n/admin.ts",
+        "frontend/src/i18n/index.ts"
+      ]
+    },
+    {
+      "id": "T29",
+      "title": "Build the Overview screen",
+      "layer": "ui",
+      "deps": [
+        "T28"
+      ],
+      "acs": [
+        "AC-01",
+        "AC-02"
+      ],
+      "dod": "Component test renders today's totals by origin, vocals, failed, active/new users, running jobs and switch states from a fixture, with a Refresh button and no auto-refresh.",
+      "files_hint": [
+        "frontend/src/admin/screens/Overview.tsx",
+        "frontend/src/admin/screens/Overview.test.tsx"
+      ]
+    },
+    {
+      "id": "T30",
+      "title": "Build user search, the user card and paged songs (metadata only)",
+      "layer": "ui",
+      "deps": [
+        "T28"
+      ],
+      "acs": [
+        "AC-03",
+        "AC-04",
+        "AC-05",
+        "AC-06"
+      ],
+      "dod": "Component tests show < 3 chars prompts for 3 without a request, no matches shows «Нікого не знайдено», HOSTILE_STRINGS titles/emails/errors render verbatim as text with no script executed, songs page by 50 newest-first, and no open/play control exists.",
+      "files_hint": [
+        "frontend/src/admin/screens/Users.tsx",
+        "frontend/src/admin/screens/UserCard.tsx",
+        "frontend/src/admin/screens/UserCard.test.tsx"
+      ]
+    },
+    {
+      "id": "T31",
+      "title": "Build the job-history and statistics screens",
+      "layer": "ui",
+      "deps": [
+        "T28"
+      ],
+      "acs": [
+        "AC-07",
+        "AC-08",
+        "AC-09"
+      ],
+      "dod": "Component tests show filters by result/reason/origin/period with per-reason counts and plain-text error snippets, a period > 90 days or reversed is blocked with the explanation, and restored days are labelled «відновлено з пісень».",
+      "files_hint": [
+        "frontend/src/admin/screens/Jobs.tsx",
+        "frontend/src/admin/screens/Stats.tsx",
+        "frontend/src/admin/screens/JobsStats.test.tsx"
+      ]
+    },
+    {
+      "id": "T32",
+      "title": "Build the admin journal screen",
+      "layer": "ui",
+      "deps": [
+        "T28"
+      ],
+      "acs": [
+        "AC-10",
+        "AC-10b",
+        "AC-11"
+      ],
+      "dod": "Component test shows records newest-first with who/when/target/before→after and outcome, purged targets as «видалений» without email, filters by admin/user/action, and no edit/delete control.",
+      "files_hint": [
+        "frontend/src/admin/screens/Audit.tsx",
+        "frontend/src/admin/screens/Audit.test.tsx"
+      ]
+    },
+    {
+      "id": "T33",
+      "title": "Add quota reset and personal-limit actions to the user card",
+      "layer": "ui",
+      "deps": [
+        "T30"
+      ],
+      "acs": [
+        "AC-12",
+        "AC-13",
+        "AC-14",
+        "AC-15"
+      ],
+      "dod": "Component tests show reset updates the card counters, the limit form shows the allowed range next to each invalid field (from details.fields and client checks), and an expired limit shows «завершився».",
+      "files_hint": [
+        "frontend/src/admin/screens/UserCard.tsx",
+        "frontend/src/admin/actions/LimitForm.tsx",
+        "frontend/src/admin/actions/LimitForm.test.tsx"
+      ]
+    },
+    {
+      "id": "T34",
+      "title": "Add restriction and scheduled-deletion actions to the user card",
+      "layer": "ui",
+      "deps": [
+        "T33"
+      ],
+      "acs": [
+        "AC-16",
+        "AC-17",
+        "AC-20",
+        "AC-21",
+        "AC-23",
+        "AC-23b",
+        "AC-34",
+        "AC-35"
+      ],
+      "dod": "Component tests show restrict needs a reason, deletion requires typing the user's email, during a scheduled deletion only «Скасувати видалення» is offered, and self_target / deletion_rate_limit / reauth_required responses show their explanations (re-login then retry).",
+      "files_hint": [
+        "frontend/src/admin/screens/UserCard.tsx",
+        "frontend/src/admin/actions/RestrictionActions.tsx",
+        "frontend/src/admin/actions/DeletionDialog.tsx",
+        "frontend/src/admin/actions/RestrictionActions.test.tsx"
+      ]
+    },
+    {
+      "id": "T35",
+      "title": "Build the service-settings screen: default limits, switches and maintenance banner",
+      "layer": "ui",
+      "deps": [
+        "T28"
+      ],
+      "acs": [
+        "AC-24",
+        "AC-25",
+        "AC-26",
+        "AC-28",
+        "AC-29",
+        "AC-30",
+        "AC-34"
+      ],
+      "dod": "Component tests show the limits form explains allowed ranges and points to the pause switch on 0, switches toggle with re-auth only for enabling the pause, and the banner editor enforces 1–250 chars in uk and en.",
+      "files_hint": [
+        "frontend/src/admin/screens/Settings.tsx",
+        "frontend/src/admin/screens/Settings.test.tsx"
+      ]
+    },
+    {
+      "id": "T36",
+      "title": "Read the public service status on the site: maintenance banner and YouTube-off fallback",
+      "layer": "ui",
+      "deps": [],
+      "acs": [
+        "AC-27",
+        "AC-29"
+      ],
+      "dod": "vitest shows publicStatus/current is read from Firestore at most once per 5 min with zero calls to the cloud server, the banner renders in the UI language as plain text, and a YouTube link with youtubeEnabled=false offers «Слухати у вкладці» without a server request.",
+      "files_hint": [
+        "frontend/src/lib/serviceStatus.ts",
+        "frontend/src/lib/serviceStatus.test.ts",
+        "frontend/src/components/layout/ServiceBanner.tsx",
+        "frontend/src/components/input"
+      ]
+    },
+    {
+      "id": "T37",
+      "title": "Show admission refusals on the site and send the origin hint",
+      "layer": "ui",
+      "deps": [
+        "T36"
+      ],
+      "acs": [
+        "AC-18",
+        "AC-26",
+        "AC-27",
+        "AC-28"
+      ],
+      "dod": "vitest shows cloud_restricted shows «Хмарний аналіз для вашого акаунта обмежено» with the support email (no admin reason) and a browser-recognition offer, analyses_paused / youtube_disabled / vocals_disabled show their explanations, and uploads send origin file|mic.",
+      "files_hint": [
+        "frontend/src/lib/api.ts",
+        "frontend/src/i18n/cloud.ts",
+        "frontend/src/components/account/BrowserAnalysisNote.tsx",
+        "frontend/src/lib/api.cloud.test.ts"
+      ]
+    },
+    {
+      "id": "T38",
+      "title": "Add the NFR and security verification suite",
+      "layer": "tests",
+      "deps": [
+        "T02",
+        "T15",
+        "T17",
+        "T18",
+        "T19",
+        "T23",
+        "T29",
+        "T30",
+        "T36"
+      ],
+      "acs": [
+        "AC-02",
+        "AC-05",
+        "AC-24",
+        "AC-29",
+        "AC-32"
+      ],
+      "dod": "CI runs: ≤ 200 reads per admin endpoint on 1 000×20 and 1×1 000 fixtures, search p95 ≤ 1 s at 10 000 users, server-applied changes visible ≤ 60 s, an idle admin tab producing 0 server requests over 30 min (fake timers), and an e2e where hostile strings render as text and the CSP blocks an injected inline script.",
+      "files_hint": [
+        "backend/tests/admin/test_nfr.py",
+        "frontend/e2e/admin.spec.ts"
+      ]
+    },
+    {
+      "id": "T39",
+      "title": "Document the admin: CLOUD.md section, grant/revoke runbook, migration order and alerts",
+      "layer": "docs",
+      "deps": [
+        "T26"
+      ],
+      "acs": [
+        "AC-32"
+      ],
+      "dod": "docs/CLOUD.md describes granting/revoking admins, migration promotion order 01–06, the sweep schedule and the two alerts, and spec §8 OQs resolved at design are ticked.",
+      "files_hint": [
+        "docs/CLOUD.md",
+        "README.md",
+        "docs/features/admin/spec.md"
+      ]
+    },
+    {
+      "id": "T40",
+      "title": "Enforce the admin-set duration and upload limits at every check",
+      "layer": "app",
+      "deps": [
+        "T14",
+        "T23"
+      ],
+      "acs": [
+        "AC-24",
+        "AC-25"
+      ],
+      "dod": "Review S1-1. Tests show that after setDefaultLimits(maxDurationMin, maxUploadMb) a longer/larger input is refused with too_long / the upload-size error, and the deploy-time settings are the fallback only while adminConfig/settings is absent.",
+      "files_hint": [
+        "backend/app/jobs.py",
+        "backend/app/main.py",
+        "backend/app/admin/settings.py",
+        "backend/tests/admin/test_admission.py"
+      ]
+    },
+    {
+      "id": "T41",
+      "title": "Apply the YouTube switch to YouTube links only and filter the history by source type",
+      "layer": "app",
+      "deps": [
+        "T40"
+      ],
+      "acs": [
+        "AC-07",
+        "AC-27"
+      ],
+      "dod": "Review S1-2, S1-4. Tests show youtubeEnabled=off refuses YouTube links (incl. fragments) but not SoundCloud/direct URLs, and adminJobs gets a sourceType (youtube|other) that listJobHistory can filter by (openapi + data-model updated).",
+      "files_hint": [
+        "backend/app/admission.py",
+        "backend/app/jobs.py",
+        "backend/app/admin/history.py",
+        "backend/app/admin/router.py",
+        "contracts/openapi.yaml",
+        "frontend/src/admin/screens/Jobs.tsx"
+      ]
+    },
+    {
+      "id": "T42",
+      "title": "Mark quiet and pre-launch days as restored and omit empty days from /stats",
+      "layer": "app",
+      "deps": [
+        "T41"
+      ],
+      "acs": [
+        "AC-08"
+      ],
+      "dod": "Review S1-5, S1-9. Tests show a day with no live counters is shown as «відновлено з пісень» (not «триває»), and GET /stats omits the days the contract says are omitted.",
+      "files_hint": [
+        "backend/app/admin/router.py",
+        "frontend/src/admin/screens/Stats.tsx",
+        "backend/tests/admin/test_api_history.py"
+      ]
+    },
+    {
+      "id": "T43",
+      "title": "Make the list endpoints match the contract: before cursor, truncated, 422 cases",
+      "layer": "ports",
+      "deps": [
+        "T42"
+      ],
+      "acs": [
+        "AC-03",
+        "AC-06"
+      ],
+      "dod": "Review S1-10, S1-11, S1-12. Tests show listUserTracks honours `before`, truncated is true only when more than 50 match, and invalid track/audit cursors and q > 254 return the contract's error (or the contract lists the 422).",
+      "files_hint": [
+        "backend/app/admin/router.py",
+        "backend/app/admin/directory.py",
+        "contracts/openapi.yaml",
+        "backend/tests/admin/test_api_search_card.py"
+      ]
+    },
+    {
+      "id": "T44",
+      "title": "Seed the maintenance banner with valid non-empty texts",
+      "layer": "migration",
+      "deps": [
+        "T43"
+      ],
+      "acs": [
+        "AC-29"
+      ],
+      "dod": "Review S1-8. Tests show migration 04 builds the banner through validation (no model_construct bypass) so the seeded uk/en texts are non-empty and match the contract.",
+      "files_hint": [
+        "migrations/04_seed_runtime_config.up.py",
+        "backend/app/admin/settings.py"
+      ]
+    },
+    {
+      "id": "T45",
+      "title": "Harden account deletion: missing profile, purged-token reuse, buffered replay, cancel after purge",
+      "layer": "app",
+      "deps": [
+        "T44"
+      ],
+      "acs": [
+        "AC-16",
+        "AC-22",
+        "AC-23",
+        "AC-23b"
+      ],
+      "dod": "Review S2-1..S2-4. Tests show: admin actions work for a user whose users/{uid} is missing; a purged user's token cannot recreate the profile, uploads or email index entry; buffered history replay after purge does not restore the title; cancelDeletion reads the tombstone and refuses once purge began.",
+      "files_hint": [
+        "backend/app/admin/router.py",
+        "backend/app/admin/deletion.py",
+        "backend/app/admin/actions.py",
+        "backend/app/admin/history.py",
+        "backend/app/admin/directory.py",
+        "firestore.rules"
+      ]
+    },
+    {
+      "id": "T46",
+      "title": "Fix the admin UI: song flags, CSP hosts, frame guard, one language, shared classes",
+      "layer": "ui",
+      "deps": [
+        "T45"
+      ],
+      "acs": [
+        "AC-03",
+        "AC-06"
+      ],
+      "dod": "Review S1-6, S1-13, S2-8, S2-9, S2-10. Tests show the song list shows edited/vocals flags, admin.html connect-src lists only ADR-0002 hosts (or the ADR is amended), a framed admin page breaks out, the admin pins lang=uk (recorded in ADR-0002), and label/input classes come from one module.",
+      "files_hint": [
+        "frontend/src/admin/screens/UserCard.tsx",
+        "frontend/admin.html",
+        "frontend/src/admin/main.tsx",
+        "frontend/src/admin/useAdminRoute.ts",
+        "adr/0002-ship-admin-ui-as-separate-strict-csp-entry.md"
+      ]
+    },
+    {
+      "id": "T47",
+      "title": "Test the site's admission refusals and share one isAdminRefusal helper",
+      "layer": "ui",
+      "deps": [
+        "T46"
+      ],
+      "acs": [
+        "AC-18",
+        "AC-26",
+        "AC-28"
+      ],
+      "dod": "Review S1-7, S2-11. Tests show the toast action, the support email and the hidden vocals retry on refusal; the refusal-code list lives in one helper used by useJobs, LivePiano and ScoreView.",
+      "files_hint": [
+        "frontend/src/hooks/useJobs.ts",
+        "frontend/src/components/chords/piano/LivePiano.tsx",
+        "frontend/src/components/chords/ScoreView.tsx",
+        "frontend/src/lib/serviceStatus.ts"
+      ]
+    },
+    {
+      "id": "T48",
+      "title": "Stop leaking admin routes via OPTIONS and require a verified email in the grant script",
+      "layer": "app",
+      "deps": [
+        "T45"
+      ],
+      "acs": [
+        "AC-32"
+      ],
+      "dod": "Review S2-6, S2-7. Tests show an unauthenticated OPTIONS to admin/internal routes answers like an unknown route, and scripts/admin_grant.py refuses an account whose email is not verified.",
+      "files_hint": [
+        "backend/app/auth.py",
+        "backend/app/main.py",
+        "scripts/admin_grant.py"
+      ]
+    },
+    {
+      "id": "T49",
+      "title": "Consolidate the in-memory Firestore fakes and fix the AC-13b settings test",
+      "layer": "tests",
+      "deps": [
+        "T48"
+      ],
+      "acs": [
+        "AC-13b"
+      ],
+      "dod": "Review S2-13, S2-14. One MemDb in backend/tests/admin/fixtures.py replaces the 7 copies; test_actions_settings.py:150 seeds the right doc and asserts the behaviour.",
+      "files_hint": [
+        "backend/tests/admin/fixtures.py",
+        "backend/tests/test_cloud.py",
+        "backend/tests/test_vocals_api.py",
+        "backend/tests/admin/test_actions_settings.py"
+      ]
+    },
+    {
+      "id": "T50",
+      "title": "Run the emulator tests in CI and align the test plan with the levels used",
+      "layer": "tests",
+      "deps": [
+        "T49"
+      ],
+      "acs": [
+        "AC-36"
+      ],
+      "dod": "Review S2-5, S2-12. CI has a job running the backend emulator suite (README notes how to run it locally), and test-plan.md rows name the level each AC is actually tested at.",
+      "files_hint": [
+        "/.github/workflows/pages.yml",
+        "README.md",
+        "test-plan.md"
+      ]
+    },
+    {
+      "id": "T51",
+      "title": "Offer the tab on the fragment picker when the cloud refuses for the admin's reason",
+      "layer": "ui",
+      "deps": [
+        "T47"
+      ],
+      "acs": [
+        "AC-18",
+        "AC-26",
+        "AC-27"
+      ],
+      "dod": "Re-review fix 1. A ClipPage test shows that an admin refusal (youtube_disabled, cloud_restricted, analyses_paused) of a fragment opens «Слухати у вкладці» at the same start with the reason shown, and that a picker opened while the site already knows YouTube is off goes straight to the tab page without sending anything.",
+      "files_hint": [
+        "frontend/src/components/clip/ClipPage.tsx",
+        "frontend/src/components/clip/ClipPage.test.ts"
+      ]
+    },
+    {
+      "id": "T52",
+      "title": "Label quiet pre-launch days as restored and show the YouTube source in job rows",
+      "layer": "migration",
+      "deps": [
+        "T42",
+        "T41"
+      ],
+      "acs": [
+        "AC-07",
+        "AC-08"
+      ],
+      "dod": "Re-review fixes 2, 3. Emulator tests show migration 06 writes a restored day (zero counts) for every UTC day from the first track's day up to --before, idempotent, and .down removes them all; a Jobs test asserts on the row cell that a YouTube job reads «Посилання · YouTube».",
+      "files_hint": [
+        "docs/features/admin/migrations/06_restore_stats_from_tracks.up.py",
+        "backend/tests/admin/test_migration_06.py",
+        "frontend/src/admin/screens/Jobs.tsx",
+        "frontend/src/admin/screens/JobsStats.test.tsx"
+      ]
+    },
+    {
+      "id": "T53",
+      "title": "Pass the admin-set upload limit to the link and fragment downloads on every job",
+      "layer": "app",
+      "deps": [
+        "T40"
+      ],
+      "acs": [
+        "AC-24",
+        "AC-25"
+      ],
+      "dod": "Re-review fix 4 (review S1-1). Tests show a link download and a fragment download get the admin-set byte cap, not the deploy-time one, and a link longer than the admin-set duration fails too_long.",
+      "files_hint": [
+        "backend/app/sources.py",
+        "backend/app/fetch_client.py",
+        "backend/app/jobs.py",
+        "backend/tests/test_admission.py"
+      ]
+    },
+    {
+      "id": "T54",
+      "title": "Keep GET /settings and GET /jobs inside the contract",
+      "layer": "ports",
+      "deps": [
+        "T43",
+        "T44"
+      ],
+      "acs": [
+        "AC-07",
+        "AC-29"
+      ],
+      "dod": "Re-review fixes 5, 6. With publicStatus/current absent or invalid, GET /api/admin/settings returns the same validated placeholder banner migration 04 seeds (one shared constant); openapi.yaml declares both invalid_period and invalid_value for 422 on /api/admin/jobs, checked by a contract test.",
+      "files_hint": [
+        "backend/app/admin/settings.py",
+        "docs/features/admin/migrations/04_seed_runtime_config.up.py",
+        "docs/features/admin/contracts/openapi.yaml",
+        "backend/tests/admin/test_settings.py",
+        "backend/tests/admin/test_api_history.py"
+      ]
+    },
+    {
+      "id": "T55",
+      "title": "Resolve accounts through Firebase Auth and let only the purge delete a profile",
+      "layer": "app",
+      "deps": [
+        "T45"
+      ],
+      "acs": [
+        "AC-16",
+        "AC-20",
+        "AC-21",
+        "AC-23"
+      ],
+      "dod": "Re-review fix 8 (review S2-1). firestore.rules (and staged migration 03) refuse every client delete of users/{uid}; rules tests prove it. With no profile, no index entry and no admin state, an account Firebase Auth knows is found by the card, restricted, and scheduleDeletion confirms against its Auth e-mail.",
+      "files_hint": [
+        "firestore.rules",
+        "docs/features/admin/migrations/03_admin_rules.up.rules",
+        "firestore.rules.test.mjs",
+        "backend/app/admin/identity.py",
+        "backend/app/admin/router.py",
+        "backend/app/admin/actions.py",
+        "backend/tests/admin/test_actions_deletion.py"
+      ]
+    },
+    {
+      "id": "T56",
+      "title": "Refuse uploads from a purged account in the Storage rules",
+      "layer": "wiring",
+      "deps": [
+        "T45"
+      ],
+      "acs": [
+        "AC-22"
+      ],
+      "dod": "Re-review fix 9 (review S2-2). storage.rules refuses an upload create when adminTombstones/{uid} exists; a storage rules test (Auth + Firestore + Storage emulators) proves it; docs/CLOUD.md names the cross-service role the deploy needs.",
+      "files_hint": [
+        "storage.rules",
+        "storage.rules.test.mjs",
+        "docs/CLOUD.md"
+      ]
+    },
+    {
+      "id": "T57",
+      "title": "Close the small security and infra gaps: sweep 401, grant fails closed, tombstone reads, admin preflight",
+      "layer": "app",
+      "deps": [
+        "T48"
+      ],
+      "acs": [
+        "AC-31",
+        "AC-32"
+      ],
+      "dod": "Re-review fixes 10-13. Tests show an unverified call to /api/internal/sweep answers exactly like any other unauthenticated /api/* call; the grant script refuses an email whose verified flag is missing or false (offline and on the Auth emulator); a catch-up reads tombstones only for the uids it folds in; a real CORS preflight to /api/admin/* gets 200 from an allowed origin and 400 from another.",
+      "files_hint": [
+        "backend/app/auth.py",
+        "scripts/admin_grant.py",
+        "backend/app/admin/directory.py",
+        "backend/app/firestore.py",
+        "backend/tests/test_admin_grant.py",
+        "backend/tests/admin/test_directory.py"
+      ]
+    },
+    {
+      "id": "T58",
+      "title": "Guard the query shapes the in-memory Firestore serves",
+      "layer": "tests",
+      "deps": [
+        "T49"
+      ],
+      "acs": [
+        "AC-33"
+      ],
+      "dod": "Re-review fix 7. MemDb has an opt-in guard that refuses a query or aggregation whose filters and order no index in firestore.indexes.json (or a single-field index) can serve, and a sum where only count() is expected; the sweep and audit tests run with it on.",
+      "files_hint": [
+        "backend/tests/admin/fixtures.py",
+        "backend/tests/admin/test_fixtures.py",
+        "backend/tests/admin/test_sweeps.py",
+        "backend/tests/admin/test_api_audit.py"
+      ]
+    },
+    {
+      "id": "T59",
+      "title": "Make the emulator CI job install ffmpeg, fail on unexpected skips and pin firebase-tools",
+      "layer": "tests",
+      "deps": [
+        "T50"
+      ],
+      "acs": [
+        "AC-16",
+        "AC-36"
+      ],
+      "dod": "Re-review fix 14. The workflow installs ffmpeg, runs the storage rules tests too, and sets a flag under which a test skipped for want of ffmpeg or an emulator fails the run (tested); firebase-tools is pinned to the current major in the workflow, README and docs/CLOUD.md.",
+      "files_hint": [
+        ".github/workflows/backend-emulators.yml",
+        "backend/tests/conftest.py",
+        "README.md",
+        "docs/CLOUD.md"
+      ]
+    },
+    {
+      "id": "T60",
+      "title": "Show the shared dialogs and pages of the admin page in Ukrainian",
+      "layer": "ui",
+      "deps": [
+        "T46"
+      ],
+      "acs": [
+        "AC-31",
+        "AC-34"
+      ],
+      "dod": "Re-review fix 15. The admin entry pins the interface language to Ukrainian without writing the site's stored choice; a test with the site language set to English shows the admin's re-login dialog and not-found page in Ukrainian; ADR-0002 records it.",
+      "files_hint": [
+        "frontend/src/i18n/index.ts",
+        "frontend/src/admin/main.tsx",
+        "frontend/src/admin/AdminApp.test.ts",
+        "docs/features/admin/adr/0002-ship-admin-ui-as-separate-strict-csp-entry.md"
+      ]
+    },
+    {
+      "id": "T61",
+      "title": "Use one label per status and switch across the admin screens",
+      "layer": "ui",
+      "deps": [
+        "T52"
+      ],
+      "acs": [
+        "AC-01",
+        "AC-07",
+        "AC-08"
+      ],
+      "dod": "Re-review fix 16. STATUS_LABEL and SWITCH_LABEL live in screens/labels.ts and are the only wording; the stats headers come from ORIGIN_LABEL / KIND_LABEL; the journal filters use the shared fieldClass; tests assert the shared words.",
+      "files_hint": [
+        "frontend/src/admin/screens/labels.ts",
+        "frontend/src/admin/screens/Jobs.tsx",
+        "frontend/src/admin/screens/UserCard.tsx",
+        "frontend/src/admin/screens/Overview.tsx",
+        "frontend/src/admin/screens/Settings.tsx",
+        "frontend/src/admin/screens/Stats.tsx",
+        "frontend/src/admin/screens/Audit.tsx"
+      ]
+    },
+    {
+      "id": "T62",
+      "title": "Make the test plan say what is tested where today",
+      "layer": "docs",
+      "deps": [
+        "T50"
+      ],
+      "acs": [
+        "AC-16",
+        "AC-24",
+        "AC-26",
+        "AC-32"
+      ],
+      "dod": "Re-review fix 17. test-plan.md cites the AC-26 in-browser offer test and drops it from the known gaps, names only CI jobs that exist, and the AC-16/24/32 rows and the e2e rows name the level and clock actually used.",
+      "files_hint": [
+        "docs/features/admin/test-plan.md"
+      ]
+    },
+    {
+      "id": "T63",
+      "title": "Import the shared test fakes from fixtures, never from another test module",
+      "layer": "tests",
+      "deps": [
+        "T58"
+      ],
+      "acs": [
+        "AC-33"
+      ],
+      "dod": "Re-review fix 18. FakeDb, FakeVerifier, Clock, settings_for, ENGINE_INFO, H, never and the world fixture live in tests/admin/fixtures.py or a conftest.py; no test module imports from another test module (a test checks it).",
+      "files_hint": [
+        "backend/tests/admin/fixtures.py",
+        "backend/tests/admin/conftest.py",
+        "backend/tests/admin/test_actions_deletion.py",
+        "backend/tests/admin/test_api_overview.py",
+        "backend/tests/admin/test_settings.py"
+      ]
+    },
+    {
+      "id": "T64",
+      "title": "Check every query against an index in its declared direction, and keep the 18 ascending/descending indexes in step",
+      "layer": "tests",
+      "deps": [
+        "T58"
+      ],
+      "acs": [
+        "AC-07",
+        "AC-08",
+        "AC-10",
+        "AC-22",
+        "AC-35"
+      ],
+      "dod": "Production evidence (2026-10-08, the 9 descending composites deployed and READY, read-only probes): Firestore reads a composite index only in its declared direction — `uid == x` orderBy acceptedAt ASC, the way back of the job history and the journal, the stale-jobs sweep (`status == running AND acceptedAt < t`, no orderBy: implicit ASC), per-reason `count()` over a period and the deletion cap's `count()` all answered FAILED_PRECONDITION; the wake sweep failed after 'replay'. Fixed by an ascending twin of every composite (aa023f4, 18 indexes, deployed by the coordinator). Here: MemDb's IndexGuard reads an index only in its declared direction (merged indexes each in the query's direction; a range without an order and an aggregation sort ascending), with tests; the guard is on in the sweep, purge, deletion/action, job-history (back-paging, counts over a period) and journal (back-paging) tests, which pass on the 18 and fail on the old 9; staged migration 02, the index-count rules test and the index docs follow the 18.",
+      "files_hint": [
+        "backend/tests/admin/fixtures.py",
+        "firestore.indexes.json",
+        "docs/features/admin/migrations/02_admin_indexes_and_ttl.up.json",
+        "firestore.rules.test.mjs",
+        "docs/features/admin/data-model.md",
+        "backend/tests/admin/test_purge.py",
+        "backend/tests/admin/test_api_history.py"
+      ]
+    }
+  ]
+}

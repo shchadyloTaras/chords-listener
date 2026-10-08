@@ -28,6 +28,24 @@ ErrorCode = Literal[
     "download_blocked",  # YouTube refused the server (bot check / sign-in wall / 403)
     "unavailable",  # feature not installed / not enabled on this server (501)
     "cancelled",  # the user cancelled the job (POST /api/jobs/{id}/cancel)
+    # admin, admission gate (docs/features/admin)
+    "cloud_restricted",  # the account is restricted by an administrator (403)
+    "analyses_paused",  # new analyses are paused for everyone (503)
+    "youtube_disabled",  # link analyses are switched off (503)
+    "vocals_disabled",  # vocal transcription is switched off (503)
+    # admin, /api/admin/*
+    "query_too_short",  # user search text shorter than 3 characters (422)
+    "invalid_period",  # statistics period ends before it starts or is over 90 days (422)
+    "invalid_value",  # a form field is out of range; per-field messages in `details.fields` (422)
+    "confirm_email_mismatch",  # the typed e-mail does not match the account being deleted (422)
+    "reauth_required",  # the admin's sign-in is too old for a destructive action (401)
+    "self_target",  # an administrator cannot restrict or delete their own account (409)
+    "deletion_pending",  # the account is already scheduled for deletion (409)
+    "not_scheduled",  # no deletion is scheduled to cancel (409)
+    "not_set",  # no personal limit / restriction is set to remove (409)
+    "deletion_rate_limit",  # too many deletions scheduled in a row (429)
+    "not_applied",  # the change or its journal record could not be written; nothing changed (503)
+    "audit_unavailable",  # the view could not be journaled, so no data is returned (503)
 ]
 SourceType = Literal["youtube", "url", "file"]
 
@@ -398,6 +416,7 @@ class StorageJobRequest(CamelModel):
     source: Optional[StorageSource] = None
     start_offset: Optional[float] = Field(default=None, ge=0, le=24 * 3600)
     options: Optional[AnalysisOptions] = None
+    origin: Literal["file", "mic"] = "file"  # client hint for the admin job history (a YouTube source is a tab capture)
 
 
 class QuotaUsage(CamelModel):

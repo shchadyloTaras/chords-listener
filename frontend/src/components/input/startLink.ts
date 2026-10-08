@@ -1,6 +1,7 @@
 import { ApiError, toApiError } from '../../lib/api'
 import { useConnection, whenSettled } from '../../lib/serverMode'
 import { submitUrl } from '../../hooks/useJobs'
+import { youtubeEnabled } from '../../lib/serviceStatus'
 import { navigate, paths } from '../../hooks/useRoute'
 import type { Job } from '../../types'
 import { linkTarget, parseYouTubeId, parseYouTubeStart } from './url'
@@ -27,7 +28,9 @@ export async function startLink(url: string, signal?: AbortSignal): Promise<Link
   // still choosing the API (auth restoring, first probe): wait, so a cloud user is not treated as a guest
   const conn = useConnection.getState().status === 'checking' ? await whenSettled() : useConnection.getState()
   if (signal?.aborted) throw new ApiError('Request aborted', 'aborted')
-  const target = linkTarget(url, conn)
+  const linked = linkTarget(url, conn)
+  // the admin switched the cloud's YouTube download off (AC-27): the fragment picker would only be refused
+  const target = linked === 'clip' && !youtubeEnabled() ? 'capture' : linked
   const videoId = parseYouTubeId(url)
   if (target === 'clip' && videoId) {
     navigate(paths.clip(videoId, { t: parseYouTubeStart(url) }))

@@ -2,6 +2,13 @@ import type { Dict } from './index'
 
 // The online service (docs/CLOUD.md): cloud errors, the three ways in, "listen in the tab", "listen",
 // moving browser tracks to the cloud. Keys prefixed "cloud.". Ukrainian first (default, informal "ти").
+
+/**
+ * Where a user whose cloud analysis the administrator restricted can write (docs/features/admin spec §8: the
+ * owner's address, since the README names none). The administrator's reason is never shown to the user.
+ */
+export const SUPPORT_EMAIL = 'marketing@eleken.co'
+
 export const cloud: Dict = {
   uk: {
     // errors of the cloud API
@@ -13,6 +20,17 @@ export const cloud: Dict = {
     'cloud.errorTitle.download_blocked': 'YouTube не віддав відео',
     'cloud.error.download_blocked':
       'YouTube не дозволив серверу завантажити це відео. Послухай його у вкладці — сайт розпізнає акорди, поки відео грає.',
+    'cloud.errorTitle.cloud_restricted': 'Хмарний аналіз для вашого акаунта обмежено',
+    'cloud.error.cloud_restricted': `Нові хмарні аналізи й транскрипції вокалу для твого акаунта зараз недоступні. Бібліотека працює як раніше: пісні, акорди й нотатки на місці. Розпізнати пісню можна в браузері, а запитання — на ${SUPPORT_EMAIL}.`,
+    'cloud.errorTitle.analyses_paused': 'Хмарний аналіз на паузі',
+    'cloud.error.analyses_paused':
+      'Нові хмарні аналізи тимчасово на паузі — спробуй трохи згодом. Задачі, що вже йдуть, завершаться, а пісню можна розпізнати просто зараз у браузері.',
+    'cloud.errorTitle.youtube_disabled': 'YouTube у хмарі вимкнено',
+    'cloud.error.youtube_disabled':
+      'Сервер зараз не завантажує відео з YouTube. Послухай його у вкладці — сайт розпізнає акорди, поки відео грає.',
+    'cloud.errorTitle.vocals_disabled': 'Вокал тимчасово недоступний',
+    'cloud.error.vocals_disabled':
+      'Транскрипція вокалу тимчасово недоступна. Акорди й бібліотека працюють як звичайно — спробуй вокал трохи згодом.',
     'cloud.errorTitle.unavailable': 'Недоступно',
     'cloud.error.unavailable': 'Ця можливість зараз недоступна в хмарі.',
     'cloud.errorTitle.network': 'Немає звʼязку з хмарою',
@@ -167,6 +185,17 @@ export const cloud: Dict = {
     'cloud.errorTitle.download_blocked': 'YouTube refused the download',
     'cloud.error.download_blocked':
       'YouTube did not let the server download this video. Listen to it in the tab instead — the site detects the chords while the video plays.',
+    'cloud.errorTitle.cloud_restricted': 'Cloud analysis is restricted for your account',
+    'cloud.error.cloud_restricted': `New cloud analyses and vocal transcriptions are not available for your account right now. Your library works as before: songs, chords and notes are all there. You can analyze a song in the browser, and write to ${SUPPORT_EMAIL} with any questions.`,
+    'cloud.errorTitle.analyses_paused': 'Cloud analysis is paused',
+    'cloud.error.analyses_paused':
+      'New cloud analyses are paused for now — try again a bit later. Jobs already running will finish, and you can analyze the song in the browser right now.',
+    'cloud.errorTitle.youtube_disabled': 'YouTube is off in the cloud',
+    'cloud.error.youtube_disabled':
+      'The server is not downloading YouTube videos right now. Listen to the video in the tab instead — the site detects the chords while it plays.',
+    'cloud.errorTitle.vocals_disabled': 'Vocals are temporarily unavailable',
+    'cloud.error.vocals_disabled':
+      'Vocal transcription is temporarily unavailable. Chords and the library work as usual — try the vocals again a bit later.',
     'cloud.errorTitle.unavailable': 'Unavailable',
     'cloud.error.unavailable': 'This feature is not available in the cloud right now.',
     'cloud.errorTitle.network': 'Cannot reach the cloud',

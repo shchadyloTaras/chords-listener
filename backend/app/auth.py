@@ -6,7 +6,11 @@
 * ``MediaSigner`` signs media URLs (``?u=<uid>&exp=<unix>&sig=<hmac>``) so ``<audio>`` elements can
   load them without an Authorization header.
 * ``AuthMiddleware`` guards ``/api/*``: Bearer token, signed media URL or ``X-Smoke-Key``;
-  sets the request's uid (``app.users``). Missing/invalid credentials → 401 ``unauthorized``.
+  sets the request's uid (``app.users``) and its sign-in time (``auth_time_of``).
+  Missing/invalid credentials → 401 ``unauthorized``.
+* ``SchedulerTokenVerifier`` checks the Google OIDC token Cloud Scheduler sends to ``POST /api/internal/sweep``
+  (issuer, audience, the scheduler's service-account email). ``AuthMiddleware`` lets only that token reach the
+  path; anyone else gets the 404 an unknown address gets (docs/features/admin T24).
 """
 from __future__ import annotations
 
@@ -25,6 +29,7 @@ from typing import Any, Callable, Optional
 from urllib.parse import parse_qs, quote
 
 from starlette.concurrency import run_in_threadpool
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -33,6 +38,7 @@ from .users import SMOKE_UID, reset_current_uid, set_current_uid, valid_uid
 log = logging.getLogger("chords.auth")
 
 GOOGLE_CERTS_URL = "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com"
+AUTH_TIME_KEY = "auth_time"  # request.scope["state"] key set by AuthMiddleware
 CertsFetcher = Callable[[], tuple[dict[str, str], float]]  # -> ({kid: PEM}, max-age seconds)
 
 
@@ -65,6 +71,35 @@ def fetch_google_certs(url: str = GOOGLE_CERTS_URL, timeout: float = 10.0) -> tu
     return {str(k): str(v) for k, v in certs.items()}, float(match.group(1)) if match else 3600.0
 
 
+class _CertCache:
+    """Google's public certificates, refetched per their Cache-Control (clamped to 1 min .. 6 h); a failed refresh
+    keeps serving the previous ones for another minute, a failed first fetch is ``AuthUnavailable``."""
+
+    def __init__(self, fetch: CertsFetcher, clock: Callable[[], float]) -> None:
+        self._fetch = fetch
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._certs: dict[str, str] = {}
+        self._expiry = 0.0
+
+    def current(self) -> dict[str, str]:
+        with self._lock:
+            now = self._clock()
+            if self._certs and now < self._expiry:
+                return self._certs
+            try:
+                certs, max_age = self._fetch()
+            except Exception as exc:
+                if self._certs:  # stale-if-error: keep serving with the previous certificates
+                    log.warning("refreshing Google certificates failed (%s); using cached ones", exc)
+                    self._expiry = now + 60
+                    return self._certs
+                raise AuthUnavailable("Sign-in can't be verified right now") from exc
+            self._certs = certs
+            self._expiry = now + min(max(max_age, 60.0), 6 * 3600.0)
+            return certs
+
+
 class FirebaseTokenVerifier:
     """Verifies Firebase Auth ID tokens for ``project_id`` and returns the uid (``sub``)."""
 
@@ -80,33 +115,21 @@ class FirebaseTokenVerifier:
         self.project_id = project_id
         self.issuer = f"https://securetoken.google.com/{project_id}"
         self.emulator = bool(os.environ.get("FIREBASE_AUTH_EMULATOR_HOST")) if emulator is None else emulator
-        self._fetch = fetch_certs or fetch_google_certs
         self._clock = clock
         self._leeway = leeway_s
-        self._lock = threading.Lock()
-        self._certs: dict[str, str] = {}
-        self._certs_expiry = 0.0
+        self._cache = _CertCache(fetch_certs or fetch_google_certs, clock)
         if self.emulator:
             log.warning("FIREBASE_AUTH_EMULATOR_HOST is set: unsigned Auth-emulator tokens are accepted")
 
     def _current_certs(self) -> dict[str, str]:
-        with self._lock:
-            now = self._clock()
-            if self._certs and now < self._certs_expiry:
-                return self._certs
-            try:
-                certs, max_age = self._fetch()
-            except Exception as exc:
-                if self._certs:  # stale-if-error: keep serving with the previous certificates
-                    log.warning("refreshing Google certificates failed (%s); using cached ones", exc)
-                    self._certs_expiry = now + 60
-                    return self._certs
-                raise AuthUnavailable("Sign-in can't be verified right now") from exc
-            self._certs = certs
-            self._certs_expiry = now + min(max(max_age, 60.0), 6 * 3600.0)
-            return certs
+        return self._cache.current()
 
     def verify(self, token: str) -> str:
+        return self.verify_claims(token)[0]
+
+    def verify_claims(self, token: str) -> tuple[str, Optional[float]]:
+        """``(uid, auth_time)``: ``auth_time`` is when the user last typed their credentials (Unix seconds),
+        None when the token carries none."""
         token = (token or "").strip()
         parts = token.split(".")
         if len(parts) != 3 or not parts[0] or not parts[1]:
@@ -134,7 +157,9 @@ class FirebaseTokenVerifier:
                 raise AuthError(f"Invalid token: {exc}") from exc
         else:
             raise AuthError("Unsupported token")
-        return self._check_claims(claims)
+        uid = self._check_claims(claims)
+        auth_time = claims.get("auth_time")
+        return uid, float(auth_time) if isinstance(auth_time, (int, float)) and not isinstance(auth_time, bool) else None
 
     def _check_times(self, claims: dict[str, Any]) -> None:
         now = self._clock()
@@ -156,6 +181,67 @@ class FirebaseTokenVerifier:
         if not isinstance(uid, str) or not valid_uid(uid):
             raise AuthError("Token has no usable subject")
         return uid
+
+
+GOOGLE_OIDC_CERTS_URL = "https://www.googleapis.com/oauth2/v1/certs"  # PEM certificates by kid (OIDC id tokens)
+GOOGLE_OIDC_ISSUERS = ("https://accounts.google.com", "accounts.google.com")
+SWEEP_PATH = "/api/internal/sweep"
+SCHEDULER_KEY = "scheduler"  # request.scope["state"] key set by AuthMiddleware for a verified scheduler call
+
+
+def fetch_google_oidc_certs() -> tuple[dict[str, str], float]:
+    return fetch_google_certs(GOOGLE_OIDC_CERTS_URL)
+
+
+class SchedulerTokenVerifier:
+    """Verifies the Google OIDC ID token Cloud Scheduler sends with ``POST /api/internal/sweep``: Google's
+    signature, the issuer, the audience (this service's URL), a verified email equal to the scheduler's
+    service account (``chords-scheduler@...``) and the usual time claims. ``verify`` returns that email.
+    With no audience or no email configured nothing is accepted."""
+
+    def __init__(
+        self,
+        audience: str,
+        email: str,
+        *,
+        fetch_certs: Optional[CertsFetcher] = None,
+        clock: Callable[[], float] = time.time,
+        leeway_s: float = 60.0,
+    ) -> None:
+        self.audience = audience.strip()
+        self.email = email.strip().lower()
+        self._leeway = leeway_s
+        self._cache = _CertCache(fetch_certs or fetch_google_oidc_certs, clock)
+
+    def verify(self, token: str) -> str:
+        if not self.audience or not self.email:
+            raise AuthError("The scheduler is not configured")
+        token = (token or "").strip()
+        parts = token.split(".")
+        if len(parts) != 3 or not parts[0] or not parts[1]:
+            raise AuthError("Malformed token")
+        from google.auth import exceptions as gexc
+        from google.auth import jwt
+
+        try:
+            claims = jwt.decode(
+                token, certs=self._cache.current(), audience=self.audience, clock_skew_in_seconds=int(self._leeway)
+            )
+        except (ValueError, gexc.GoogleAuthError) as exc:
+            raise AuthError(f"Invalid token: {exc}") from exc
+        if claims.get("iss") not in GOOGLE_OIDC_ISSUERS:
+            raise AuthError("Token has the wrong issuer")
+        email = claims.get("email")
+        if claims.get("email_verified") is not True or not isinstance(email, str) or email.lower() != self.email:
+            raise AuthError("Token is not from the scheduler account")
+        return self.email
+
+
+def auth_time_of(request: Request) -> Optional[float]:
+    """When the signed-in user last entered their credentials (the ID token's ``auth_time``, Unix seconds);
+    None for a signed media URL, the smoke key, a verifier that doesn't report it, or outside ``AuthMiddleware``."""
+    value = request.scope.get("state", {}).get(AUTH_TIME_KEY)
+    return float(value) if isinstance(value, (int, float)) else None
 
 
 # --------------------------------------------------------------------------- signed media URLs
@@ -208,10 +294,18 @@ PUBLIC_PATHS = frozenset({"/api/health", "/api/openapi.json"})
 PUBLIC_PREFIXES = ("/api/docs",)
 
 
+def unknown_endpoint_response(path: str) -> JSONResponse:
+    """The answer for an address no route serves (what ``main.py`` gives an unknown ``/api/...`` path)."""
+    return JSONResponse({"detail": f"Unknown API endpoint: {path}", "code": "not_found"}, status_code=404)
+
+
 def _unauthorized(detail: str) -> JSONResponse:
     return JSONResponse(
         {"detail": detail, "code": "unauthorized"}, status_code=401, headers={"WWW-Authenticate": "Bearer"}
     )
+
+
+HIDDEN_PREFIXES = ("/api/admin/", "/api/internal/")
 
 
 class AuthMiddleware:
@@ -224,10 +318,12 @@ class AuthMiddleware:
         verifier: Any,
         signer: Optional[MediaSigner],
         smoke_key: str = "",
+        scheduler_verifier: Any = None,
     ) -> None:
         self.app = app
         self.verifier = verifier
         self.signer = signer
+        self.scheduler_verifier = scheduler_verifier
         self.smoke_key = smoke_key.encode("utf-8") if len(smoke_key) >= 16 else b""
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -239,40 +335,76 @@ class AuthMiddleware:
             or path.startswith(PUBLIC_PREFIXES)
             or scope.get("method") == "OPTIONS"
         ):
+            if scope["type"] == "http" and scope.get("method") == "OPTIONS" and path.startswith(HIDDEN_PREFIXES):
+                # an unauthenticated OPTIONS must not tell these routes from an unknown one (review S2-6)
+                unknown = f"/api/{path.split('/')[2]}/zzz-unknown"
+                scope = {**scope, "path": unknown, "raw_path": unknown.encode()}
             await self.app(scope, receive, send)
             return
+        if path == SWEEP_PATH and await self._scheduler_call(scope, receive, send):
+            return
         try:
-            uid = await self._authenticate(scope, path)
+            uid, auth_time = await self._authenticate(scope, path)
         except AuthError as exc:
             await _unauthorized(str(exc) or "Sign in to use the cloud server")(scope, receive, send)
             return
         except AuthUnavailable as exc:
             await JSONResponse({"detail": str(exc), "code": "internal"}, status_code=503)(scope, receive, send)
             return
+        if path == SWEEP_PATH:  # signed in, but not the scheduler: for them the address does not exist
+            await unknown_endpoint_response(path)(scope, receive, send)
+            return
+        scope.setdefault("state", {})[AUTH_TIME_KEY] = auth_time
         token = set_current_uid(uid)
         try:
             await self.app(scope, receive, send)
         finally:
             reset_current_uid(token)
 
-    async def _authenticate(self, scope: Scope, path: str) -> str:
+    async def _scheduler_call(self, scope: Scope, receive: Receive, send: Send) -> bool:
+        """``/api/internal/sweep`` runs for the scheduler's OIDC token and nothing else, without a user: True when
+        this call was the scheduler's (and is answered). Every other caller is answered exactly as at an unknown
+        ``/api`` address (False: the caller goes on): the 401 without a valid sign-in, the 404 with one (review)."""
+        headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
+        scheme, _, token = headers.get("authorization", "").partition(" ")
+        verified = False
+        if self.scheduler_verifier is not None and scheme.lower() == "bearer" and token.strip():
+            try:
+                await run_in_threadpool(self.scheduler_verifier.verify, token.strip())
+                verified = True
+            except AuthError:
+                pass
+            except AuthUnavailable as exc:  # Google's certificates are unreachable: let the scheduler retry
+                await JSONResponse({"detail": str(exc), "code": "internal"}, status_code=503)(scope, receive, send)
+                return True
+        if not verified:
+            return False
+        scope.setdefault("state", {})[SCHEDULER_KEY] = True
+        await self.app(scope, receive, send)
+        return True
+
+    async def _authenticate(self, scope: Scope, path: str) -> tuple[str, Optional[float]]:
         headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
         if scope.get("method") in ("GET", "HEAD") and self.signer is not None and MEDIA_PATH_RE.fullmatch(path):
             query = parse_qs(scope.get("query_string", b"").decode("latin-1"))
             if "sig" in query:
                 uid, exp, sig = (query.get(k, [""])[0] for k in ("u", "exp", "sig"))
                 if self.signer.verify(uid, path, exp, sig):
-                    return uid
+                    return uid, None
                 raise AuthError("This media link has expired or is invalid - reload the track")
         authorization = headers.get("authorization", "")
         if authorization:
             scheme, _, token = authorization.partition(" ")
             if scheme.lower() != "bearer" or not token.strip():
                 raise AuthError("Use an Authorization: Bearer <Firebase ID token> header")
-            return await run_in_threadpool(self.verifier.verify, token.strip())
+            verify_claims = getattr(self.verifier, "verify_claims", None)
+            if verify_claims is not None:
+                return await run_in_threadpool(verify_claims, token.strip())
+            return await run_in_threadpool(self.verifier.verify, token.strip()), None
         smoke = headers.get("x-smoke-key", "")
         if smoke:
             if self.smoke_key and hmac.compare_digest(smoke.encode("utf-8"), self.smoke_key):
-                return SMOKE_UID
+                return SMOKE_UID, None
             raise AuthError("Invalid smoke-test key")
         raise AuthError("Sign in to use the cloud server")
+

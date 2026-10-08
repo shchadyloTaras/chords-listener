@@ -87,7 +87,7 @@ Each step runs only with the owner's OK, so each is run on its own. A full `scri
 
 1. **The API with publishing** (it writes the index and `track.json`; current clients ignore them). Until step 2 its index writes fail and wait in `publish-pending.json` (retried at start-up and every 10 minutes while an instance is up; the backfill covers them anyway): `SKIP_SETUP=1 scripts/deploy_cloud.sh` (Cloud Build and `gcloud run deploy` with `CHORDS_PUBLISH=1`, no IAM / rules / CORS step).
 2. **IAM role** for the runtime service account: `gcloud projects add-iam-policy-binding build-chords-listener --member=serviceAccount:chords-api@build-chords-listener.iam.gserviceaccount.com --role=roles/datastore.user --condition=None`
-3. **Rules and bucket CORS**: `npx -y firebase-tools@latest deploy --only storage,firestore:rules --project build-chords-listener`, then `gcloud storage buckets update gs://build-chords-listener.firebasestorage.app --cors-file=storage-cors.json`
+3. **Rules and bucket CORS**: `npx -y firebase-tools@15 deploy --only storage,firestore:rules --project build-chords-listener`, then `gcloud storage buckets update gs://build-chords-listener.firebasestorage.app --cors-file=storage-cors.json`. `storage.rules` reads Firestore (an upload is refused once the account's purge began: `adminTombstones/{uid}`), which needs the Cloud Storage for Firebase service agent (`service-<project number>@gcp-sa-firebasestorage.iam.gserviceaccount.com`) to hold the cross-service role `roles/firebaserules.firestoreServiceAgent`. The Firebase CLI offers to grant it on the first such deploy: answer yes (or grant it in the console); without it every client upload is refused.
 4. **Backfill, and verify it** (the job below). It prints `N track(s) published`. Every track has its `track.json` and nothing is pending: `gcloud storage ls 'gs://build-chords-listener.firebasestorage.app/users/*/tracks/*/meta.json' | wc -l` equals the same with `track.json`, and `gcloud storage ls 'gs://build-chords-listener.firebasestorage.app/users/*/publish-pending.json'` finds nothing. Look at a few index documents in the Firestore console (`users/<uid>/tracks`).
 5. **The site with the new read path** (a push to `main` runs `.github/workflows/pages.yml`) — only then: it lists what the index has, and without the backfill older tracks would be missing from the list.
 
@@ -111,7 +111,7 @@ gcloud run jobs execute chords-backfill --region europe-west1 --wait
 
 ## Uploads
 
-- Cloud Run caps request bodies at 32 MiB. So in cloud mode the client uploads to Firebase Storage `users/{uid}/uploads/{uploadId}/{filename}` (resumable, with progress). Storage rules: only the owner may write, ≤ 500 MB, contentType `audio/*`, `video/*` or `application/octet-stream`. No client reads of uploads (the owner's reads of their published track files are in Library in Firestore → Rules).
+- Cloud Run caps request bodies at 32 MiB. So in cloud mode the client uploads to Firebase Storage `users/{uid}/uploads/{uploadId}/{filename}` (resumable, with progress). Storage rules: only the owner may write, ≤ 500 MB, contentType `audio/*`, `video/*` or `application/octet-stream`, and not once the account's purge began (`adminTombstones/{uid}` in Firestore; its ID token stays valid for up to an hour). No client reads of uploads (the owner's reads of their published track files are in Library in Firestore → Rules).
 - The client then calls `POST /api/jobs/storage` with `{ path, title?, source?, startOffset?, options? }` → `Job`. The server checks that `path` starts with `users/<uid>/uploads/`, ingests the file like a normal upload (sha1 dedup per user), and deletes the upload.
   - The server reads the object with the google-cloud-storage client (bucket `CHORDS_UPLOAD_BUCKET`; `STORAGE_EMULATOR_HOST` points it at the Storage emulator), not through the `/data` mount. The object is deleted as soon as it was downloaded, also when the analysis then fails.
   - Errors: another user's prefix → 403 `unauthorized`; bad path (`..`, empty segments) or missing object → 404 `not_found`; larger than `CHORDS_MAX_UPLOAD_MB` (500) → 413 `too_large`; empty → 415 `unsupported_format` (both delete the object); not a cloud server / no bucket → 501 `unavailable`; YouTube source without a usable `videoId`/`url` → 400 `invalid_url`.
@@ -190,6 +190,165 @@ As deployed by `scripts/deploy_cloud.sh`: runtime service account `chords-api@bu
 - `python3 scripts/smoke_cloud.py` runs the end-to-end smoke test against the service as `smoke-test` and cleans up after itself; `--cold` only measures the first request + one analysis. With `--firestore-token-file PATH` (an access token that reads Firestore and the bucket, e.g. `gcloud auth print-access-token > PATH`) it also checks the published library: after the upload analysis the index document `users/smoke-test/tracks/<id>` exists with `version >= 1` and `gcloud storage cat` shows a matching `track.json`; after the delete the index documents are gone.
 - A full deploy takes ~9 min (Cloud Build ~7.5 min on the default free-tier machine, image ≈0.9 GB compressed); the uploaded source archive is deleted afterwards.
 - The build runs in `$REGION` (europe-west1), the Artifact Registry repo's region. From the global pool (US) each build's cache pull of the previous image was billed as intercontinental Artifact Registry egress (~$0.06 per deploy).
+
+## Admin console
+
+The administrator's page (`admin.html`, built next to the site by the Pages workflow) and `/api/admin/*` on the same Cloud Run service: **https://shchadylotaras.github.io/chords-listener/admin.html**. Anyone without the admin mark gets "Сторінку не знайдено" (AC-31). Design: [`docs/features/admin/sad.md`](features/admin/sad.md), [spec](features/admin/spec.md), [data model](features/admin/data-model.md); who may write the allowlist: [ADR-0006](features/admin/adr/0006-authorize-admins-via-firestore-allowlist-with-60s-cache.md). No new service, no 2FA in v1 (final actions need a sign-in no older than 15 minutes), no e-mails to users.
+
+### Granting and revoking admins
+
+Only the owner can do it, from their own machine: `scripts/admin_grant.py` writes or deletes `adminAllowlist/<uid>` in Firestore with the owner's Application Default Credentials (no key file, no service account; the server's code has no write path to that collection). The e-mail is only looked up in Firebase Auth to find the uid and is never stored; the document holds `grantedAt` and an optional `--note` (up to 200 characters, never an e-mail).
+
+```bash
+gcloud auth application-default login
+gcloud auth application-default set-quota-project build-chords-listener   # once per machine
+backend/.venv/bin/python scripts/admin_grant.py grant  person@example.com --note "support"
+backend/.venv/bin/python scripts/admin_grant.py revoke person@example.com
+```
+
+A grant by e-mail is refused when Firebase Auth has not verified that e-mail (grant by uid once you have checked who owns it; a revoke works either way). A uid works in place of the e-mail; `--project ID` overrides `build-chords-listener`. Exit code 0 also means "already granted" / "was not an admin"; 1 means refused or failed (the message says why). The person has to have signed in to the site once, or the e-mail has no uid yet. The server caches the allowlist for 60 seconds, so **a revoke takes effect within a minute** (AC-32): from then on every admin action and read of an already open admin page is refused with the same "not found" answer. Every change is visible in Cloud Audit Logs under the owner's name; anyone with write access to the project's Firestore can also change the allowlist, so keep that IAM role with the owner alone. Against the emulators: `FIRESTORE_EMULATOR_HOST=localhost:8080 FIREBASE_AUTH_EMULATOR_HOST=localhost:9099 backend/.venv/bin/python scripts/admin_grant.py grant some-test-uid` (an e-mail needs an account in the Auth emulator).
+
+### Migrations: promotion order 01–06
+
+The staged files in [`docs/features/admin/migrations/`](features/admin/migrations/) are the only copy (the repo has no live migrations tree). Each step is idempotent and has a `.down` pair; run them one at a time, in this order, each with the owner's OK. 02 and 03 are already merged into `firestore.indexes.json` and `firestore.rules`, so they are deployed, not copied.
+
+| # | File | Run |
+|---|---|---|
+| 01 | `01_add_track_size.up.py` | adds `sizeBytes` to every published track; it measures the track files, so `CHORDS_DATA_DIR` must point at the mounted bucket (the same files the service sees at `/data`) |
+| 02 | `02_admin_indexes_and_ttl.up.json` | `npx -y firebase-tools@15 deploy --only firestore:indexes --project build-chords-listener`; wait until the indexes are built (Firebase console → Firestore → Indexes). 18 composite indexes: each of 9 in both directions, because Firestore reads an index only in its declared direction (the way back, a range with no order and a `count()` over a period need the ascending one; data-model.md → Indexes) |
+| 03 | `03_admin_rules.up.rules` | `npx -y firebase-tools@15 deploy --only firestore:rules,storage --project build-chords-listener` (`storage.rules` refuses a purged account's uploads by reading Firestore: accept the CLI's offer to grant the Storage service agent its cross-service Firestore role, step 3 of "Library in Firestore" above) |
+| 04 | `04_seed_runtime_config.up.py` | creates `adminConfig/settings` and `publicStatus/current` from the `CHORDS_*` values, only if absent |
+| 05 | `05_build_email_index.up.py` | builds the e-mail search index from `users` |
+| 06 | `06_restore_stats_from_tracks.up.py` | restores the daily statistics before the launch day: `--before YYYY-MM-DD` (the day the admin goes live) |
+
+01, 04, 05 and 06 run from `backend/` with the owner's credentials; add `--dry-run` first, then run again without it (each prints what it found or changed):
+
+```bash
+gcloud auth application-default login
+cd backend
+export CHORDS_AUTH=firebase   # cloud mode: tracks live under <data>/users/<uid> (without it 01 finds nothing)
+export CHORDS_FIREBASE_PROJECT=build-chords-listener
+export PYTHONPATH=.:../docs/features/admin/migrations
+.venv/bin/python ../docs/features/admin/migrations/04_seed_runtime_config.up.py --dry-run
+.venv/bin/python ../docs/features/admin/migrations/05_build_email_index.up.py --dry-run
+.venv/bin/python ../docs/features/admin/migrations/06_restore_stats_from_tracks.up.py --before 2026-10-15 --dry-run
+CHORDS_DATA_DIR=/path/to/mounted/bucket .venv/bin/python ../docs/features/admin/migrations/01_add_track_size.up.py --dry-run
+```
+
+Without a local mount of the bucket, 01 can run against a size-only mirror: list `gs://<bucket>/users/**` with `gcloud storage ls -l -r`, create each object as an empty file truncated to its size (sparse: no content is downloaded, `dir_size` reads `st_size`), point `CHORDS_DATA_DIR` at it, and delete the mirror afterwards (done this way on 2026-10-08). Put the real launch day in `--before`. Roll back with the matching `*.down.*` file in reverse order (06 → 01); roll back 01 only after the code that writes `sizeBytes` is rolled back, or the publish path adds it again. Rolling out the code: 01–04 before the new revision serves the admin page (the server falls back to the `CHORDS_*` values while `adminConfig/settings` is missing), 05 and 06 may follow it.
+
+### Sweep schedule and alerts
+
+`scripts/deploy_cloud.sh` (after the deploy; `SKIP_OPS=1` skips it) sets up the background work, idempotently:
+
+- **Max instances = 1 guard.** The daily quota, the probe limiter and the deletion limit are counted in the memory of the one process, so the script refuses any `MAX_INSTANCES` other than 1 before it touches Google Cloud, checks the deployed value afterwards, and the server logs a warning at start-up when the cap is not 1.
+- **Two Cloud Scheduler jobs** `chords-sweep-0015` (00:15 UTC) and `chords-sweep-1215` (12:15 UTC) call `POST /api/internal/sweep` with an OIDC token of the service account `chords-scheduler@build-chords-listener.iam.gserviceaccount.com` (role `run.invoker`); the server checks signature, audience and that e-mail. A sweep replays the projections, closes stale jobs, reconciles and freezes yesterday, syncs the e-mail index and runs due deletions; the first natural wake-up after 00:00 UTC runs it too. Twice a day because a deletion then runs at most 12 hours after its window and one failed pass still fits in 24; the price is up to 30 minutes of instance time on a day with no traffic.
+- **Log-based metrics** `admin_request`, `server_wake_by`, `deletion_overdue`, `stats_mismatch`, `audit_write_failed`, and **two alert policies e-mailed to `ALERT_EMAIL`** (environment or `.cloud.env`): `deletion_overdue > 0` (a deletion is more than 24 hours late) and `stats_mismatch > 0` (the nightly reconciliation of a day found a difference). Without `ALERT_EMAIL` the script warns and creates no alerts. These are operational alerts for the owner, not an admin feature.
+
+See the plan without touching Google Cloud: `DRY_RUN=1 scripts/deploy_cloud.sh`. Run the sweep by hand: `gcloud scheduler jobs run chords-sweep-0015 --location europe-west1`; look at the logs: `gcloud run services logs read chords-api --region europe-west1 --limit 100`.
+
+### Running the emulator suites
+
+Without the Firebase emulators about 170 backend tests (admin integration + NFR, admission, grant script, Firestore index) are skipped, and the security-rules tests do not run at all. CI runs both (`.github/workflows/backend-emulators.yml`, on every push to `main` and every pull request). Locally, from the repository root, with Java 21+ and Node installed and ports 8080 (Firestore) and 9099 (Auth) free:
+
+```bash
+export PATH=/opt/homebrew/opt/openjdk/bin:$PATH   # macOS + Homebrew only
+npx -y firebase-tools@15 emulators:exec --only auth,firestore --project build-chords-listener \
+  "cd backend && uv run pytest -q -p no:cacheprovider"
+npx -y firebase-tools@15 emulators:exec --only auth,firestore --project build-chords-listener \
+  "node --test firestore.rules.test.mjs"
+npx -y firebase-tools@15 emulators:exec --only auth,firestore,storage --project build-chords-listener \
+  "node --test storage.rules.test.mjs"   # the upload rule reads Firestore, so all three run
+```
+
+`emulators:exec` sets `FIRESTORE_EMULATOR_HOST` and `FIREBASE_AUTH_EMULATOR_HOST` for the command, which is what un-skips the tests; the emulators are stopped afterwards. If a port is taken, an earlier emulator is still running — stop it first. `firebase-tools` is pinned to major version 15 here and in CI. CI also installs ffmpeg and sets `CHORDS_FAIL_ON_SKIP=1`, under which a test skipped for want of ffmpeg or an emulator fails instead (`backend/tests/strict_skips.py`); set it locally to check the same.
+
+### Live e2e (browser + server + emulators)
+
+The scheduled test level of the admin feature (docs/features/admin/test-plan.md): a real Chromium, the real backend
+in cloud mode and the Firebase emulators (Auth 9099, Firestore 8080, Storage 9199 — the ports a
+`VITE_FIREBASE_EMULATORS=true` build hardcodes), in real time: no stubs, no fake clocks. Specs in
+`frontend/e2e-live/`, config `frontend/playwright.live.config.ts`; the stubbed suite (`npm run test:e2e`,
+`frontend/e2e/`) is separate and unchanged. Locally, with Java 21+, ports 8080 / 9099 / 9199 / 8775 / 4183 free,
+`uv sync` done in `backend/` and Chromium installed once (`npx playwright install chromium`):
+
+```bash
+cd frontend
+npm run test:e2e:live                          # ~2 min: every spec except the 30-minute one
+LIVE_SLOW=1 npm run test:e2e:live              # + the idle-tab spec (30 real minutes; nightly in CI)
+npm run test:e2e:live -- revoke.spec.ts        # one spec (any Playwright argument after --)
+npm run test:e2e:live -- banner.spec.ts --update-snapshots   # re-take this platform's banner baselines
+```
+
+- `npm run test:e2e:live` (`frontend/e2e-live/run.mjs`) starts the emulators with
+  `npx -y firebase-tools@15 emulators:exec --only auth,firestore,storage` from the repository root (rules and ports
+  from `firebase.json`; on macOS the Homebrew openjdk is put on PATH when `java` is missing), in a temp directory of
+  their own, and stops them afterwards. Emulators already listening on all three ports are reused (their data is
+  wiped); only some of the ports taken is an error.
+- Playwright then starts the backend fresh (`python -m uvicorn app.main:app` from the `uv` environment in `backend/`, on 127.0.0.1:8775 with
+  `CHORDS_AUTH=firebase`, the emulator hosts, a scratch `CHORDS_DATA_DIR`, `CHORDS_UPLOAD_BUCKET`; its stdout/stderr,
+  uvicorn's access log included, go to `<tmp>/chords-live-e2e-8775/backend.log`, which the specs read as the
+  server's own record of requests) and the hosted build (`VITE_BASE=/chords-listener/`,
+  `VITE_FIREBASE_EMULATORS=true`, `VITE_CLOUD_API_URL=http://127.0.0.1:8775`, into `dist-e2e-live/`, gitignored) under
+  `vite preview` on localhost:4183. The emulator build's admin.html also allows the Auth emulator in connect-src
+  (`adminBuildCsp` in `frontend/vite.config.ts`); a production build's policy is unchanged.
+- Every spec starts from empty emulators, migration 04, an admin granted with `scripts/admin_grant.py grant <uid>`
+  and an ordinary user, both with fresh uids. Firestore and bucket seeding goes through
+  `backend/scripts/live_e2e.py` (the factories of `backend/tests/admin/fixtures.py`), which refuses to run without the
+  three emulator hosts. Its `sweep` command runs the server's own `Sweeper` + `Purger` (as `create_app` builds them
+  from the same environment): `POST /api/internal/sweep` accepts only a Google-signed OIDC token of the scheduler's
+  service account, which cannot be minted locally.
+- Knobs: `LIVE_SLOW=1`; `LIVE_IDLE_MIN` (default 30) for the idle-tab spec; `LIVE_API_PORT` / `LIVE_SITE_PORT`;
+  `LIVE_PYTHON` (default: `.venv/bin/python` of `backend/`); `LIVE_RUN_DIR` (the server's scratch and log);
+  `LIVE_P95_USERS` / `LIVE_P95_SONGS` (the data set of the p95 spec, default 1 000 × 20); `LIVE_FIREBASE_TOOLS`
+  (default `firebase-tools@15`).
+
+| Spec | What it proves, in real time |
+|---|---|
+| `banner.spec.ts` | AC-29: a guest sees the banner the admin published in Settings, UA then EN, with no request to the server (browser record and access log); banner screenshots match the baselines; turned off, the next visit shows none. AC-27 / NFR ≤ 5 min: with YouTube off the next visit sends a link to «Слухати у вкладці» at once |
+| `restriction.spec.ts` | AC-16 / AC-18: restricted on the card → the user's next cloud job is refused (`cloud_restricted`) within 60 s, nothing counted; the site explains it and offers the browser |
+| `default-limit.spec.ts` | AC-24: 40 → 30 in Settings → `GET /api/me` reports 30 within 60 s, the 31st analysis is refused, same server process; journal 40 → 30 |
+| `pause.spec.ts` | AC-26: pause on → an upload is refused (`analyses_paused`), explained, offered in the browser, nothing counted |
+| `revoke.spec.ts` | AC-32: `admin_grant.py revoke` → within 60 s the open pages' reads and actions get the unknown-address 404; nothing applied; a reload shows «Сторінку не знайдено» |
+| `purge.spec.ts` | AC-22: deletion scheduled on the card, `purgeAfter` moved into the past, sweep → no sign-in, no songs (index, files, bucket), search finds nobody, journal and job history show «видалений» only |
+| `overview-p95.spec.ts` | NFR: 20 browser openings of the overview on the warm server with 1 000 × 20 seeded, p95 ≤ 2 s |
+| `idle-tab.spec.ts` (`@slow`) | AC-02: admin tabs in front and in the background for 30 min send nothing to the server; a guest tab does not poll the public status |
+
+CI: `.github/workflows/admin-live-e2e.yml` runs it nightly (02:30 UTC, with `LIVE_SLOW=1`) and on demand
+(`workflow_dispatch`: `slow`, `update_snapshots`); the report, traces and the server log are uploaded on failure.
+
+**One-time step: the Linux banner baselines.** Screenshot baselines are per platform and only the macOS ones
+(`banner-uk-darwin.png`, `banner-en-darwin.png` in `frontend/e2e-live/banner.spec.ts-snapshots/`) are committed; until the Linux ones are,
+the nightly run fails at the banner comparison. Run the workflow by hand with `update_snapshots` ticked (Actions →
+"Admin live e2e" → Run workflow, or `gh workflow run admin-live-e2e.yml -f update_snapshots=true`), download the
+artifact `banner-baselines-linux` (`gh run download <run-id> -n banner-baselines-linux`), look at both PNGs, copy
+`banner-uk-linux.png` and `banner-en-linux.png` into `frontend/e2e-live/banner.spec.ts-snapshots/` and commit
+them. Repeat only when the banner's look changes on purpose (locally: `--update-snapshots` for the macOS pair).
+
+### Measuring the cold start
+
+NFR "admin overview from a sleeping server: p95 ≤ 15 s" needs the deployed service, so it is not part of CI.
+After a deploy, from any machine (standard library only; `gcloud` with the owner's login for `--verify-cold`):
+
+```bash
+python3 scripts/measure_cold_start.py --dry-run                 # the plan; sends nothing
+python3 scripts/measure_cold_start.py --verify-cold             # 5 × (20 min silence + GET /api/health)
+CHORDS_ADMIN_REFRESH_TOKEN=... python3 scripts/measure_cold_start.py --admin --verify-cold   # GET /api/admin/overview
+```
+
+Before each attempt it sends nothing for `--idle-min` minutes (default 20; Cloud Run stops an idle instance after
+~15), then times the first request to the whole answer; it prints every attempt and the nearest-rank p95 (with 5
+attempts, the slowest) and exits 1 over `--bound-s` (default 15). Something else waking the service meanwhile (a
+visitor, a 00:15 / 12:15 sweep) makes an attempt warm: `--verify-cold` asks Cloud Logging whether a new server
+process started for the request and counts only those (up to 10 tries for 5 cold ones). The admin variant takes the
+token from the environment only — never the command line — and never prints it: `CHORDS_ADMIN_REFRESH_TOKEN` (a
+Firebase refresh token of an admin; a fresh ID token is minted from it at securetoken.googleapis.com before each
+attempt, which does not touch the service) or `CHORDS_ADMIN_ID_TOKEN` (an ID token as is; it lasts an hour, about 2
+attempts). The run takes ~attempts × idle-min (≈ 1 h 40 min by default).
+
+### Decisions taken at design (spec §8)
+
+Closed 2026-10-07: no 2FA in v1, no e-mails to users (a restricted or scheduled-for-deletion user sees the same cloud-restriction explanation, without the deletion date). Defaults applied: the support address in that explanation is the owner's (`SUPPORT_EMAIL` in `frontend/src/i18n/cloud.ts`), and the `smoke-test` account is shown apart as "службовий" and left out of the statistics.
 
 ## Verified (2026-10-05, revisions `chords-api-00002` and `-00003`)
 

@@ -15,6 +15,7 @@ import { FALLBACK_FONT, registerScoreFont, SCORE_FONT } from '../../../lib/score
 import { baseOptions, configureRules, fracAt, measureLayout, OpenSheetMusicDisplay, xAt, type ScoreColors, type ScoreLayout } from '../../../lib/score/osmd'
 import { SCORE_LEVELS, type Score, type ScoreLevel } from '../../../lib/score/types'
 import { useConnection } from '../../../lib/serverMode'
+import { isAdminRefusal } from '../../../lib/serviceStatus'
 import { requestNotes, type NotesState } from '../../../lib/transcription'
 import { loadVocals, startVocals, vocalsSupport, type VocalsState } from '../../../lib/vocals'
 import { useApp } from '../../../store'
@@ -26,6 +27,7 @@ import { isTypingTarget } from '../hotkeys'
 import { useChordModel } from '../model'
 import { useChordUi } from '../uiStore'
 import { useTourFlags, useTourTrigger } from '../../tour/hooks'
+import { errorText } from '../../jobs/errorText'
 import { useCancelVocals } from '../useCancelVocals'
 import { Floating } from '../ui/Floating'
 import { Divider, Segmented, ToggleChip } from '../ui/controls'
@@ -240,7 +242,7 @@ function StatusLine({
 /** The demo song (dev/sampleTrack.ts): it exists only in this browser, an account brings no vocals for it. */
 const DEMO_TRACK_ID = 'demo'
 
-function VocalsCard({ state }: { state: VocalsState }) {
+export function VocalsCard({ state }: { state: VocalsState }) {
   const t = useT()
   const { track } = useChordModel()
   // a guest (no account, no server): vocals come with a free account
@@ -363,8 +365,11 @@ function VocalsCard({ state }: { state: VocalsState }) {
         </>,
       )
     case 'error': {
-      const text =
-        state.code === 'quota_exceeded'
+      // the administrator's switches: worded in the cloud's own words, and a retry would be refused again
+      const refused = isAdminRefusal(state.code)
+      const text = refused
+        ? errorText(state.code)
+        : state.code === 'quota_exceeded'
           ? t('score.vocals.quota')
           : state.code === 'unauthorized'
             ? t('score.vocals.signin')
@@ -374,7 +379,7 @@ function VocalsCard({ state }: { state: VocalsState }) {
           <p className="min-w-0 flex-1 text-danger" title={state.message}>
             {text}
           </p>
-          {vocalsSupport(track) === 'ok' && state.code !== 'quota_exceeded' && (
+          {vocalsSupport(track) === 'ok' && state.code !== 'quota_exceeded' && !refused && (
             <button
               type="button"
               onClick={() => void (state.during === 'job' ? startVocals(track) : loadVocals(track, { force: true }))}

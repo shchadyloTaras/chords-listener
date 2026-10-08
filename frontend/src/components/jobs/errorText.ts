@@ -1,9 +1,8 @@
 import type { ClientErrorCode } from '../../lib/api'
 import { canListenInTab } from '../../lib/live/capture'
 import { useConnection } from '../../lib/serverMode'
-import { translate } from '../../i18n'
+import { currentLang, translate } from '../../i18n'
 import type { Lang } from '../../store'
-import { useApp } from '../../store'
 
 const KNOWN: ReadonlySet<string> = new Set<ClientErrorCode>([
   'invalid_url',
@@ -21,7 +20,16 @@ const KNOWN: ReadonlySet<string> = new Set<ClientErrorCode>([
 ])
 
 /** Codes of the cloud service (docs/CLOUD.md), worded in i18n/cloud.ts. */
-const CLOUD: ReadonlySet<string> = new Set<ClientErrorCode>(['unauthorized', 'quota_exceeded', 'download_blocked', 'unavailable'])
+const CLOUD: ReadonlySet<string> = new Set<ClientErrorCode>([
+  'unauthorized',
+  'quota_exceeded',
+  'download_blocked',
+  'unavailable',
+  'cloud_restricted',
+  'analyses_paused',
+  'youtube_disabled',
+  'vocals_disabled',
+])
 
 /** Failures whose generic wording talks about "your server": the cloud gets its own. */
 const CLOUD_WORDING: ReadonlySet<string> = new Set(['network', 'internal'])
@@ -36,11 +44,11 @@ function keyFor(kind: 'error' | 'errorTitle', code: string | null | undefined): 
 }
 
 /** Localized, user-facing explanation for an error code (falls back to a generic message). */
-export function errorText(code: string | null | undefined, lang: Lang = useApp.getState().lang): string {
+export function errorText(code: string | null | undefined, lang: Lang = currentLang()): string {
   return translate(lang, keyFor('error', code))
 }
 
 /** Short localized headline for an error code. */
-export function errorTitle(code: string | null | undefined, lang: Lang = useApp.getState().lang): string {
+export function errorTitle(code: string | null | undefined, lang: Lang = currentLang()): string {
   return translate(lang, keyFor('errorTitle', code))
 }

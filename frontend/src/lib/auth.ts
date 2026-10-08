@@ -8,7 +8,7 @@
 // signed-in account alone: they go on sign-out and when another account signs in.
 import type { Auth } from 'firebase/auth'
 import { create } from 'zustand'
-import { useApp } from '../store'
+import { currentLang } from '../i18n'
 import { findLegacySession, onSignInElsewhere, rememberSignIn, signedInBefore } from './authMarker'
 import { clearCloudCache } from './cloud/cache'
 import { stopLibrary } from './cloud/library'
@@ -55,6 +55,8 @@ function loadAuth() {
 }
 
 let stopMirror: (() => void) | null = null
+/** false on the admin page (startAuth): it reads everything through the API and its CSP allows no Firestore (ADR-0002) */
+let syncSettings = true
 
 /** How long startup waits for the on-device look for an older build's session (IndexedDB may hang). */
 export const LEGACY_LOOKUP_MS = 1500
@@ -80,7 +82,7 @@ function mirror({ auth, sdk }: LoadedAuth): void {
     stopSync?.()
     stopSync = undefined
     const current = ++session
-    if (!user) return
+    if (!user || !syncSettings) return
     import('./settingsSync')
       .then(({ startSettingsSync }) => {
         if (current === session) stopSync = startSettingsSync(user)
@@ -108,8 +110,10 @@ async function accountSdk(): Promise<LoadedAuth> {
  * Without the flag, `ready` waits for the on-device look for a session an older build saved (milliseconds,
  * bounded by LEGACY_LOOKUP_MS): such a user must not look like a guest meanwhile (the guest flows would
  * show, and the API would settle on browser mode before their session is back).
+ * `settingsSync: false` (the admin page) signs in without syncing the settings profile.
  */
-export function startAuth(): () => void {
+export function startAuth({ settingsSync = true }: { settingsSync?: boolean } = {}): () => void {
+  syncSettings = settingsSync
   let stopped = false
   let lookupTimer: ReturnType<typeof setTimeout> | undefined
   const restore = () =>
@@ -168,7 +172,7 @@ const CONTINUE_URL_ERRORS = ['auth/unauthorized-continue-uri', 'auth/invalid-con
  */
 export async function sendPasswordReset(email: string) {
   const { auth, sdk } = await accountSdk()
-  auth.languageCode = useApp.getState().lang
+  auth.languageCode = currentLang() // the e-mails Firebase sends (password reset) speak the page's language
   const address = email.trim()
   const url = `${window.location.origin}${window.location.pathname}`
   if (!/^https?:/.test(url)) return sdk.sendPasswordResetEmail(auth, address)

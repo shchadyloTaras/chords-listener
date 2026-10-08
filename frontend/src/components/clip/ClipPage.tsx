@@ -1,6 +1,7 @@
 // The fragment picker (#/youtube/<videoId>[?t=<start>]): a signed-in user picks CLIP_SECONDS of a YouTube video and
 // the cloud analyzes just that part (docs/superpowers/specs/2026-10-07-youtube-warp-fetch-design.md). Works by touch
-// on a phone; the window's math is in clipWindow.ts.
+// on a phone; the window's math is in clipWindow.ts. While the administrator has switched the cloud's YouTube download
+// off (AC-27) there is nothing to pick: the video goes to the capture page instead.
 import { ArrowDownToLine, ArrowLeft, LoaderCircle, Play, Sparkles } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useT } from '../../i18n'
@@ -8,6 +9,7 @@ import { useDocumentTitle } from '../../hooks/useDocumentTitle'
 import { submitClip } from '../../hooks/useJobs'
 import { currentPath, navigate, paths } from '../../hooks/useRoute'
 import { toApiError } from '../../lib/api'
+import { isAdminRefusal, useServiceStatus } from '../../lib/serviceStatus'
 import { clipReady } from '../../lib/tour/trigger'
 import { useApp } from '../../store'
 import { errorText } from '../jobs/errorText'
@@ -49,6 +51,13 @@ export function ClipPage({ videoId, start: initialStart }: { videoId: string; st
   const range = clipWindow(start, duration)
 
   useDocumentTitle(title ? `${t('clip.title')} · ${title}` : t('clip.title'))
+
+  // YouTube off in the cloud (the public status, read without waking the server): the fragment would only be refused,
+  // so the video is listened to in the tab, from the start chosen so far (a bookmark, a retry, a switch learnt late)
+  const youtubeOn = useServiceStatus((s) => s.status.switches.youtubeEnabled)
+  useEffect(() => {
+    if (!youtubeOn) navigate(paths.capture(videoId, { t: range.start }), { replace: true })
+  }, [youtubeOn, videoId, range.start])
 
   // ---- the embedded player
   useEffect(() => {
@@ -159,7 +168,12 @@ export function ClipPage({ videoId, start: initialStart }: { videoId: string; st
       // a guest (a bookmark, a shared link, after signing out): nothing was blocked, the capture page's own hint
       // offers the sign-in
       else if (code === 'server_required') navigate(paths.capture(videoId, { t: range.start }), { replace: true })
-      else if (code !== 'aborted') useApp.getState().toast(errorText(code), 'error')
+      // the administrator's refusal (YouTube off, a restricted account, paused analyses, AC-18/26/27): a retry would be
+      // refused again, but the tab can still be listened to here; the reason (and the support address) is said once
+      else if (isAdminRefusal(code)) {
+        navigate(paths.capture(videoId, { t: range.start }), { replace: true })
+        useApp.getState().toast(errorText(code), 'info')
+      } else if (code !== 'aborted') useApp.getState().toast(errorText(code), 'error')
     } finally {
       setBusy(false)
     }

@@ -1,12 +1,13 @@
-// Security-rules tests for /storage.rules, run against the local emulators only:
+// Security-rules tests for /storage.rules, run against the local emulators only (Firestore too: the upload rule reads
+// adminTombstones/{uid} across services):
 //
-//   PATH=/opt/homebrew/opt/openjdk/bin:$PATH npx -y firebase-tools@latest emulators:exec \
-//     --only auth,storage --project build-chords-listener "node --test storage.rules.test.mjs"
+//   PATH=/opt/homebrew/opt/openjdk/bin:$PATH npx -y firebase-tools@15 emulators:exec \
+//     --only auth,firestore,storage --project build-chords-listener "node --test storage.rules.test.mjs"
 //
 // No dependencies: users come from the Auth emulator REST API, client reads/writes go through the
 // Storage emulator's Firebase REST API (/v0/b/<bucket>/o, the requests the web SDK sends) with each
-// user's ID token. The library files are put in place the way the API's service account does it:
-// the emulator's admin bearer token ("owner") bypasses the rules.
+// user's ID token. The library files (and Firestore documents) are put in place the way the API's service account
+// does it: the emulator's admin bearer token ("owner") bypasses the rules.
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { after, before, describe, test } from 'node:test'
@@ -15,8 +16,9 @@ const PROJECT = 'build-chords-listener'
 const BUCKET = `${PROJECT}.firebasestorage.app`
 const STORAGE = process.env.FIREBASE_STORAGE_EMULATOR_HOST ?? '127.0.0.1:9199'
 const AUTH = process.env.FIREBASE_AUTH_EMULATOR_HOST ?? '127.0.0.1:9099'
+const FIRESTORE = process.env.FIRESTORE_EMULATOR_HOST ?? '127.0.0.1:8080'
 
-for (const host of [STORAGE, AUTH]) {
+for (const host of [STORAGE, AUTH, FIRESTORE]) {
   if (!/^(127\.0\.0\.1|localhost|\[::1\]):\d+$/.test(host)) {
     throw new Error(`Refusing to run: ${host} is not a local emulator`)
   }
@@ -77,6 +79,16 @@ async function upload(user, path, contentType = 'audio/mpeg') {
 async function remove(user, path) {
   const res = await fetch(`${OBJECTS}/${encodeURIComponent(path)}`, { method: 'DELETE', headers: authHeader(user) })
   return res.status
+}
+
+/** The purge's first step (ADR-0011): adminTombstones/{uid}, written by the API's service account. */
+async function tombstone(uid) {
+  const res = await fetch(`http://${FIRESTORE}/v1/projects/${PROJECT}/databases/(default)/documents/adminTombstones/${uid}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer owner' },
+    body: JSON.stringify({ fields: { status: { stringValue: 'purging' } } }),
+  })
+  assert.equal(res.status, 200, `tombstone ${uid}`)
 }
 
 async function clearEmulators() {
@@ -152,5 +164,25 @@ describe('users/{uid}/tracks/{trackId}/… (the published library files)', () =>
     assert.equal(await upload(bob, path), OK)
     assert.equal(await read(bob, path), DENIED)
     assert.equal(await upload(alice, `users/${bob.uid}/uploads/${randomUUID()}/recording.mp3`), DENIED)
+  })
+})
+
+describe('users/{uid}/uploads/… of a purged account (T56, review S2-2)', () => {
+  let carol
+
+  before(async () => {
+    await clearEmulators()
+    carol = await createUser()
+  })
+
+  after(clearEmulators)
+
+  test('the owner uploads while the account lives', async () => {
+    assert.equal(await upload(carol, `users/${carol.uid}/uploads/${randomUUID()}/song.mp3`), OK)
+  })
+
+  test('once the purge began (tombstone), its still-valid ID token can upload nothing more', async () => {
+    await tombstone(carol.uid)
+    assert.equal(await upload(carol, `users/${carol.uid}/uploads/${randomUUID()}/song.mp3`), DENIED)
   })
 })

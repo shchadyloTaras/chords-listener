@@ -39,6 +39,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # includes the admin page's rules: no HTML rendering under src/admin (react/no-danger, innerHTML ...)
+      - name: Lint
+        run: npx oxlint
+
       - name: Unit tests
         run: npx vitest run
 
@@ -48,6 +52,20 @@ jobs:
           VITE_BASE: /${{ github.event.repository.name }}/
           # empty when the variable is not set: frontend/src/config.ts falls back to the deployed URL
           VITE_CLOUD_API_URL: ${{ vars.CLOUD_API_URL }}
+
+      # admin.html (the admin page, ADR-0002) is built next to index.html and published with it. It must carry a strict
+      # CSP (no inline scripts, no eval) and its bundle must not reach TF.js, models or wasm.
+      - name: Check the admin page (CSP, bundle contents)
+        run: node scripts/check-admin-bundle.mjs dist-pages
+
+      # Browser e2e of the built admin page against a stubbed API (docs/features/admin T38): hostile strings render as
+      # text, the strict CSP rejects an injected script, an idle tab sends no request for 30 minutes (fake timers).
+      # It builds admin.html itself (frontend/dist-e2e), so the Pages artifact above is untouched.
+      - name: Install the e2e browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Admin e2e
+        run: npm run test:e2e
 
       - uses: actions/configure-pages@v6
 

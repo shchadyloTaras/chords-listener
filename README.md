@@ -116,7 +116,7 @@ VITE_BASE=/chords-listener/ npx vite preview --port 5184   # http://localhost:51
 
 ```bash
 export PATH=/opt/homebrew/opt/openjdk/bin:$PATH
-npx -y firebase-tools@latest emulators:start --only auth,storage --project build-chords-listener
+npx -y firebase-tools@15 emulators:start --only auth,firestore,storage --project build-chords-listener   # storage.rules читає Firestore
 cd backend && CHORDS_AUTH=firebase FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 STORAGE_EMULATOR_HOST=http://127.0.0.1:9199 \
   CHORDS_UPLOAD_BUCKET=build-chords-listener.firebasestorage.app CHORDS_DATA_DIR=/tmp/chords-cloud \
   uv run uvicorn app.main:app --port 8783
@@ -166,6 +166,8 @@ python3 scripts/smoke_fetch.py            # 18 відео з перевірки,
 YouTube може не дати завантажити відео серверу з дата-центру (перевірка «Sign in to confirm you're not a bot»). Під час перевірки 5 жовтня 2026 завантаження з YouTube працювало, але таке блокування може зʼявитися будь-коли. Тоді завдання закінчується помилкою `download_blocked`, а сайт пропонує «Слухати у вкладці»: відео грає на сторінці, сайт записує звук вкладки й надсилає запис на сервер. Фрагменти з акаунта йдуть іншим шляхом: через `chords-fetch` і WARP (див. вище).
 
 **Вартість** (тариф Blaze, europe-west1). Поки сервер працює, він коштує приблизно $0.37 за годину (4 vCPU + 16 ГБ). Без запитів він вимикається приблизно через 15 хвилин (мінімум 0 екземплярів), і тоді обчислення не коштують нічого. Безкоштовна квота Cloud Run покриває приблизно перші 8 годин роботи на місяць. Сховище коштує близько $0.02 за ГБ на місяць (пісня займає 5–10 МБ), образи в Artifact Registry ще до $0.3 на місяць (образ займає близько 0,9 ГБ, зберігаються 3 останні), збірки вкладаються в безкоштовні 2 500 хвилин Cloud Build на місяць. Захист від великих рахунків: не більше одного екземпляра (`max-instances 1`), денні ліміти на користувача, запит триває не довше години. Варто також увімкнути бюджет зі сповіщеннями в Google Cloud Billing. Зупинити сервер повністю: `gcloud run services delete chords-api --region europe-west1` (пісні в бакеті залишаться).
+
+**Адмінка** (лише для власника та довірених людей): https://shchadylotaras.github.io/chords-listener/admin.html. Усім іншим вона показує «Сторінку не знайдено». Права видає й знімає власник скриптом `scripts/admin_grant.py`; міграції, розклад фонових робіт і алерти описано в [`docs/CLOUD.md`](docs/CLOUD.md#admin-console).
 
 ## Як користуватись
 
@@ -364,6 +366,27 @@ cd frontend && node scripts/eval-web-engine.ts --dir <папка з синтет
 cd frontend && node scripts/eval-transcription.ts   # точність і швидкість розпізнавання нот (живе фортепіано)
 ```
 
+Тести з емуляторами Firebase (~170 тестів адмінки, прийому задач, видачі прав і Firestore без них пропускаються; потрібні Java 21+ і Node; порти 8080 і 9099 мають бути вільні). У CI це робить `.github/workflows/backend-emulators.yml`:
+
+```bash
+export PATH=/opt/homebrew/opt/openjdk/bin:$PATH   # macOS + Homebrew; на Linux досить будь-якої Java 21+
+npx -y firebase-tools@15 emulators:exec --only auth,firestore --project build-chords-listener "cd backend && uv run pytest -q -p no:cacheprovider"
+npx -y firebase-tools@15 emulators:exec --only auth,firestore --project build-chords-listener "node --test firestore.rules.test.mjs"   # правила Firestore
+npx -y firebase-tools@15 emulators:exec --only auth,firestore,storage --project build-chords-listener "node --test storage.rules.test.mjs"   # правила Storage
+```
+
+`firebase-tools` закріплено на мажорній версії 15 (так само в CI), щоб нова мажорна версія не змінила емулятори непомітно. У CI змінна `CHORDS_FAIL_ON_SKIP=1` перетворює тест, пропущений через відсутній ffmpeg чи емулятор, на помилку.
+
+Живі e2e адмінки (справжній браузер + справжній бекенд у хмарному режимі + емулятори Firebase Auth / Firestore / Storage, реальний час, без підмін; потрібні Java 21+, `uv sync` у `backend/`, вільні порти 8080, 9099, 9199, 8775 і 4183). Емулятори запускає сам скрипт (`firebase-tools@15 emulators:exec`) або бере вже запущені. Подробиці, перелік спеків і разовий крок з Linux-еталонами знімків — у `docs/CLOUD.md` → "Live e2e". У CI — `.github/workflows/admin-live-e2e.yml`, щоночі:
+
+```bash
+cd frontend && npx playwright install chromium                 # один раз
+cd frontend && npm run test:e2e:live                           # ~2 хв, усе, крім 30-хвилинного спеку
+cd frontend && LIVE_SLOW=1 npm run test:e2e:live               # + вкладка адмінки 30 хв без дій (AC-02)
+cd frontend && npm run test:e2e:live -- banner.spec.ts --update-snapshots   # нові еталони знімків банера для цієї ОС
+python3 scripts/measure_cold_start.py --dry-run                # холодний старт хмарного сервісу (p95 ≤ 15 с), лише після розгортання
+```
+
 Синтетичні пісні для оцінки: `cd backend && uv run python scripts/make_synthetic.py --out <папка>` (додай `--random 14` для випадкового набору).
 
 Документація API доступна на http://localhost:8765/api/docs. Контракти (формати JSON, позначення акордів, API, клавіші, темп, режими сайту, Firebase і його емулятори) описано в `docs/SPEC.md`.
@@ -381,7 +404,7 @@ chords-listener/
 ├── storage.rules            Firebase Storage: користувач може лише завантажити свій файл
 ├── scripts/                 deploy_cloud.sh (розгортання), smoke_cloud.py (перевірка), gcloud_token.cjs,
 │                            deploy_fetch.sh (розгортання chords-fetch), smoke_fetch.py (перевірка фрагментів YouTube),
-│                            gcloud_common.sh (спільне для обох розгортань)
+│                            gcloud_common.sh (спільне для обох розгортань), measure_cold_start.py (холодний старт)
 ├── backend/                 Python 3.11 (uv)
 │   ├── Dockerfile           образ для Cloud Run (cloudbuild.yaml збирає його в Cloud Build)
 │   ├── fetch.Dockerfile     образ chords-fetch (сервісу фрагментів YouTube)

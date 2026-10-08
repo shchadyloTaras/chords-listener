@@ -20,7 +20,7 @@ from app.models import AnalysisResult, Settings, TrackPatch, TrackSummary
 from app.publish import NullPublisher, Publisher
 from app.storage import TrackStore, read_json, write_json_atomic
 from app.users import user_context
-from tests.test_cloud import BUCKET, FakeGcs, FakeIndex
+from cloud_fixtures import BUCKET, FakeGcs, FakeIndex
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
@@ -119,11 +119,35 @@ def test_index_document_has_the_summary_fields_a_version_and_a_publish_time(pub,
     doc = index.docs[("alice", tid)]
     summary_keys = set(TrackSummary.model_validate({"id": tid, "title": "t", "duration": 1, "source": {"type": "file"},
                                                     "createdAt": "x"}).model_dump(mode="json"))
-    assert set(doc) == summary_keys | {"version", "publishedAt"}
+    assert set(doc) == summary_keys | {"version", "publishedAt", "sizeBytes"}
     assert doc["id"] == tid and doc["createdAt"] == "2026-10-04T12:00:00Z"
     assert doc["chordCount"] == 1 and doc["key"]["tonic"] == "G" and doc["edited"] is False
     assert before - timedelta(seconds=1) <= doc["publishedAt"] <= datetime.now(timezone.utc)
     assert doc["publishedAt"].tzinfo is not None
+
+
+def directory_bytes(store: TrackStore, tid: str, uid: str = "alice") -> int:
+    with user_context(uid):
+        return sum(f.stat().st_size for f in store.track_dir(tid).rglob("*") if f.is_file())
+
+
+def test_published_track_carries_the_size_of_its_directory(pub, store, index, tid):
+    assert pub.publish("alice", tid)
+    size = index.docs[("alice", tid)]["sizeBytes"]
+    assert isinstance(size, int) and size > 0
+    assert size >= len(AUDIO_BYTES)
+    assert size == directory_bytes(store, tid)  # audio, track.json and the rest, as the migration counts it
+
+
+def test_size_bytes_counts_the_stems_and_follows_a_republish(pub, store, gcs, index):
+    tid = install(store, gcs, stems=("vocals", "instruments"))
+    pub.publish("alice", tid)
+    size = index.docs[("alice", tid)]["sizeBytes"]
+    assert size >= 3 * len(AUDIO_BYTES) and size == directory_bytes(store, tid)
+    with user_context("alice"):
+        (store.track_dir(tid) / "stems" / "vocals.mp3").write_bytes(AUDIO_BYTES * 2)
+    pub.publish("alice", tid)
+    assert index.docs[("alice", tid)]["sizeBytes"] == directory_bytes(store, tid) > size
 
 
 def test_the_index_document_can_be_stored_in_firestore(pub, index, tid):

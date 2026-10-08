@@ -1,0 +1,21 @@
+{
+  // Type-check of the Playwright specs, stubbed (e2e/) and live (e2e-live/) (npm run typecheck:e2e). Kept out of
+  // `tsc -b`: it needs @playwright/test.
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["e2e", "e2e-live", "playwright.config.ts", "playwright.live.config.ts"]
+}

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import os
 import re
 import shutil
 import threading
@@ -27,7 +28,16 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.engine import engine_info
 
-from .auth import AuthMiddleware, FirebaseTokenVerifier, MediaSigner
+from .admin.audit import AuditFailure
+from .admin.authz import ADMIN_PREFIX, AdminAuthz, HiddenFromCaller, ReauthRequired, unguarded_admin_routes
+from .admin.deletion import AuthAdmin, BucketEraser, Purger
+from .admin.directory import Directory
+from .admin.history import Projections, pending_path
+from .admin.router import router as admin_router_default
+from .admin.settings import RuntimeSettings
+from .admin.sweeps import Sweeper, internal_router
+from .admission import Admission
+from .auth import AuthMiddleware, FirebaseTokenVerifier, MediaSigner, SchedulerTokenVerifier
 from .fetch_client import RemoteClipFetcher
 from .firestore import FirestoreIndex
 from .gcs import FETCH_GLOB, UPLOADS_GLOB, UploadBucket, default_client
@@ -71,6 +81,27 @@ from .users import current_uid
 log = logging.getLogger("chords.api")
 
 PUBLISH_SWEEP_INTERVAL_S = 600.0  # how often the pending publishes (publish-pending.json) are retried
+_UNSET: Any = object()  # "not given" for create_app arguments where None means "none"
+
+
+def _scheduler_verifier_from_env() -> Optional[SchedulerTokenVerifier]:
+    """The check of Cloud Scheduler's OIDC token (``CHORDS_SCHEDULER_AUDIENCE`` = this service's URL,
+    ``CHORDS_SCHEDULER_EMAIL`` = ``chords-scheduler@...``); None unless both are set: the sweep endpoint then
+    answers 404 to everyone."""
+    audience = os.environ.get("CHORDS_SCHEDULER_AUDIENCE", "").strip()
+    email = os.environ.get("CHORDS_SCHEDULER_EMAIL", "").strip()
+    return SchedulerTokenVerifier(audience, email) if audience and email else None
+
+def instance_cap_warning(env: Optional[Any] = None) -> Optional[str]:
+    """The start-up warning when the Cloud Run instance cap is not 1, else None. The daily quota, the probe limiter
+    and the 10 deletions / 60 min limit live in this process's memory (docs/features/admin sad §11, ADR-0003), so a second
+    instance would double them. ``scripts/deploy_cloud.sh`` declares the cap it deploys with as ``CHORDS_MAX_INSTANCES``."""
+    value = (os.environ if env is None else env).get("CHORDS_MAX_INSTANCES", "").strip()
+    if value == "1":
+        return None
+    shown = f"{value!r}" if value else "not declared (CHORDS_MAX_INSTANCES)"
+    return (f"max-instances is {shown}, expected 1: the admin's quotas, attempt limits and deletion limit are kept "
+            "in this process's memory and are only correct with one instance (deploy with scripts/deploy_cloud.sh)")
 BUCKET_SWEEP_INTERVAL_S = 3600.0  # how often abandoned uploads and fragments are removed from the bucket
 UPLOAD_MAX_AGE_S = 24 * 3600.0
 FETCH_MAX_AGE_S = 3600.0  # fragments chords-fetch left that no job took (the API died meanwhile)
@@ -88,6 +119,23 @@ STATUS_BY_CODE: dict[str, int] = {
     "quota_exceeded": 429,
     "download_blocked": 502,
     "unavailable": 501,
+    # admin (docs/features/admin)
+    "cloud_restricted": 403,
+    "analyses_paused": 503,
+    "youtube_disabled": 503,
+    "vocals_disabled": 503,
+    "query_too_short": 422,
+    "invalid_period": 422,
+    "invalid_value": 422,
+    "confirm_email_mismatch": 422,
+    "reauth_required": 401,
+    "self_target": 409,
+    "deletion_pending": 409,
+    "not_scheduled": 409,
+    "not_set": 409,
+    "deletion_rate_limit": 429,
+    "not_applied": 503,
+    "audit_unavailable": 503,
 }
 
 
@@ -99,8 +147,37 @@ class ApiException(Exception):
         self.status = status or STATUS_BY_CODE.get(code, 500)
 
 
-def error_response(status: int, code: ErrorCode, detail: str, headers: Optional[dict[str, str]] = None) -> JSONResponse:
-    return JSONResponse({"detail": detail, "code": code}, status_code=status, headers=headers)
+def error_response(
+    status: int,
+    code: ErrorCode,
+    detail: str,
+    headers: Optional[dict[str, str]] = None,
+    details: Optional[dict[str, Any]] = None,
+) -> JSONResponse:
+    body: dict[str, Any] = {"detail": detail, "code": code}
+    if details is not None:
+        body["details"] = details
+    return JSONResponse(body, status_code=status, headers=headers)
+
+
+def _is_admin_path(path: str) -> bool:
+    return path == ADMIN_PREFIX or path.startswith(ADMIN_PREFIX + "/")
+
+
+def _unknown_endpoint(path: str) -> str:
+    """The detail of the 404 for an address no route serves; also what a non-admin gets from /api/admin/*."""
+    return f"Unknown API endpoint: {path}"
+
+
+def _validation_fields(errors: list[Any]) -> dict[str, str]:
+    """Field name (as in the request) -> first problem. A model-level error names no field: it is keyed ``_form``."""
+    fields: dict[str, str] = {}
+    for err in errors:
+        loc = [str(p) for p in err.get("loc", ())]
+        if loc and loc[0] in ("body", "query", "path", "header", "cookie"):
+            loc = loc[1:]
+        fields.setdefault(".".join(loc) or "_form", str(err.get("msg", "invalid value")))
+    return fields
 
 
 def _not_found(what: str = "Track") -> ApiException:
@@ -199,12 +276,23 @@ def create_app(
     gcs_client_factory: Optional[Callable[[], Any]] = None,
     vocal_transcriber: Optional[Callable[..., dict]] = None,
     publisher_factory: Optional[Callable[[TrackStore], Any]] = None,
+    admin_db: Any = None,
+    admin_authz: Optional[AdminAuthz] = None,
+    admin_router: Optional[APIRouter] = None,
+    sweeper: Any = _UNSET,
+    scheduler_verifier: Any = _UNSET,
+    wake_sweep: Optional[bool] = None,
 ) -> FastAPI:
     """``token_verifier`` (``.verify(token) -> uid``) and ``gcs_client_factory`` replace the Firebase token
     check and the google-cloud-storage client (tests); ``vocal_transcriber`` replaces app.vocals.transcribe;
     ``publisher_factory(store)`` replaces the ``Publisher`` that publishes track changes in cloud mode
-    (tests; ``CHORDS_PUBLISH`` off still wins); ``clip_fetcher`` replaces the YouTube fragment downloader (tests;
-    see ``_clip_fetcher``)."""
+    (tests; ``CHORDS_PUBLISH`` off still wins). ``admin_db`` (``.get(path)``; default ``FirestoreIndex`` in cloud
+    mode) holds the admin allowlist, ``admin_authz`` replaces the allowlist check and probe limiter built from it,
+    ``admin_router`` replaces ``app.admin.router.router`` (tests). ``sweeper`` (default: built on ``admin_db``;
+    None = no sweep endpoint) runs ``POST /api/internal/sweep``, which only ``scheduler_verifier`` (``.verify(token)``;
+    default: from ``CHORDS_SCHEDULER_*``; None = nobody) may call. ``wake_sweep`` runs the first-wake sweep of the
+    UTC day at start-up (default: on Cloud Run, i.e. when ``K_SERVICE`` is set). ``clip_fetcher`` replaces the YouTube fragment
+    downloader (tests; see ``_clip_fetcher``)."""
     settings = settings or Settings.from_env()
     ensure_tool_path()
     if not logging.getLogger().handlers:
@@ -217,11 +305,28 @@ def create_app(
             log.warning("CHORDS_SIGNING_KEY is not set: media links stop working when the server restarts")
             signer = MediaSigner.random(ttl_s=settings.media_url_ttl_s)
     store = TrackStore(settings, signer=signer)
+    if admin_db is None and settings.cloud:
+        admin_db = FirestoreIndex(settings.firebase_project)
+    # one instance per app of what the job history and the sweep share (docs/features/admin): the projections buffer
+    # file (admin/projections-pending.json) is filled by JobManager and replayed by the sweep through the same
+    # ``Projections``; the email index the admin routes search is the one the sweep rebuilds. None without a database.
+    projections = Projections(admin_db, pending_path(settings.data_dir)) if admin_db is not None else None
+    admin_directory = Directory(admin_db) if admin_db is not None else None
+    # the settings cache the admin routes edit and the admission gate reads (ADR-0008): one per app, falling back to
+    # this app's own ``Settings`` while ``adminConfig/settings`` does not exist
+    admin_settings = RuntimeSettings(admin_db, env=lambda: settings) if admin_db is not None else None
+    admission = Admission(admin_db, admin_settings) if admin_settings is not None else None
+    # whether a uid's account was purged (``adminTombstones/<uid>``, ADR-0011): the job results and the publish path check it
+    is_tombstoned: Optional[Callable[[str], bool]] = (
+        (lambda uid: admin_db.get(f"adminTombstones/{uid}") is not None) if admin_db is not None else None
+    )
     bucket = (
         UploadBucket(settings.upload_bucket, project=settings.firebase_project, client_factory=gcs_client_factory)
         if settings.cloud and settings.upload_bucket
         else None
     )
+    # the fetchers' deploy-time byte cap is a fallback only: every job passes the size limit in force (the admin-set
+    # one on the cloud, AC-25) with its download, so a change applies without a restart
     jobs = JobManager(
         settings,
         store,
@@ -229,6 +334,10 @@ def create_app(
         analyzer,
         vocal_transcriber=vocal_transcriber,
         clip_fetcher=clip_fetcher or _clip_fetcher(settings, bucket),
+        # admin job history and the late-job discard of purged accounts (docs/features/admin): none without a database
+        projections=projections,
+        is_tombstoned=is_tombstoned,
+        admission=admission,
     )
     get_engine_info = engine_info_fn or engine_info
     if not (settings.cloud and settings.publish):
@@ -241,6 +350,7 @@ def create_app(
             FirestoreIndex(settings.firebase_project),
             bucket=settings.upload_bucket,
             gcs_client_factory=gcs_client_factory or (lambda: default_client(settings.firebase_project)),
+            is_tombstoned=is_tombstoned,
         )
     else:
         # Not a mere warning: clients that read the index keep reading it, so nothing new or changed would show
@@ -255,6 +365,9 @@ def create_app(
         store.init()
         log.info("data dir: %s (auth: %s)", settings.data_dir, settings.auth)
         if settings.cloud:
+            cap_warning = instance_cap_warning()
+            if cap_warning:
+                log.warning(cap_warning)
             _start_cloud_background_tasks(
                 preload_engine=analyzer is None,
                 bucket=bucket,
@@ -262,6 +375,8 @@ def create_app(
                 publisher=None if isinstance(publisher, NullPublisher) else publisher,
                 stop=stop_background,
             )
+            if sweeper is not None and wake_sweep_on:  # the first natural wake of the UTC day runs the -wake slot
+                threading.Thread(target=sweeper.run_wake, name="chords-wake-sweep", daemon=True).start()
         try:
             yield
         finally:
@@ -281,6 +396,30 @@ def create_app(
     app.state.jobs = jobs
     app.state.bucket = bucket
     app.state.publisher = publisher
+    app.state.admin_db = admin_db
+    app.state.admin_authz = admin_authz or AdminAuthz(admin_db)
+    app.state.admin_directory = admin_directory  # the admin router's ``directory`` (app.admin.router)
+    app.state.admin_settings = admin_settings  # ... and its ``settings`` (None: built on first use)
+    app.state.admission = admission  # None without a database: no gate (local mode)
+    if sweeper is _UNSET:
+        sweeper = None
+        if admin_db is not None:
+            # the purges step of the sweep (ADR-0011): the same database and e-mail index as the admin routes
+            erase_objects = None
+            if settings.upload_bucket:
+                eraser = BucketEraser(
+                    settings.upload_bucket, gcs_client_factory or (lambda: default_client(settings.firebase_project))
+                )
+                erase_objects = eraser.erase
+            purger = Purger(
+                admin_db, directory=admin_directory, users_dir=settings.users_dir,
+                auth=AuthAdmin(settings.firebase_project), erase_objects=erase_objects,
+            )
+            sweeper = Sweeper(admin_db, projections, admin_directory, purge=purger.run)
+    app.state.sweeper = sweeper
+    if scheduler_verifier is _UNSET:
+        scheduler_verifier = _scheduler_verifier_from_env() if settings.cloud else None
+    wake_sweep_on = settings.cloud and (bool(os.environ.get("K_SERVICE")) if wake_sweep is None else wake_sweep)
 
     if settings.cloud:  # innermost: CORS (below) also decorates its 401 responses
         app.add_middleware(
@@ -288,6 +427,7 @@ def create_app(
             verifier=token_verifier or FirebaseTokenVerifier(settings.firebase_project),
             signer=signer,
             smoke_key=settings.smoke_key,
+            scheduler_verifier=scheduler_verifier,
         )
     app.add_middleware(
         CORSMiddleware,
@@ -311,7 +451,14 @@ def create_app(
     )
 
     _install_error_handlers(app)
-    app.include_router(_api_router(settings, store, jobs, get_engine_info, bucket))
+    admin = admin_router or admin_router_default
+    api = _api_router(settings, store, jobs, get_engine_info, bucket)
+    unguarded = unguarded_admin_routes(admin, api)  # a new admin route without the guard stops the start-up
+    if unguarded:
+        raise RuntimeError("admin routes without the admin guard (use new_admin_router): " + "; ".join(unguarded))
+    app.include_router(admin)  # before the API router: its catch-all would shadow it
+    app.include_router(internal_router)  # POST /api/internal/sweep: AuthMiddleware lets only the scheduler through
+    app.include_router(api)
     _install_frontend(app, settings)
     return app
 
@@ -415,6 +562,18 @@ def _install_error_handlers(app: FastAPI) -> None:
     async def _source_exc(_: Request, exc: SourceError) -> JSONResponse:
         return error_response(exc.status or STATUS_BY_CODE.get(exc.code, 500), exc.code, exc.message)
 
+    @app.exception_handler(HiddenFromCaller)
+    async def _admin_hidden(_: Request, exc: HiddenFromCaller) -> JSONResponse:
+        return error_response(404, "not_found", _unknown_endpoint(exc.path))
+
+    @app.exception_handler(ReauthRequired)
+    async def _admin_reauth(_: Request, exc: ReauthRequired) -> JSONResponse:
+        return error_response(401, "reauth_required", str(exc))
+
+    @app.exception_handler(AuditFailure)
+    async def _admin_audit(_: Request, exc: AuditFailure) -> JSONResponse:
+        return error_response(exc.status, exc.code, str(exc))
+
     @app.exception_handler(TrackNotFound)
     async def _track_missing(_: Request, __: TrackNotFound) -> JSONResponse:
         return error_response(404, "not_found", "Track not found")
@@ -431,6 +590,10 @@ def _install_error_handlers(app: FastAPI) -> None:
         first = errors[0] if errors else {}
         where = ".".join(str(p) for p in first.get("loc", ()) if p != "body")
         message = f"{where}: {first.get('msg', 'invalid value')}" if where else str(first.get("msg", "Invalid request"))
+        if _is_admin_path(request.url.path):
+            return error_response(
+                422, "invalid_value", f"Invalid request - {message}", details={"fields": _validation_fields(errors)}
+            )
         code: ErrorCode = "invalid_url" if request.url.path.rstrip("/") == "/api/jobs" else "internal"
         return error_response(422, code, f"Invalid request - {message}")
 
@@ -552,7 +715,8 @@ def _api_router(
     async def upload_job(request: Request) -> Job:
         """Multipart upload streamed straight to disk; deduplicated by content sha1. Cloud mode caps the
         body at ~30 MB (Cloud Run allows 32 MiB per request): bigger files go through POST /jobs/storage."""
-        limit = min(settings.max_upload_bytes, settings.max_request_bytes) if settings.cloud else settings.max_upload_bytes
+        limits = jobs.effective_limits()
+        limit = min(limits.upload_bytes, settings.max_request_bytes) if settings.cloud else limits.upload_bytes
         work = store.new_work_dir("upload")
         try:
             try:
@@ -564,12 +728,12 @@ def _api_router(
             probe = await run_in_threadpool(probe_media, upload.path)
             if not probe.has_audio:
                 raise SourceError("unsupported_format", "This file has no audio track")
-            if probe.duration and probe.duration > settings.max_duration_s:
-                raise SourceError("too_long", too_long_message(probe.duration, settings.max_duration_min))
+            if probe.duration and probe.duration > limits.duration_s:
+                raise SourceError("too_long", too_long_message(probe.duration, limits.duration_min))
         except BaseException:
             shutil.rmtree(work, ignore_errors=True)
             raise
-        return await run_in_threadpool(jobs.submit_upload, upload, probe, _options(upload.options))
+        return await run_in_threadpool(jobs.submit_upload, upload, probe, _options(upload.options), upload.origin)
 
     @api.post(
         "/jobs/storage",
@@ -586,9 +750,10 @@ def _api_router(
         info = bucket.stat(path)
         if info is None:
             raise ApiException("not_found", "The upload was not found (it may have been processed already)")
-        if info.size > settings.max_upload_bytes:
+        limits = jobs.effective_limits()
+        if info.size > limits.upload_bytes:
             bucket.delete(path)
-            raise ApiException("too_large", f"The file is larger than the {settings.max_upload_mb:g} MB limit")
+            raise ApiException("too_large", f"The file is larger than the {limits.upload_mb:g} MB limit")
         if info.size == 0:
             bucket.delete(path)
             raise ApiException("unsupported_format", "The uploaded file is empty")
@@ -607,6 +772,7 @@ def _api_router(
             video_id=video_id,
             start_offset=float(body.start_offset or 0.0),
             options=_options(body.options),
+            origin=body.origin,
         )
 
     @api.get("/me", response_model=UserInfo)
@@ -624,7 +790,7 @@ def _api_router(
                     "day": usage["day"],
                     "analyses": usage["analyses"],
                     "vocals": usage["vocals"],
-                    "jobs": {"used": jobs.running_count(uid), "limit": settings.max_user_jobs},
+                    "jobs": {"used": jobs.running_count(uid), "limit": usage["jobs"]["limit"]},
                 },
             }
         )
@@ -773,7 +939,7 @@ def _api_router(
 
     @api.api_route("/{rest:path}", methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"], include_in_schema=False)
     def api_not_found(rest: str) -> Response:
-        raise ApiException("not_found", f"Unknown API endpoint: /api/{rest}")
+        raise ApiException("not_found", _unknown_endpoint(f"/api/{rest}"))
 
     return api
 

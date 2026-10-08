@@ -2,6 +2,11 @@ data/
 node_modules/
 frontend/dist/
 frontend/dist-pages/
+frontend/dist-e2e/
+frontend/dist-e2e-live/
+frontend/test-results/
+frontend/playwright-report/
+frontend/playwright-report-live/
 backend/.venv/
 __pycache__/
 .pytest_cache/
@@ -43,3 +48,6 @@ ui-debug.log*
 database-debug.log*
 pubsub-debug.log*
 .firebase/
+
+# SDD parallel worktrees
+.worktrees/

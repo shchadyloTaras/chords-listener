@@ -2,7 +2,8 @@
 // library read through it, so there is a single connection.
 //
 // Never import this module statically (like lib/firebase.ts): it is only loaded from modules that
-// lib/auth.ts imports on sign-in, so guests never download Firestore.
+// lib/auth.ts imports on sign-in, and on demand by lib/serviceStatus.ts (the public banner, read once per
+// visit and then at most every 5 minutes), so the app never waits for Firestore.
 //
 // The cache is memory only (no IndexedDB persistence): nothing of one account's data stays in the
 // browser for the next person who signs in on it.
