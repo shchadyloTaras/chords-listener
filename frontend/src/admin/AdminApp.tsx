@@ -13,6 +13,8 @@ import { useDocumentTheme } from '../hooks/useTheme'
 import { Overview } from './screens/Overview'
 import { UserCard } from './screens/UserCard'
 import { Users } from './screens/Users'
+import { Jobs } from './screens/Jobs'
+import { Stats } from './screens/Stats'
 import { ADMIN_NAV, useAdminRoute, type AdminRoute } from './useAdminRoute'
 
 /**
@@ -74,6 +76,8 @@ function Screen({ route }: { route: AdminRoute }) {
   if (route.name === 'overview') return <Overview />
   if (route.name === 'users') return <Users />
   if (route.name === 'user') return <UserCard key={route.uid} uid={route.uid} />
+  if (route.name === 'jobs') return <Jobs />
+  if (route.name === 'stats') return <Stats />
   return <section aria-live="polite" className="px-4 py-6" data-screen={route.name} />
 }
 
