@@ -10,15 +10,14 @@ import argparse
 from datetime import datetime, timezone
 
 from _fsrest import Rest, already_exists
-from app.admin.models import BannerIn
+from app.admin.settings import PLACEHOLDER_BANNER
 from app.firestore import IndexError_
 from app.models import Settings
 
-# Contract (openapi Banner): uk/en are 1-250 characters even while the banner is off, so the seed is a short
-# maintenance notice, validated through BannerIn (no model_construct bypass). It stays disabled until an admin publishes.
-BANNER = BannerIn.model_validate(
-    {"enabled": False, "uk": "Технічні роботи. Скоро повернемось.", "en": "Maintenance in progress. Back soon."}
-).model_dump()
+# Contract (openapi Banner): uk/en are 1-250 characters even while the banner is off, so the seed is the server's own
+# placeholder (a short maintenance notice, validated through BannerIn): the same banner GET /settings answers while
+# there is none. It stays disabled until an admin publishes.
+BANNER = PLACEHOLDER_BANNER.model_dump()
 
 SWITCHES = {"analysesPaused": False, "youtubeEnabled": True, "vocalsEnabled": True}
 

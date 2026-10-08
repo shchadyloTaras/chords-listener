@@ -8,7 +8,7 @@ files_hint: ["backend/app/admin/settings.py", "docs/features/admin/migrations/04
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 10 — re-review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T54 — Keep GET /settings and GET /jobs inside the contract
@@ -19,4 +19,4 @@ status: "todo"
 
 **Re-review fixes 5, 6. With publicStatus/current absent or invalid, GET /api/admin/settings returns the same validated placeholder banner migration 04 seeds (one shared constant); openapi.yaml declares both invalid_period and invalid_value for 422 on /api/admin/jobs, checked by a contract test.**
 
-- [ ] lint + type-check clean (ruff / oxlint + tsc)
+- [x] lint + type-check clean (ruff / oxlint + tsc)

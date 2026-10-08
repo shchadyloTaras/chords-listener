@@ -272,6 +272,29 @@ def test_history_limit_and_cursor_are_validated(env: Env, mem: MemDb) -> None:
         assert (r.status_code, r.json()["code"]) == (422, "invalid_value"), params
     r = env.get("/api/admin/jobs", after="not-a-cursor")
     assert (r.status_code, r.json()["code"]) == (422, "invalid_value")
+    first = env.get("/api/admin/jobs", limit=2).json()["nextCursor"]
+    r = env.get("/api/admin/jobs", after=first, before=first)                  # one direction at a time
+    assert (r.status_code, r.json()["code"]) == (422, "invalid_value")
+
+
+CONTRACT = Path(__file__).resolve().parents[3] / "docs" / "features" / "admin" / "contracts" / "openapi.yaml"
+
+
+def _declared_codes(spec: dict, response: dict) -> set[str]:
+    """The error codes a contract response names in its example(s) (a ``$ref`` to a shared response is followed)."""
+    if "$ref" in response:
+        response = spec["components"]["responses"][response["$ref"].rsplit("/", 1)[-1]]
+    body = response.get("content", {}).get("application/json", {})
+    examples = [body["example"]] if "example" in body else [e["value"] for e in body.get("examples", {}).values()]
+    return {e["code"] for e in examples if isinstance(e, dict) and "code" in e}
+
+
+def test_the_contract_declares_both_422s_the_history_answers() -> None:
+    """A bad period is ``invalid_period``; a cursor the server did not make, or after with before, ``invalid_value``."""
+    yaml = pytest.importorskip("yaml")
+    spec = yaml.safe_load(CONTRACT.read_text(encoding="utf-8"))
+    assert _declared_codes(spec, spec["paths"]["/api/admin/jobs"]["get"]["responses"]["422"]) == {
+        "invalid_period", "invalid_value"}
 
 
 def test_history_page_stays_within_the_read_budget_on_a_worst_case_page(env: Env, mem: MemDb) -> None:

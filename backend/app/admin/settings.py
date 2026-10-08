@@ -61,6 +61,12 @@ BANNER_FIELDS: frozenset[str] = frozenset({"enabled", "uk", "en"})
 #: The only top-level fields of ``publicStatus/current`` (SAD §11): no limits, no uids, no emails.
 PUBLIC_FIELDS: frozenset[str] = frozenset({"banner", "switches", "updatedAt"})
 
+#: The banner before any was published: off, with short valid texts (openapi Banner: uk/en 1-250 characters even
+#: while off). Migration 04 seeds it; a missing or invalid stored banner reads as it.
+PLACEHOLDER_BANNER = BannerIn.model_validate(
+    {"enabled": False, "uk": "Технічні роботи. Скоро повернемось.", "en": "Maintenance in progress. Back soon."}
+)
+
 _NEVER = datetime.fromtimestamp(0, timezone.utc)   # "updated at" of values that came from the env
 
 
@@ -162,16 +168,15 @@ class RuntimeSettings:
 
     @staticmethod
     def _banner(public: Optional[Document]) -> BannerIn:
-        """The banner of the public document; none, or one that does not validate, is a banner that is off.
-        A banner that is off keeps whatever text it holds (the seed stores empty strings)."""
+        """The banner of the public document. None, or one that does not validate (an empty text from an old seed, a
+        hand edit), is ``PLACEHOLDER_BANNER``: off, and never a banner the contract would refuse."""
         stored = public.data.get("banner") if public is not None else None
-        if isinstance(stored, dict) and stored.get("enabled") is True:
+        if isinstance(stored, dict):
             try:
                 return BannerIn.model_validate(stored)
             except ValidationError:
                 log.warning("stored banner is not valid: showing none", exc_info=True)
-        texts = {k: stored[k] for k in ("uk", "en") if isinstance(stored, dict) and isinstance(stored.get(k), str)}
-        return BannerIn.model_construct(enabled=False, uk=texts.get("uk", ""), en=texts.get("en", ""))
+        return PLACEHOLDER_BANNER.model_copy()
 
     # ----------------------------------------------------------------------- write ops
 

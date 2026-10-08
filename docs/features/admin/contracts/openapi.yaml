@@ -322,7 +322,18 @@ paths:
                 countsByReason: { youtube_blocked: 1 }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
-        "422": { $ref: "#/components/responses/InvalidPeriod" }
+        "422":
+          description: |
+            the period ends before it starts or is longer than 90 days (AC-09, `invalid_period`); a page cursor the
+            server did not make, or `after` together with `before` (`invalid_value`) — not journaled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                invalidPeriod:
+                  value: { detail: "The period must be at most 90 days and end no earlier than it starts", code: invalid_period }
+                invalidValue:
+                  value: { detail: "The page cursor is not valid", code: invalid_value }
 
   /api/admin/stats:
     get:

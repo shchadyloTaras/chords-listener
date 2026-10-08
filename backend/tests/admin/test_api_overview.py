@@ -241,6 +241,27 @@ def test_settings_returns_limits_switches_and_banner(db, make_client, clock) -> 
     }
 
 
+@pytest.mark.parametrize("public", [
+    None,                                                                    # publicStatus/current absent
+    {"enabled": False, "uk": "", "en": ""},                                  # the old seed: empty texts
+    {"enabled": True, "uk": "", "en": "x"},                                  # a stored banner that does not validate
+])
+def test_settings_never_answer_a_banner_outside_the_contract(db, make_client, clock, public) -> None:
+    """openapi Banner: uk/en are 1-250 characters even while the banner is off. With no valid stored banner the
+    answer is the placeholder migration 04 seeds: off, with short texts."""
+    seed_config(db)
+    if public is None:
+        del db.docs[PUBLIC]
+    else:
+        db.docs[PUBLIC]["banner"] = public
+    client = make_client(db)
+
+    banner = client.get("/api/admin/settings", headers=HEADERS).json()["banner"]
+
+    assert banner["enabled"] is False
+    assert all(1 <= len(banner[lang].strip()) <= 250 for lang in ("uk", "en")), banner
+
+
 # ===================================================================== NFR: read budget, on the emulator
 
 EMULATOR_DAY = "2031-03-04"
