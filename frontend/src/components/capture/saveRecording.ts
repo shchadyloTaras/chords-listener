@@ -43,7 +43,7 @@ export async function saveRecording(audio: Blob, mime: string, opts: { title: st
   const { title, video, signal } = opts
   if (!video) {
     const file = new File([audio], recordingFilename(title, type), { type })
-    return uploadAndFollow(file, undefined, { meta: { title }, signal })
+    return uploadAndFollow(file, undefined, { meta: { title, origin: 'mic' }, signal })
   }
   const source = youtubeSource(video)
   const offset = video.startOffset >= MIN_OFFSET_S ? video.startOffset : 0

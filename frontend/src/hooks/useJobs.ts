@@ -304,8 +304,8 @@ export async function submitFile(file: File, options?: JobOptions, extra: Submit
     const err = toApiError(e)
     const { toast } = useApp.getState()
     if (err.code === 'aborted') toast(t('core.upload.cancelled'), 'info')
-    else if (err.code === 'quota_exceeded' && !extra.inBrowser)
-      // the cloud's limit for today: this browser can still do it
+    else if ((err.code === 'quota_exceeded' || err.code === 'cloud_restricted' || err.code === 'analyses_paused') && !extra.inBrowser)
+      // the cloud's limit for today, a restricted account, a paused service: this browser can still do it
       toast(`${file.name}: ${errorText(err.code)}`, 'error', {
         label: t('cloud.quota.inBrowser'),
         run: () => void submitFile(file, options, { ...extra, inBrowser: true }),

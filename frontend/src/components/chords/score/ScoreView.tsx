@@ -26,6 +26,7 @@ import { isTypingTarget } from '../hotkeys'
 import { useChordModel } from '../model'
 import { useChordUi } from '../uiStore'
 import { useTourFlags, useTourTrigger } from '../../tour/hooks'
+import { errorText } from '../../jobs/errorText'
 import { useCancelVocals } from '../useCancelVocals'
 import { Floating } from '../ui/Floating'
 import { Divider, Segmented, ToggleChip } from '../ui/controls'
@@ -363,8 +364,11 @@ function VocalsCard({ state }: { state: VocalsState }) {
         </>,
       )
     case 'error': {
-      const text =
-        state.code === 'quota_exceeded'
+      // the administrator's switches: worded in the cloud's own words, and a retry would be refused again
+      const refused = state.code === 'cloud_restricted' || state.code === 'vocals_disabled' || state.code === 'analyses_paused'
+      const text = refused
+        ? errorText(state.code)
+        : state.code === 'quota_exceeded'
           ? t('score.vocals.quota')
           : state.code === 'unauthorized'
             ? t('score.vocals.signin')
@@ -374,7 +378,7 @@ function VocalsCard({ state }: { state: VocalsState }) {
           <p className="min-w-0 flex-1 text-danger" title={state.message}>
             {text}
           </p>
-          {vocalsSupport(track) === 'ok' && state.code !== 'quota_exceeded' && (
+          {vocalsSupport(track) === 'ok' && state.code !== 'quota_exceeded' && !refused && (
             <button
               type="button"
               onClick={() => void (state.during === 'job' ? startVocals(track) : loadVocals(track, { force: true }))}

@@ -21,7 +21,16 @@ const KNOWN: ReadonlySet<string> = new Set<ClientErrorCode>([
 ])
 
 /** Codes of the cloud service (docs/CLOUD.md), worded in i18n/cloud.ts. */
-const CLOUD: ReadonlySet<string> = new Set<ClientErrorCode>(['unauthorized', 'quota_exceeded', 'download_blocked', 'unavailable'])
+const CLOUD: ReadonlySet<string> = new Set<ClientErrorCode>([
+  'unauthorized',
+  'quota_exceeded',
+  'download_blocked',
+  'unavailable',
+  'cloud_restricted',
+  'analyses_paused',
+  'youtube_disabled',
+  'vocals_disabled',
+])
 
 /** Failures whose generic wording talks about "your server": the cloud gets its own. */
 const CLOUD_WORDING: ReadonlySet<string> = new Set(['network', 'internal'])

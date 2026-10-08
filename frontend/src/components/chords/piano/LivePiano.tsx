@@ -26,6 +26,7 @@ import { useChordModel } from '../model'
 import { usePianoNotes } from '../score/pianoNotes'
 import { useScoreSettings } from '../score/scoreSettings'
 import { IconButton } from '../ui/controls'
+import { errorText } from '../../jobs/errorText'
 import { useCancelVocals } from '../useCancelVocals'
 import { noteName } from './keyboard'
 import { readPalette } from './palette'
@@ -346,10 +347,12 @@ function VocalsLine({
       )
     case 'error': {
       if (vocals.during !== 'job') return null
-      const quota = vocals.code === 'quota_exceeded'
+      // quota and the administrator's switches: a retry would be refused again
+      const refused = vocals.code === 'cloud_restricted' || vocals.code === 'vocals_disabled' || vocals.code === 'analyses_paused'
+      const quota = vocals.code === 'quota_exceeded' || refused
       return (
         <div className={clsx(line, 'text-danger')}>
-          <span className="truncate">{t(quota ? 'score.vocals.quota' : 'keys.vocals.error')}</span>
+          <span className="truncate">{refused ? errorText(vocals.code) : t(quota ? 'score.vocals.quota' : 'keys.vocals.error')}</span>
           {!quota && (
             <button type="button" onClick={() => void startVocals(track)} className="shrink-0 rounded px-1.5 py-0.5 font-medium text-text underline-offset-2 hover:underline">
               {t('keys.retry')}

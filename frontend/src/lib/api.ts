@@ -67,6 +67,10 @@ const SERVER_CODES: readonly ErrorCode[] = [
   'download_blocked',
   'unavailable',
   'cancelled',
+  'cloud_restricted',
+  'analyses_paused',
+  'youtube_disabled',
+  'vocals_disabled',
 ]
 
 function isServerCode(v: unknown): v is ErrorCode {
@@ -121,11 +125,15 @@ export interface TrackPatch {
 
 /** What an upload is (beyond its bytes): a tab recording of a YouTube video keeps its link. */
 export interface UploadMeta {
+  /** where the bytes came from, for the admin's statistics: a picked file or a microphone recording (absent: file) */
+  origin?: UploadOrigin
   title?: string
   source?: TrackSource
   /** video time (s) where the recording began; chord times are shifted by it to line up with the video */
   startOffset?: number
 }
+
+export type UploadOrigin = 'file' | 'mic'
 
 async function errorFromResponse(res: Response): Promise<ApiError> {
   const status = res.status
@@ -535,6 +543,7 @@ export function storageJobBody(path: string, meta: UploadMeta = {}, options?: Jo
   if (meta.startOffset !== undefined && Number.isFinite(meta.startOffset) && meta.startOffset > 0)
     body.startOffset = Math.round(meta.startOffset * 1000) / 1000
   if (options) body.options = options
+  if (meta.origin) body.origin = meta.origin
   return body
 }
 
@@ -862,7 +871,8 @@ export async function uploadFile(file: File, onProgress?: UploadProgress, opts: 
 }
 
 async function cloudUpload(conn: ServerConn, file: File, onProgress: UploadProgress | undefined, opts: UploadOptions): Promise<Job> {
-  const { signal, meta, options } = opts
+  const { signal, options } = opts
+  const meta: UploadMeta = { ...opts.meta, origin: opts.meta?.origin ?? 'file' }
   const uid = useAuth.getState().user?.uid
   if (!uid) throw new ApiError('Sign in to use the cloud', 'unauthorized', 401)
   const total = file.size
@@ -894,6 +904,7 @@ function multipartForm(file: File, opts: UploadOptions): FormData {
   if (meta?.title) form.append('title', meta.title)
   if (meta?.source) form.append('source', JSON.stringify(meta.source))
   if (meta?.startOffset && meta.startOffset > 0) form.append('startOffset', String(meta.startOffset))
+  form.append('origin', meta?.origin ?? 'file')
   return form
 }
 
