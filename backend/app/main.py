@@ -27,6 +27,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.engine import engine_info
 
+from .admin.audit import AuditFailure
 from .admin.authz import ADMIN_PREFIX, AdminAuthz, HiddenFromCaller, ReauthRequired, unguarded_admin_routes
 from .admin.router import router as admin_router_default
 from .auth import AuthMiddleware, FirebaseTokenVerifier, MediaSigner
@@ -452,6 +453,10 @@ def _install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ReauthRequired)
     async def _admin_reauth(_: Request, exc: ReauthRequired) -> JSONResponse:
         return error_response(401, "reauth_required", str(exc))
+
+    @app.exception_handler(AuditFailure)
+    async def _admin_audit(_: Request, exc: AuditFailure) -> JSONResponse:
+        return error_response(exc.status, exc.code, str(exc))
 
     @app.exception_handler(TrackNotFound)
     async def _track_missing(_: Request, __: TrackNotFound) -> JSONResponse:
