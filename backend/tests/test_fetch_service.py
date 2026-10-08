@@ -12,14 +12,18 @@ from typing import Any, Optional
 import pytest
 from fastapi.testclient import TestClient
 
+import app.fetch_service as fetch_service
 from app.fetch_service import create_fetch_app
-from app.sources import Cancelled, FetchedClip, SourceError
+from app.sources import Cancelled, FetchedClip, LocalClipFetcher, SourceError
+from app.warp import Warp
 
 VIDEO_ID = "dQw4w9WgXcQ"
 BOT = SourceError("download_blocked", "YouTube refused", detail="ERROR: [youtube] x: Sign in to confirm you're not a bot")
 FORBIDDEN = SourceError("download_blocked", "YouTube refused", detail="ERROR: unable to download video data: HTTP Error 403: Forbidden")
 STALL = SourceError("download_failed", "Network error: Read timed out", detail="ERROR: Read timed out.")
 GONE = SourceError("download_failed", "Video unavailable", detail="ERROR: [youtube] x: Video unavailable")
+# what a refused media URL looks like on the real clip path: ffmpeg runs -loglevel quiet, so only its exit code shows
+FFMPEG_FAILED = SourceError("download_failed", "ffmpeg exited with code 8", detail="ERROR: ffmpeg exited with code 8")
 
 
 class ScriptedFetcher:
@@ -176,3 +180,64 @@ def test_a_lost_tunnel_is_brought_back_before_the_next_fragment(service) -> None
     warp.ready = False  # e.g. a reconnect failed during the previous request
     assert post(client).status_code == 200
     assert warp.restarts == 1
+
+
+def test_an_ffmpeg_failure_gets_fresh_tries(service) -> None:
+    client, fetcher, _, warp = service(FFMPEG_FAILED, FFMPEG_FAILED)
+    assert post(client).status_code == 200
+    assert fetcher.calls == 3 and warp.restarts == 0
+
+
+def test_an_ffmpeg_failure_that_persists_stays_download_failed(service) -> None:
+    client, fetcher, _, _ = service(FFMPEG_FAILED, FFMPEG_FAILED, FFMPEG_FAILED)
+    res = post(client)
+    assert res.status_code == 502 and res.json()["code"] == "download_failed" and fetcher.calls == 3
+
+
+def test_no_new_attempt_after_the_request_budget(service) -> None:
+    client, fetcher, _, _ = service(FORBIDDEN, FORBIDDEN, budget_s=0)
+    res = post(client)
+    assert res.status_code == 502 and res.json()["code"] == "download_blocked" and fetcher.calls == 1
+
+
+def test_no_new_attempt_after_the_budget_for_a_timed_out_attempt(service) -> None:
+    client, fetcher, _, _ = service("hang", "hang", attempt_timeout_s=0.05, budget_s=0)
+    res = post(client)
+    assert res.status_code == 502 and res.json()["code"] == "download_failed"
+    assert "timed out" in res.json()["message"] and fetcher.calls == 1
+
+
+def _capture_app(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    captured: dict[str, Any] = {}
+
+    def fake_create(**kw: Any) -> str:
+        captured.update(kw)
+        return "app"
+
+    monkeypatch.setattr(fetch_service, "create_fetch_app", fake_create)
+    return captured
+
+
+def test_the_service_routes_yt_dlp_and_ffmpeg_through_warp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    profile = tmp_path / "wg.conf"
+    profile.write_text("[Interface]\n")
+    monkeypatch.setenv("FETCH_BUCKET", "bucket")
+    monkeypatch.setenv("WARP_PROFILE", str(profile))
+    monkeypatch.setenv("FETCH_WORK_DIR", str(tmp_path / "work"))
+    captured = _capture_app(monkeypatch)
+    assert fetch_service.create_app_from_env() == "app"
+    warp, fetcher = captured["warp"], captured["fetcher"]
+    assert isinstance(warp, Warp) and isinstance(fetcher, LocalClipFetcher)
+    assert fetcher.ytdlp.proxy == "socks5h://127.0.0.1:40000"
+    assert fetcher.ytdlp.ffmpeg_proxy == "http://127.0.0.1:40001"
+    assert captured["work_dir"] == tmp_path / "work" and captured["bucket"].name == "bucket"
+
+
+def test_without_a_warp_profile_the_service_goes_direct(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FETCH_BUCKET", "bucket")
+    monkeypatch.delenv("WARP_PROFILE", raising=False)
+    monkeypatch.setenv("FETCH_WORK_DIR", str(tmp_path / "work"))
+    captured = _capture_app(monkeypatch)
+    fetch_service.create_app_from_env()
+    assert captured["warp"] is None
+    assert captured["fetcher"].ytdlp.proxy is None and captured["fetcher"].ytdlp.ffmpeg_proxy is None

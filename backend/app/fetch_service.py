@@ -46,6 +46,7 @@ log = logging.getLogger("chords.fetch")
 
 MAX_ATTEMPTS = 3  # a refused media URL (HTTP 403, ~1 in 10 first tries) or a stall: fresh tries
 ATTEMPT_TIMEOUT_S = 90.0
+REQUEST_BUDGET_S = 240.0  # no new attempt after this: a request stays under Cloud Run's 300 s timeout (and chords-api's read timeout)
 MAX_CLIP_BYTES = 50 * 1024 * 1024  # a minute of the best audio is a few MB
 STATUS = {"invalid_url": 400, "too_large": 413, "download_blocked": 502, "download_failed": 502}
 CONTENT_TYPES = {
@@ -54,6 +55,8 @@ CONTENT_TYPES = {
 }
 _STALLS = ("timed out", "timeout", "connection reset", "connection refused", "connection aborted",
            "network is unreachable", "unable to download webpage", "temporary failure", "eof occurred")
+
+_FFMPEG_FAILED = ("ffmpeg exited with code",)
 
 
 class ClipBody(BaseModel):
@@ -69,7 +72,8 @@ def failure_kind(exc: SourceError) -> str:
     detail = exc.detail or exc.message
     if exc.code == "download_blocked":
         return "bot" if is_bot_check(detail) else "retry"
-    if exc.code == "download_failed" and any(s in detail.lower() for s in _STALLS):
+    # ffmpeg cuts the fragment and runs quiet, so a refused media URL or a stall shows only as its exit code
+    if exc.code == "download_failed" and any(s in detail.lower() for s in _STALLS + _FFMPEG_FAILED):
         return "retry"
     return "final"
 
@@ -90,13 +94,20 @@ def fetch_with_retries(
     *,
     max_attempts: int = MAX_ATTEMPTS,
     attempt_timeout_s: float = ATTEMPT_TIMEOUT_S,
+    budget_s: float = REQUEST_BUDGET_S,
     stats: Optional[dict[str, int]] = None,
 ) -> FetchedClip:
     """One fragment, retried: a refused media URL or a stall gets up to ``max_attempts`` fresh tries (a new
     extraction each time); a bot check gets one WARP reconnect (a new session, usually a new address) and one more
-    try, then ``download_blocked``. ``stats["attempts"]`` counts the tries."""
+    try, then ``download_blocked``. No new attempt starts once ``budget_s`` has passed since the first. ``stats["attempts"]``
+    counts the tries."""
     stats = stats if stats is not None else {}
     attempts, reconnected = 0, False
+    began = time.monotonic()
+
+    def out_of_time() -> bool:
+        return time.monotonic() - began >= budget_s
+
     while True:
         attempts += 1
         stats["attempts"] = attempts
@@ -109,18 +120,18 @@ def fetch_with_retries(
         try:
             return fetcher.fetch(body.videoId, body.start, body.length, dest, lambda _f: None, cancel)
         except Cancelled as exc:  # only the watchdog cancels here
-            if attempts >= max_attempts:
+            if attempts >= max_attempts or out_of_time():
                 raise SourceError(
                     "download_failed", f"Network error: the download timed out after {attempt_timeout_s:g} s"
                 ) from exc
             log.info("clip %s: attempt %d timed out", body.videoId, attempts)
         except SourceError as exc:
             kind = failure_kind(exc)
-            if kind == "bot" and warp is not None and not reconnected:
+            if kind == "bot" and warp is not None and not reconnected and not out_of_time():
                 log.info("clip %s: bot check on attempt %d, reconnecting WARP", body.videoId, attempts)
                 reconnected = True
                 _reconnect(warp)
-            elif kind == "retry" and attempts < max_attempts:
+            elif kind == "retry" and attempts < max_attempts and not out_of_time():
                 log.info("clip %s: attempt %d failed (%s), trying again", body.videoId, attempts, exc.code)
             else:
                 raise
@@ -140,6 +151,7 @@ def create_fetch_app(
     work_dir: Path,
     max_attempts: int = MAX_ATTEMPTS,
     attempt_timeout_s: float = ATTEMPT_TIMEOUT_S,
+    budget_s: float = REQUEST_BUDGET_S,
 ) -> FastAPI:
     """``bucket``: ``upload(path, src, content_type)`` (gcs.UploadBucket). ``warp`` None: no proxy (local runs)."""
 
@@ -180,7 +192,7 @@ def create_fetch_app(
             if warp is not None and not warp.ready:
                 _reconnect(warp)
             got = fetch_with_retries(fetcher, warp, body, dest, max_attempts=max_attempts,
-                                     attempt_timeout_s=attempt_timeout_s, stats=stats)
+                                     attempt_timeout_s=attempt_timeout_s, budget_s=budget_s, stats=stats)
             size = got.path.stat().st_size
             if size > MAX_CLIP_BYTES:
                 raise SourceError("too_large", "The fragment is too large")

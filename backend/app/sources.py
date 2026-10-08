@@ -473,9 +473,11 @@ class YtDlpFetcher:
             "download_ranges": download_range_func(None, [(start, end)]),
             "force_keyframes_at_cuts": True,
         }
-        if self.ffmpeg_proxy:
-            # ffmpeg does the cut and can't use SOCKS or yt-dlp's env proxy: its input gets the HTTP CONNECT proxy.
-            extra["external_downloader_args"] = {"ffmpeg_i": ["-http_proxy", self.ffmpeg_proxy]}
+        # ffmpeg does the cut and can't use SOCKS or yt-dlp's env proxy: its input gets the HTTP CONNECT proxy.
+        # ffmpeg gives up on a network stall after 20 s (-rw_timeout, µs) instead of hanging; the attempt is then retried
+        extra["external_downloader_args"] = {
+            "ffmpeg_i": [*(["-http_proxy", self.ffmpeg_proxy] if self.ffmpeg_proxy else []), "-rw_timeout", "20000000"]
+        }
         return self._download(media, dest_dir, progress, cancel, **extra)
 
     def _download(
