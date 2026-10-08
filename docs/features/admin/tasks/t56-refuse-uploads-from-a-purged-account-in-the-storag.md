@@ -8,7 +8,7 @@ files_hint: ["storage.rules", "storage.rules.test.mjs", "docs/CLOUD.md"]
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 10 — re-review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T56 — Refuse uploads from a purged account in the Storage rules
@@ -19,4 +19,4 @@ status: "todo"
 
 **Re-review fix 9 (review S2-2). storage.rules refuses an upload create when adminTombstones/{uid} exists; a storage rules test (Auth + Firestore + Storage emulators) proves it; docs/CLOUD.md names the cross-service role the deploy needs.**
 
-- [ ] lint + type-check clean (ruff / oxlint + tsc)
+- [x] lint + type-check clean (ruff / oxlint + tsc)

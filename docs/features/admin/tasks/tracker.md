@@ -62,7 +62,7 @@
 | [T53](./t53-pass-the-admin-set-upload-limit-to-the-link-and-fr.md) | Pass the admin-set upload limit to the link and fragment downloads on every job | app | Тарас Щадило | S | T40 | done |
 | [T54](./t54-keep-get-settings-and-get-jobs-inside-the-contract.md) | Keep GET /settings and GET /jobs inside the contract | ports | Тарас Щадило | S | T43, T44 | done |
 | [T55](./t55-resolve-accounts-through-firebase-auth-and-let-onl.md) | Resolve accounts through Firebase Auth and let only the purge delete a profile | app | Тарас Щадило | S | T45 | done |
-| [T56](./t56-refuse-uploads-from-a-purged-account-in-the-storag.md) | Refuse uploads from a purged account in the Storage rules | wiring | Тарас Щадило | S | T45 | todo |
+| [T56](./t56-refuse-uploads-from-a-purged-account-in-the-storag.md) | Refuse uploads from a purged account in the Storage rules | wiring | Тарас Щадило | S | T45 | done |
 | [T57](./t57-close-the-small-security-and-infra-gaps-sweep-401.md) | Close the small security and infra gaps: sweep 401, grant fails closed, tombstone reads, admin preflight | app | Тарас Щадило | S | T48 | todo |
 | [T58](./t58-guard-the-query-shapes-the-in-memory-firestore-ser.md) | Guard the query shapes the in-memory Firestore serves | tests | Тарас Щадило | S | T49 | done |
 | [T59](./t59-make-the-emulator-ci-job-install-ffmpeg-fail-on-un.md) | Make the emulator CI job install ffmpeg, fail on unexpected skips and pin firebase-tools | tests | Тарас Щадило | S | T50 | todo |

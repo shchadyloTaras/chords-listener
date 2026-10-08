@@ -4,7 +4,9 @@ rules_version = '2';
 //
 // Uploads: the site uploads big files and tab recordings to users/{uid}/uploads/{uploadId}/{fileName}; the
 // API (Cloud Run, its own service account, not bound by these rules) reads, ingests and deletes them.
-// Clients may only create their own uploads: ≤ 500 MB, audio/*, video/* or application/octet-stream.
+// Clients may only create their own uploads: ≤ 500 MB, audio/*, video/* or application/octet-stream, and not
+// once the account's purge began (Firestore adminTombstones/{uid}, ADR-0011): its ID token stays valid for up to
+// an hour. Reading Firestore from here needs the Storage service agent's cross-service role (docs/CLOUD.md).
 // Nothing of an upload can be read, listed or changed from the client.
 //
 // Library: the API publishes every track (docs/CLOUD.md → Library in Firestore) and the signed-in site
@@ -26,7 +28,8 @@ service firebase.storage {
         && request.resource.size <= 500 * 1024 * 1024
         && (request.resource.contentType.matches('audio/.*')
             || request.resource.contentType.matches('video/.*')
-            || request.resource.contentType == 'application/octet-stream');
+            || request.resource.contentType == 'application/octet-stream')
+        && !firestore.exists(/databases/(default)/documents/adminTombstones/$(uid));
       // a client may cancel (remove) its own pending upload
       allow delete: if request.auth != null && request.auth.uid == uid;
       allow update: if false;
