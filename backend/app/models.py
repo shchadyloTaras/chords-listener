@@ -136,6 +136,9 @@ class Settings:
     max_user_jobs: int = 2  # CHORDS_QUOTA_JOBS: running jobs per user
     max_request_mb: float = 30.0  # CHORDS_MAX_REQUEST_MB: multipart upload cap (Cloud Run: 32 MiB/request)
     media_url_ttl_s: int = 12 * 3600
+    # ---- YouTube fragments (docs/CLOUD.md → YouTube clips)
+    fetch_url: str = ""  # CHORDS_FETCH_URL: the chords-fetch service (downloads fragments through WARP)
+    clip_s: int = 30  # CHORDS_YT_CLIP_S: fragment length in seconds, 1..60 (the client's CLIP_SECONDS)
 
     @property
     def cloud(self) -> bool:
@@ -208,6 +211,8 @@ class Settings:
             quota_vocals=max(0, _env_int("CHORDS_QUOTA_VOCALS", defaults.quota_vocals)),
             max_user_jobs=max(1, _env_int("CHORDS_QUOTA_JOBS", defaults.max_user_jobs)),
             max_request_mb=_env_float("CHORDS_MAX_REQUEST_MB", defaults.max_request_mb),
+            fetch_url=os.environ.get("CHORDS_FETCH_URL", "").strip().rstrip("/"),
+            clip_s=min(60, max(1, _env_int("CHORDS_YT_CLIP_S", defaults.clip_s))),
         )
 
 
@@ -223,6 +228,13 @@ class TrackSource(CamelModel):
     url: Optional[str] = None
     video_id: Optional[str] = None
     filename: Optional[str] = None
+
+
+class ClipRange(CamelModel):
+    """A fragment of a YouTube video, in video seconds (a clip track or job, docs/CLOUD.md → YouTube clips)."""
+
+    start: float = Field(ge=0)
+    end: float = Field(ge=0)
 
 
 class KeyInfo(CamelModel):
@@ -283,6 +295,9 @@ class TrackSummary(CamelModel):
     # (GET /api/tracks/{id}/stems/{name}; names: "vocals", "instruments")
     vocals: bool = False
     stems: list[str] = Field(default_factory=list)
+    # a fragment of a YouTube video (POST /api/jobs with ``clip``): the player starts at ``clip.start`` and stops
+    # at ``clip.end``; such a track is also a recording linked to the video (``Track.start_offset`` = clip.start)
+    clip: Optional[ClipRange] = None
     created_at: str
 
 
@@ -326,6 +341,7 @@ class Job(CamelModel):
     title: Optional[str] = None
     thumbnail: Optional[str] = None
     source: Optional[TrackSource] = None
+    clip: Optional[ClipRange] = None  # a YouTube fragment job: the range (exact once the fragment is downloaded)
     created_at: str
 
 
@@ -348,9 +364,16 @@ class AnalysisOptions(BaseModel):
         return {k: v for k, v in self.model_dump().items() if v is not None}
 
 
+class ClipRequest(CamelModel):
+    """``clip`` of POST /api/jobs: analyze only ``CHORDS_YT_CLIP_S`` seconds of a YouTube video from ``start``."""
+
+    start: int = Field(ge=0, le=24 * 3600)
+
+
 class CreateJobRequest(CamelModel):
     url: str = Field(min_length=1, max_length=4096)
     options: Optional[AnalysisOptions] = None
+    clip: Optional[ClipRequest] = None
 
 
 class ReanalyzeRequest(CamelModel):

@@ -83,6 +83,7 @@ class JobRecord:
     keys: set[str] = field(default_factory=set)
     created_ts: float = field(default_factory=time.time)
     uid: Optional[str] = None  # owner (cloud mode); None in local mode
+    clip: Optional[dict[str, float]] = None  # YouTube fragment jobs: {"start", "end"} in video seconds
 
     @property
     def finished(self) -> bool:
@@ -102,6 +103,7 @@ class JobRecord:
                 "title": self.title,
                 "thumbnail": self.thumbnail,
                 "source": self.source,
+                "clip": self.clip,
                 "createdAt": self.created_at,
             }
         )
