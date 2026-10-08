@@ -98,4 +98,16 @@ describe('NoteIndex', () => {
     expect(empty.inRange(0, 5)).toEqual([])
     expect(empty.minMidi).toBe(0)
   })
+
+  it('moves the notes into track time for a recording linked to a video (startOffset)', () => {
+    const moved = idx.shifted(2070)
+    expect(moved.count).toBe(idx.count)
+    expect(midiOf(moved.activeAt(2070.6))).toEqual(midiOf(idx.activeAt(0.6)))
+    expect(moved.activeAt(0.6)).toEqual([])
+    expect(moved.inRange(2099, 2101).map((i) => moved.notes.midi[i]).sort((a, b) => a - b)).toEqual([48, 72])
+    expect([moved.minMidi, moved.maxMidi]).toEqual([idx.minMidi, idx.maxMidi])
+    // the original is left as it was; no offset is the same index
+    expect(idx.notes.start[0]).toBe(0)
+    expect(idx.shifted(0)).toBe(idx)
+  })
 })
