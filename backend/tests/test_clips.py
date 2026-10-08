@@ -374,10 +374,13 @@ def hold_the_only_analysis_worker(env: SimpleNamespace) -> str:
     return held["id"]
 
 
+WAITING = "Waiting for analysis"
+
+
 def wait_downloaded(env: SimpleNamespace, job_id: str) -> None:
     """The fragment is on disk and the job waits for its analysis (the download fills the progress up to 0.35)."""
     wait_until(lambda: env.clips.calls, "the fragment download to start")
-    wait_until(lambda: job_json(env, job_id)["progress"] >= DOWNLOAD_RANGE[1], "the fragment download to finish")
+    wait_until(lambda: job_json(env, job_id)["message"] == WAITING, "the fragment download to finish")
 
 
 def keys_in_use(env: SimpleNamespace) -> dict:
@@ -391,7 +394,9 @@ def test_a_fragment_download_does_not_wait_for_an_analysis_worker(clip_env) -> N
     clip = post_clip(env, 72)
     wait_downloaded(env, clip["id"])  # the only analysis worker is still busy with the upload
     state = job_json(env, clip["id"])
-    assert state["status"] not in ("done", "error") and len(env.engine.calls) == 1, state
+    assert len(env.engine.calls) == 1, state
+    # downloaded, not downloading: it reads as waiting, with the progress of the finished download
+    assert (state["status"], state["message"], state["progress"]) == ("queued", WAITING, DOWNLOAD_RANGE[1]), state
     env.engine.gate.set()
     assert wait_job(env.client, held)["status"] == "done"
     done = wait_job(env.client, clip["id"])
@@ -464,6 +469,53 @@ def test_cancelling_a_fragment_whose_analysis_is_queued_removes_the_download(cli
     assert done["status"] == "error" and done["errorCode"] == "cancelled"
     wait_until(lambda: work_leftovers(env) == [], "the work dir to be removed")
     assert len(env.engine.calls) == 1 and keys_in_use(env) == {}  # the fragment never reached the engine
+
+
+@needs_ffmpeg
+def test_cancelling_an_upload_that_is_still_queued_removes_its_work_dir(clip_env) -> None:
+    env = clip_env(max_workers=1)
+    held = hold_the_only_analysis_worker(env)
+    queued = upload(env.client, env.media.tagged_mp3).json()
+    assert job_json(env, queued["id"])["message"] == "Waiting in queue"
+    assert len(work_leftovers(env)) == 2  # the running upload's dir and the queued one's
+    assert env.client.post(f"/api/jobs/{queued['id']}/cancel").status_code == 200
+    env.engine.gate.set()
+    assert wait_job(env.client, held)["status"] == "done"
+    done = wait_job(env.client, queued["id"])
+    assert done["status"] == "error" and done["errorCode"] == "cancelled"
+    wait_until(lambda: work_leftovers(env) == [], "the queued upload's work dir to be removed")
+    assert len(env.engine.calls) == 1 and keys_in_use(env) == {}  # it never reached the engine
+
+
+@needs_ffmpeg
+def test_deleting_the_track_of_a_queued_upload_removes_its_work_dir(clip_env) -> None:
+    env = clip_env(max_workers=1)
+    held = hold_the_only_analysis_worker(env)
+    queued = upload(env.client, env.media.tagged_mp3).json()
+    jobs = env.client.app.state.jobs
+    track_id = next(k.split(":", 1)[1] for k in keys_in_use(env) if k.startswith("track:") and jobs._active[k] == queued["id"])
+    jobs.cancel_track_jobs(track_id, "not_found", "The track was deleted")
+    env.engine.gate.set()
+    assert wait_job(env.client, held)["status"] == "done"
+    assert wait_job(env.client, queued["id"])["errorCode"] == "not_found"
+    wait_until(lambda: work_leftovers(env) == [], "the queued upload's work dir to be removed")
+
+
+def test_a_closed_manager_removes_the_work_dir_of_an_upload(clip_env) -> None:
+    from app.sources import ProbeResult, ReceivedUpload
+
+    env = clip_env()
+    jobs = env.client.app.state.jobs
+    work = jobs.store.new_work_dir("upload")
+    path = work / "song.mp3"
+    path.write_bytes(b"x")
+    jobs._closed = True
+    try:
+        job = jobs.submit_upload(ReceivedUpload(path=path, filename="song.mp3", size=1, sha1="0" * 40), ProbeResult(10.0, True), {})
+    finally:
+        jobs._closed = False
+    assert job.status == "error" and job.error_code == "internal"
+    assert not work.exists() and keys_in_use(env) == {}
 
 
 def test_a_closed_manager_refuses_the_second_phase_and_cleans_up(clip_env) -> None:

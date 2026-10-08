@@ -268,7 +268,11 @@ class JobManager:
                 title=probe.title or display_name(upload.filename),
                 keys=keys,
             )
-            self._submit(rec, lambda: self._run_upload(rec, upload, probe, track_id))
+            self._submit(
+                rec,
+                lambda: self._run_upload(rec, upload, probe, track_id),
+                cleanup=lambda: shutil.rmtree(upload.work_dir, ignore_errors=True),
+            )
             return rec.to_model()
 
     def submit_reanalyze(self, track_id: str, options: dict[str, Any]) -> Job:
@@ -596,6 +600,8 @@ class JobManager:
         except BaseException:
             shutil.rmtree(work, ignore_errors=True)
             raise
+        # downloaded: the job now waits for an analysis worker (its progress stays where the download left it)
+        self._update(rec, status="queued", message="Waiting for analysis")
         self._submit(
             rec,
             lambda: self._process_clip(rec, clip, work, track_id),
@@ -617,19 +623,18 @@ class JobManager:
         self._process(rec, clip.path, work, track_id, meta, probe=None, start_offset=clip.start)
 
     def _run_upload(self, rec: JobRecord, upload: ReceivedUpload, probe: ProbeResult, track_id: str) -> None:
-        try:
-            meta = {
-                "title": rec.title or display_name(upload.filename),
-                "artist": probe.artist,
-                "thumbnail": None,
-                "source": rec.source,
-                "sourceDuration": probe.duration,
-                "fileSize": upload.size,
-                "sha1": upload.sha1,
-            }
-            self._process(rec, upload.path, upload.work_dir, track_id, meta, probe=probe)
-        finally:
-            shutil.rmtree(upload.work_dir, ignore_errors=True)
+        """The upload's work dir is removed by the ``cleanup`` that ``submit_upload`` queued it with (it also runs
+        when the job is cancelled before it starts)."""
+        meta = {
+            "title": rec.title or display_name(upload.filename),
+            "artist": probe.artist,
+            "thumbnail": None,
+            "source": rec.source,
+            "sourceDuration": probe.duration,
+            "fileSize": upload.size,
+            "sha1": upload.sha1,
+        }
+        self._process(rec, upload.path, upload.work_dir, track_id, meta, probe=probe)
 
     def _run_storage(self, rec: JobRecord, path: str, bucket: UploadBucket, size: int, start_offset: float) -> None:
         self._update(rec, status="downloading", progress=0.01, message="Fetching the upload")
