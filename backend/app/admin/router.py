@@ -12,10 +12,12 @@ Served here:
 * ``searchUsers``, ``getUserCard`` and ``listUserTracks`` (US-02, US-03). A search and a card view are journaled
   BEFORE the response is built, and a journal that cannot be written withholds the data (AC-33b); the songs of a
   user are metadata only, never audio, chords or edits (AC-06).
+* ``GET /jobs`` (job history, AC-07) and ``GET /stats`` (daily stats, AC-08, AC-09).
 """
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import logging
 import re
@@ -26,8 +28,9 @@ from typing import Any, Callable, Mapping, NoReturn, Optional
 
 from fastapi import APIRouter, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 
-from app.firestore import Document, FirestoreIndex
+from app.firestore import Document, Filter, FirestoreIndex
 from app.users import valid_uid
 
 from . import models, stats
@@ -42,15 +45,23 @@ from .models import (
     PAGE_SIZE,
     AccountState,
     Deletion,
+    FailureReason,
+    HistoryStatus,
+    InvalidPeriod,
     JobHistoryItem,
+    JobHistoryPage,
     Origin,
     OriginCounts,
     Overview,
     PersonalLimit,
     QuotaUsage,
+    RestoredTracks,
     Restriction,
     RunningJob,
     Settings,
+    StatsDay,
+    StatsPeriod,
+    StatsRange,
     TrackMeta,
     TrackMetaPage,
     UserCard,
@@ -65,6 +76,7 @@ log = logging.getLogger("chords.admin")
 
 TOMBSTONES = "adminTombstones"
 RECENT_JOBS = 20   # jobs on the user card
+PERIOD_RULE = "The period must be at most 90 days and end no earlier than it starts"
 
 
 def new_admin_router() -> APIRouter:
@@ -184,6 +196,17 @@ def _count(value: Any) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
 
 
+def _origins(raw: Any) -> OriginCounts:
+    """A stored per-origin map as ``OriginCounts`` (a missing or broken count is 0)."""
+    by_origin = raw if isinstance(raw, dict) else {}
+    return OriginCounts(**{origin: _count(by_origin.get(origin)) for origin in stats.ORIGINS})
+
+
+def _reasons(raw: Any) -> dict[str, int]:
+    """A stored reason map, reduced to the fixed reasons that have failures."""
+    return {r: _count(raw.get(r)) for r in REASONS if _count(raw.get(r)) > 0} if isinstance(raw, dict) else {}
+
+
 def _email_of(people: Directory, uid: str) -> Optional[str]:
     try:
         return people.email_of(uid)
@@ -196,6 +219,22 @@ def _registrations(db: FirestoreIndex, day: str) -> int:
     """New users of a UTC day: a server-side ``count()`` of ``users`` by ``createdAt``."""
     start = stats.day_start(day)
     return db.count(USERS, filters=[("createdAt", ">=", start), ("createdAt", "<", start + timedelta(days=1))])
+
+
+def _job_item(doc: Document, email: Optional[str], deleted: bool) -> JobHistoryItem:
+    """An ``adminJobs`` record as the contract's ``JobHistoryItem`` (the user's email and «видалений» mark come from
+    the caller). The error text and title are the user's text verbatim, cut to the contract's lengths."""
+    d = doc.data
+    uid = d.get("uid")
+    error_text, title = d.get("errorText"), d.get("title")
+    return JobHistoryItem(
+        id=doc.id, uid=uid, email=email, user_deleted=deleted,
+        service=d.get("service") is True or (isinstance(uid, str) and stats.is_service(uid)),
+        kind=d.get("kind"), origin=d.get("origin"), status=d.get("status"), reason=d.get("reason"),
+        error_text=error_text[:200] if isinstance(error_text, str) else None,
+        title=title[:300] if isinstance(title, str) else None,
+        accepted_at=_time(d.get("acceptedAt")) or _EPOCH, finished_at=_time(d.get("finishedAt")),
+    )
 
 
 # --------------------------------------------------------------------------- overview
@@ -245,14 +284,12 @@ def get_overview(request: Request) -> Overview:
     day = stats.utc_day(now)
     doc = db.get(stats.day_path(day))
     stored: Mapping[str, Any] = doc.data if doc is not None else stats.empty_day(now)
-    by_origin = stored.get("analyses") if isinstance(stored.get("analyses"), dict) else {}
-    by_reason = stored.get("failedByReason") if isinstance(stored.get("failedByReason"), dict) else {}
     return Overview(
         day=day,
-        analyses=OriginCounts(**{origin: _count(by_origin.get(origin)) for origin in stats.ORIGINS}),
+        analyses=_origins(stored.get("analyses")),
         vocals=_count(stored.get("vocals")),
         failed=_count(stored.get("failed")),
-        failed_by_reason={r: _count(by_reason[r]) for r in REASONS if _count(by_reason.get(r))},
+        failed_by_reason=_reasons(stored.get("failedByReason")),
         active=_count(stored.get("active")),
         new_users=_new_users(db, day, stored),
         running_jobs=_running_jobs(request),
@@ -411,18 +448,6 @@ def _account_state(svc: AdminServices, request: Request, uid: str) -> AccountSta
     return AccountState(uid=uid, status=status, restriction=restriction, deletion=deletion, personal_limit=personal, quota=quota)
 
 
-def _recent_job(doc: Document, uid: str, email: Optional[str]) -> JobHistoryItem:
-    d = doc.data
-    error_text, title = d.get("errorText"), d.get("title")
-    return JobHistoryItem(
-        id=doc.id, uid=uid, email=email, user_deleted=False, service=d.get("service") is True or stats.is_service(uid),
-        kind=d.get("kind"), origin=d.get("origin"), status=d.get("status"), reason=d.get("reason"),
-        error_text=error_text[:200] if isinstance(error_text, str) else None,
-        title=title[:300] if isinstance(title, str) else None,
-        accepted_at=_time(d.get("acceptedAt")) or _EPOCH, finished_at=_time(d.get("finishedAt")),
-    )
-
-
 def _last_login(svc: AdminServices, uid: str) -> Optional[datetime]:
     try:
         return svc.last_login(uid)
@@ -481,7 +506,7 @@ def get_user_card(uid: str, request: Request) -> Any:
     return UserCard(
         profile=profile,
         account=_account_state(svc, request, uid),
-        recent_jobs=[_recent_job(j, uid, email or None) for j in jobs],
+        recent_jobs=[_job_item(j, email or None, False) for j in jobs],
         tracks=_track_page(svc, uid, None, PAGE_SIZE),
     )
 
@@ -499,3 +524,172 @@ def list_user_tracks(
     if _live_user(svc, uid) is None:
         _refuse("not_found", "User not found")
     return _track_page(svc, uid, after, limit)
+
+
+# --------------------------------------------------------------------------- the period rule (T04, AC-09)
+
+
+def _period(start: Optional[date], end: Optional[date]) -> None:
+    """The shared period rule (T04, AC-09), checked before anything is read. A period given by one end only is fine."""
+    if start is None or end is None:
+        return
+    try:
+        StatsPeriod.model_validate({"from": start, "to": end})
+    except ValidationError as exc:
+        if any(isinstance(e.get("ctx", {}).get("error"), InvalidPeriod) for e in exc.errors()):
+            _refuse("invalid_period", PERIOD_RULE)
+        raise
+
+
+def _utc(day: date) -> datetime:
+    return datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+
+
+# --------------------------------------------------------------------------- job history (US-04, AC-07)
+
+
+def _job_cursor(doc: Document) -> str:
+    return _pack_cursor({"t": doc.data["acceptedAt"], "id": doc.id})
+
+
+def _job_position(cursor: str) -> Document:
+    """The ``adminJobs`` position a cursor stands for: only its sort key and id are read, nothing else is trusted."""
+    try:
+        raw = _unpack_cursor(cursor)
+        when, job_id = parse_time(raw["t"]), raw["id"]
+        if when is None or not isinstance(job_id, str) or not job_id or "/" in job_id:
+            raise ValueError(cursor)
+    except (ValueError, KeyError, TypeError, binascii.Error):
+        _refuse("invalid_value", "The page cursor is not valid")
+    return Document(f"{JOBS}/{job_id}", {"acceptedAt": when})
+
+
+class _UserNames:
+    """Email and the «видалений» mark of the users on one page: one ``users`` read per distinct uid, plus a tombstone
+    read only for a uid that has no user document any more."""
+
+    def __init__(self, db: FirestoreIndex) -> None:
+        self._db = db
+        self._seen: dict[str, tuple[Optional[str], bool]] = {}
+
+    def of(self, uid: str) -> tuple[Optional[str], bool]:
+        if uid not in self._seen:
+            user = self._db.get(f"{USERS}/{uid}")
+            if user is not None:
+                email = user.data.get("email")
+                self._seen[uid] = (email if isinstance(email, str) else None, False)
+            else:
+                self._seen[uid] = (None, self._db.get(f"{TOMBSTONES}/{uid}") is not None)
+        return self._seen[uid]
+
+
+def _counts_by_reason(db: FirestoreIndex, filters: list[Filter], status: Optional[str], reason: Optional[str]) -> dict[str, int]:
+    """One ``count()`` per failure reason under the page's filters, the reasons with no job left out. Only failures
+    have a reason, so a filter on another result needs none, and a filter on one reason needs just that one."""
+    if status not in (None, "error"):
+        return {}
+    counts: dict[str, int] = {}
+    for r in ([reason] if reason else REASONS):
+        n = db.count(JOBS, filters=filters if reason else filters + [("reason", "==", r)])
+        if n:
+            counts[r] = n
+    return counts
+
+
+@router.get("/jobs", response_model=JobHistoryPage)
+def list_job_history(
+    request: Request,
+    status: Optional[HistoryStatus] = None,
+    reason: Optional[FailureReason] = None,
+    origin: Optional[Origin] = None,
+    from_: Optional[date] = Query(None, alias="from"),
+    to: Optional[date] = None,
+    after: Optional[str] = Query(None, max_length=512),
+    before: Optional[str] = Query(None, max_length=512),
+    limit: int = Query(PAGE_SIZE, ge=1, le=PAGE_SIZE),
+) -> JobHistoryPage:
+    """Job history of all users, newest first: combined filters (``adminJobs_{status,reason,origin}_acceptedAt``), a
+    page of at most 50 and a ``count()`` per failure reason (50 + 7 reads, plus the users' emails)."""
+    _period(from_, to)
+    if after and before:
+        _refuse("invalid_value", "Use either after or before, not both")
+    db = database(request)
+    filters: list[Filter] = [
+        (name, "==", value) for name, value in (("status", status), ("reason", reason), ("origin", origin)) if value
+    ]
+    if from_:
+        filters.append(("acceptedAt", ">=", _utc(from_)))
+    if to:
+        filters.append(("acceptedAt", "<", _utc(to) + timedelta(days=1)))
+
+    marker = after or before
+    cursor = _job_position(marker) if marker else None
+    backwards = before is not None
+    rows = db.run_query(
+        JOBS, filters=filters, order_by=["acceptedAt" if backwards else "-acceptedAt"], limit=limit + 1, start_after=cursor,
+    )
+    more = len(rows) > limit
+    rows = rows[:limit]
+    if backwards:
+        rows.reverse()
+    has_next = True if backwards else more  # going back, the page we came from lies ahead
+    has_prev = more if backwards else cursor is not None
+
+    names = _UserNames(db)
+    return JobHistoryPage(
+        items=[_job_item(doc, *names.of(doc.data["uid"])) for doc in rows],
+        has_next=has_next,
+        has_prev=has_prev,
+        next_cursor=_job_cursor(rows[-1]) if rows and has_next else None,
+        counts_by_reason=_counts_by_reason(db, filters, status, reason),
+    )
+
+
+# --------------------------------------------------------------------------- daily stats (US-05, AC-08, AC-09)
+
+
+def _stats_day(day: str, doc: Optional[Document]) -> StatsDay:
+    """The contract's ``StatsDay`` of a stored day; a day with no document is a live day of zeros."""
+    data = doc.data if doc is not None else {}
+    state = data.get("state") if data.get("state") in ("live", "frozen", "restored") else stats.LIVE
+    if state == "restored":  # rebuilt from songs: only the songs per source, never failures (AC-08)
+        tracks = data.get("restoredTracks") if isinstance(data.get("restoredTracks"), dict) else {}
+        return StatsDay(
+            day=day, state="restored", analyses=_origins(None), vocals=0, failed=0,
+            failed_by_reason={}, active=0, new_users=None,
+            restored_tracks=RestoredTracks(**{k: _count(tracks.get(k)) for k in ("youtube", "url", "file")}),
+            frozen_at=None,
+        )
+    new_users = data.get("newUsers")
+    return StatsDay(
+        day=day, state=state, analyses=_origins(data.get("analyses")),
+        vocals=_count(data.get("vocals")), failed=_count(data.get("failed")),
+        failed_by_reason=_reasons(data.get("failedByReason")), active=_count(data.get("active")),
+        new_users=_count(new_users) if new_users is not None else None, restored_tracks=None,
+        frozen_at=parse_time(data.get("frozenAt")),
+    )
+
+
+def _fill_new_users(db: FirestoreIndex, entry: StatsDay, stored: bool) -> None:
+    """A live day has no ``newUsers`` yet (it is written at freeze): count the registrations of its UTC day on read."""
+    if entry.state != "live" or entry.new_users is not None:
+        return
+    if not stored and entry.day != models.today_utc().isoformat():
+        return  # a quiet past day: nothing to count
+    entry.new_users = _registrations(db, entry.day)
+
+
+@router.get("/stats", response_model=StatsRange)
+def get_stats(request: Request, from_: date = Query(alias="from"), to: date = Query()) -> StatsRange:
+    """Daily stats of a period of at most 90 days: one ``adminStats/{day}`` read per day. A day without a document is
+    zeros; a restored day carries only its songs per source."""
+    _period(from_, to)
+    db = database(request)
+    entries: list[StatsDay] = []
+    for n in range((to - from_).days + 1):
+        day = (from_ + timedelta(days=n)).isoformat()
+        doc = db.get(stats.day_path(day))
+        entry = _stats_day(day, doc)
+        _fill_new_users(db, entry, doc is not None)
+        entries.append(entry)
+    return StatsRange(from_=from_.isoformat(), to=to.isoformat(), days=entries)
