@@ -88,6 +88,18 @@ def _scheduler_verifier_from_env() -> Optional[SchedulerTokenVerifier]:
     email = os.environ.get("CHORDS_SCHEDULER_EMAIL", "").strip()
     return SchedulerTokenVerifier(audience, email) if audience and email else None
 
+def instance_cap_warning(env: Optional[Any] = None) -> Optional[str]:
+    """The start-up warning when the Cloud Run instance cap is not 1, else None. The daily quota, the probe limiter
+    and the 10 deletions / 60 min limit live in this process's memory (docs/features/admin sad §11, ADR-0003), so a second
+    instance would double them. ``scripts/deploy_cloud.sh`` declares the cap it deploys with as ``CHORDS_MAX_INSTANCES``."""
+    value = (os.environ if env is None else env).get("CHORDS_MAX_INSTANCES", "").strip()
+    if value == "1":
+        return None
+    shown = f"{value!r}" if value else "not declared (CHORDS_MAX_INSTANCES)"
+    return (f"max-instances is {shown}, expected 1: the admin's quotas, attempt limits and deletion limit are kept "
+            "in this process's memory and are only correct with one instance (deploy with scripts/deploy_cloud.sh)")
+
+
 STATUS_BY_CODE: dict[str, int] = {
     "invalid_url": 400,
     "download_failed": 502,
@@ -333,6 +345,9 @@ def create_app(
         store.init()
         log.info("data dir: %s (auth: %s)", settings.data_dir, settings.auth)
         if settings.cloud:
+            cap_warning = instance_cap_warning()
+            if cap_warning:
+                log.warning(cap_warning)
             _start_cloud_background_tasks(
                 preload_engine=analyzer is None,
                 bucket=bucket,
