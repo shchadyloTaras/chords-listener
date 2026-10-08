@@ -30,6 +30,7 @@ const local = {
   playAlong: true,
   playAlongVolume: 1.5,
   playAlongOffsetMs: -20,
+  tunerA4: 442,
 } as Settings
 
 describe('pickSynced', () => {

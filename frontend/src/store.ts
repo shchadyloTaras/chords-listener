@@ -86,6 +86,8 @@ export interface Settings {
   playAlongVolume: number // 0..2 (PLAY_ALONG_MAX_VOLUME)
   /** play-along timing correction, ms (positive = the instrument plays later), ±PLAY_ALONG_OFFSET_LIMIT */
   playAlongOffsetMs: number
+  /** the tuner's reference pitch A4, Hz (lib/tuner/notes.ts A4_MIN..A4_MAX); this device only */
+  tunerA4: number
 }
 
 export interface AppState extends Settings {
@@ -151,6 +153,7 @@ const defaultSettings: Settings = {
   playAlong: false,
   playAlongVolume: 0.8,
   playAlongOffsetMs: 0,
+  tunerA4: 440,
 }
 
 let toastSeq = 1
@@ -246,6 +249,7 @@ export const useApp = create<AppState>()(
         playAlong: s.playAlong,
         playAlongVolume: s.playAlongVolume,
         playAlongOffsetMs: s.playAlongOffsetMs,
+        tunerA4: s.tunerA4,
       }),
     },
   ),

@@ -1,6 +1,6 @@
 import clsx from 'clsx'
 import { AnimatePresence, motion } from 'framer-motion'
-import { AudioLines, CircleAlert, CircleCheck, Cloud, FileAudio, FolderOpen, Link2, LoaderCircle, X } from 'lucide-react'
+import { AudioLines, CircleAlert, CircleCheck, Cloud, FileAudio, FolderOpen, Gauge, Link2, LoaderCircle, X } from 'lucide-react'
 import { useEffect, useId, useRef, useState, type ClipboardEvent, type FormEvent, type ReactNode } from 'react'
 import { useT } from '../../i18n'
 import { useApp } from '../../store'
@@ -440,7 +440,7 @@ export function SmartInput({ className }: { className?: string }) {
       </form>
       {hint.kind === 'account' && !connected && invite && <AccountNotice onDismiss={() => setHint({ kind: 'idle' })} />}
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-2" data-tour="home.sources">
+      <div className="mt-4 grid gap-3 md:grid-cols-3" data-tour="home.sources">
         <WayCard
           icon={<FolderOpen className="size-5" aria-hidden="true" />}
           title={t('cloud.ways.file.title')}
@@ -452,6 +452,12 @@ export function SmartInput({ className }: { className?: string }) {
           title={t('cloud.ways.listen.title')}
           hint={t('cloud.ways.listen.hint')}
           href={`#${paths.listen()}`}
+        />
+        <WayCard
+          icon={<Gauge className="size-5" aria-hidden="true" />}
+          title={t('cloud.ways.tuner.title')}
+          hint={t('cloud.ways.tuner.hint')}
+          href={`#${paths.tuner()}`}
         />
         <input
           ref={fileRef}
