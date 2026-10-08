@@ -72,6 +72,8 @@ export interface Settings {
   keepAwake: boolean
   /** the harmonium's drone: the song's tonic held while the song plays (lib/sound/drone.ts); this device only */
   harmoniumDrone: boolean
+  /** the selected instrument plays along with the song in its own style (lib/sound/accompany.ts); this device only */
+  playAlong: boolean
 }
 
 export interface AppState extends Settings {
@@ -131,6 +133,7 @@ const defaultSettings: Settings = {
   syncOffsetMs: 0,
   keepAwake: true,
   harmoniumDrone: false,
+  playAlong: false,
 }
 
 let toastSeq = 1
@@ -218,6 +221,7 @@ export const useApp = create<AppState>()(
         syncOffsetMs: s.syncOffsetMs,
         keepAwake: s.keepAwake,
         harmoniumDrone: s.harmoniumDrone,
+        playAlong: s.playAlong,
       }),
     },
   ),

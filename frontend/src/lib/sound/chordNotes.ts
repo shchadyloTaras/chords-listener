@@ -23,6 +23,8 @@ export interface NoteEvent {
   target: number
   /** stereo position −1..1 (when the instrument does not pan by pitch) */
   pan?: number
+  /** seconds the key stays down (piano, harmonium; default: the chord / note hold) */
+  hold?: number
 }
 
 // ---------- piano ----------
