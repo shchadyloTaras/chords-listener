@@ -374,12 +374,20 @@ def test_personal_limit_lets_the_user_run_more_than_the_default(make_cloud, medi
     track = env.client.get("/api/tracks", headers=H("alice")).json()[0]["id"]
     assert_error(env.client.post(f"/api/tracks/{track}/reanalyze", headers=H("alice")), 429, "quota_exceeded")
     assert env.client.get("/api/me", headers=H("alice")).json()["quotas"]["analyses"] == {"used": 3, "limit": 3}
-    assert enter_vocals_for(env, track).status_code == 201
+    run_vocals_for(env, track)
     assert_error(enter_vocals_for(env, track), 429, "quota_exceeded")
 
 
 def enter_vocals_for(env: SimpleNamespace, track: str):
     return env.client.post(f"/api/tracks/{track}/vocals", json={"force": True}, headers=H("alice"))
+
+
+def run_vocals_for(env: SimpleNamespace, track: str) -> None:
+    """One accepted transcription, waited out: while it runs, asking again for the same track returns that job instead
+    of a new one, so the next request only meets the quota once this one has finished (here it fails: no transcriber)."""
+    res = enter_vocals_for(env, track)
+    assert res.status_code == 201, res.text
+    wait_job(env.client, res.json()["id"], H("alice"))
 
 
 def test_changing_the_default_vocal_limit_applies_to_an_unset_personal_field(make_cloud, media) -> None:
@@ -389,7 +397,7 @@ def test_changing_the_default_vocal_limit_applies_to_an_unset_personal_field(mak
     job, _ = upload_and_wait(env, media.a, "alice")
     assert_error(enter_upload(env, media), 429, "quota_exceeded")  # 5 of 6 would be left by default: personal wins
     set_config(env, limits={"vocals": 1})
-    assert enter_vocals_for(env, job["trackId"]).status_code == 201
+    run_vocals_for(env, job["trackId"])
     assert_error(enter_vocals_for(env, job["trackId"]), 429, "quota_exceeded")
     assert env.client.get("/api/me", headers=H("alice")).json()["quotas"]["vocals"] == {"used": 1, "limit": 1}
 
