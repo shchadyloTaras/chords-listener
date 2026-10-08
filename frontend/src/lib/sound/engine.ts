@@ -296,7 +296,7 @@ function startHeldHarmoniumNote(ctx: BaseAudioContext, when: number, n: NoteEven
   src.connect(out)
   src.start(when)
   src.stop(end)
-  return { out, level, sources: [src], nodes: [src, out], end, release: hold }
+  return { out, level, sources: [src], nodes: [src, out], end, release: hold, fadeFrom: up }
 }
 
 /** A piano key held `hold` seconds: its rendered note (the dampers and the key-up thud are in the buffer). */
@@ -348,7 +348,7 @@ function startWindNote(ctx: BaseAudioContext, when: number, n: NoteEvent, hold: 
   src.connect(out)
   src.start(when)
   src.stop(end)
-  return { out, level, sources: [src], nodes: [src, out], end, release: hold }
+  return { out, level, sources: [src], nodes: [src, out], end, release: hold, fadeFrom: up }
 }
 
 function startVoice(g: Graph, instrument: Instrument, kind: PlayKind, n: NoteEvent, when: number): VoiceParts {
@@ -830,6 +830,9 @@ class SoundEngine {
     for (const v of voices) {
       if (v.cut || v.parts.end <= at) continue
       v.cut = true
+      // already fading out on its own (the play-along's next note lands in the last one's release):
+      // a cut would raise it back to full level for the fade
+      if (v.parts.fadeFrom != null && at >= v.parts.fadeFrom) continue
       const gain = v.parts.out.gain
       try {
         gain.cancelScheduledValues(at)
