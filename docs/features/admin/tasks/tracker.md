@@ -12,23 +12,23 @@
 | [T05](./t05-migration-track-size.md) | Promote migration 01 (tracks.sizeBytes backfill) and write sizeBytes on publish | migration | Тарас Щадило | S | — | done |
 | [T06](./t06-migration-indexes-ttl-rules.md) | Promote migrations 02–03: composite indexes, TTL/exemptions and Firestore rules | migration | Тарас Щадило | S | T05 | done |
 | [T07](./t07-migration-seed-config-email-index.md) | Promote migrations 04–05: seed runtime config + public status and build the email index | migration | Тарас Щадило | S | T06 | done |
-| [T08](./t08-migration-restore-stats.md) | Promote migration 06: restore pre-launch daily stats from tracks | migration | Тарас Щадило | S | T07 | todo |
+| [T08](./t08-migration-restore-stats.md) | Promote migration 06: restore pre-launch daily stats from tracks | migration | Тарас Щадило | S | T07 | done |
 | [T09](./t09-admin-router-authz.md) | Mount the admin router behind allowlist authz, 404-identical denial, probe rate limit and fresh-login check | app | Тарас Щадило | M | T01, T03 | done |
 | [T10](./t10-admin-audit-writer.md) | Implement the audit writer: atomic with Firestore changes, journal-first otherwise, before any view response | app | Тарас Щадило | M | T01, T04 | done |
 | [T11](./t11-history-stats-projections.md) | Build job-history and daily-stats projections with the failure-reason map and the pending buffer | app | Тарас Щадило | M | T01, T04 | done |
-| [T12](./t12-jobmanager-projection-hooks.md) | Hook projections into JobManager, accept the origin hint and discard results for tombstoned uids | wiring | Тарас Щадило | S | T11 | todo |
+| [T12](./t12-jobmanager-projection-hooks.md) | Hook projections into JobManager, accept the origin hint and discard results for tombstoned uids | wiring | Тарас Щадило | S | T11 | done |
 | [T13](./t13-runtime-settings-cache.md) | Implement runtime settings: 30 s lazy cache, env fallback and the public-status mirror writer | app | Тарас Щадило | S | T01, T04 | done |
 | [T14](./t14-admission-gate.md) | Gate all five cloud-job entries through one admission check before Quotas.consume | app | Тарас Щадило | M | T03, T12, T13 | todo |
-| [T15](./t15-api-overview-settings.md) | Serve getOverview and getSettings | ports | Тарас Щадило | S | T09, T11, T13 | todo |
+| [T15](./t15-api-overview-settings.md) | Serve getOverview and getSettings | ports | Тарас Щадило | S | T09, T11, T13 | done |
 | [T16](./t16-email-index-directory.md) | Implement the email-index directory: shard load, incremental catch-up and in-memory substring search | infra | Тарас Щадило | M | T01 | done |
-| [T17](./t17-api-search-card-tracks.md) | Serve searchUsers, getUserCard and listUserTracks with view journaling | ports | Тарас Щадило | M | T05, T09, T10, T16 | todo |
-| [T18](./t18-api-job-history-stats.md) | Serve listJobHistory and getStats | ports | Тарас Щадило | S | T09, T11 | todo |
-| [T19](./t19-api-audit-list.md) | Serve listAudit with email resolution and «видалений» for purged users | ports | Тарас Щадило | S | T09, T10, T16 | todo |
+| [T17](./t17-api-search-card-tracks.md) | Serve searchUsers, getUserCard and listUserTracks with view journaling | ports | Тарас Щадило | M | T05, T09, T10, T16 | done |
+| [T18](./t18-api-job-history-stats.md) | Serve listJobHistory and getStats | ports | Тарас Щадило | S | T09, T11 | done |
+| [T19](./t19-api-audit-list.md) | Serve listAudit with email resolution and «видалений» for purged users | ports | Тарас Щадило | S | T09, T10, T16 | done |
 | [T20](./t20-actions-quota-personal-limit.md) | Implement resetQuota and set/remove personal limit | app | Тарас Щадило | M | T09, T10, T14 | todo |
 | [T21](./t21-actions-restriction.md) | Implement restrictUser and unrestrictUser as transactions with the audit record | app | Тарас Щадило | S | T20 | todo |
 | [T22](./t22-actions-deletion.md) | Implement scheduleDeletion and cancelDeletion with email confirm, fresh login and the 10-per-60-min cap | app | Тарас Щадило | M | T21 | todo |
 | [T23](./t23-actions-settings-switches-banner.md) | Implement setDefaultLimits, setSwitch and setBanner with mirrored, audited batched writes | app | Тарас Щадило | M | T09, T10, T13, T15 | todo |
-| [T24](./t24-sweep-endpoint-reconcile.md) | Add the OIDC-protected sweep endpoint: slot claim, buffer replay, stale jobs, reconcile+freeze, index sync | app | Тарас Щадило | M | T09, T11, T16 | todo |
+| [T24](./t24-sweep-endpoint-reconcile.md) | Add the OIDC-protected sweep endpoint: slot claim, buffer replay, stale jobs, reconcile+freeze, index sync | app | Тарас Щадило | M | T09, T11, T16 | done |
 | [T25](./t25-purge-deletion.md) | Implement tombstone-first, idempotent account purge with anonymization | app | Тарас Щадило | M | T10, T22, T24 | todo |
 | [T26](./t26-ops-grant-scheduler-alerts.md) | Add the owner grant script, Cloud Scheduler jobs, max-instances guard and alerting | wiring | Тарас Щадило | S | T09, T24 | todo |
 | [T27](./t27-ui-admin-entry-csp.md) | Create the admin.html entry with strict CSP, admin shell, sign-in and not-found for non-admins | ui | Тарас Щадило | M | — | done |
@@ -37,7 +37,7 @@
 | [T30](./t30-ui-users-search-card.md) | Build user search, the user card and paged songs (metadata only) | ui | Тарас Щадило | M | T28 | done |
 | [T31](./t31-ui-jobs-stats-screens.md) | Build the job-history and statistics screens | ui | Тарас Щадило | M | T28 | done |
 | [T32](./t32-ui-audit-screen.md) | Build the admin journal screen | ui | Тарас Щадило | S | T28 | done |
-| [T33](./t33-ui-card-quota-limit-actions.md) | Add quota reset and personal-limit actions to the user card | ui | Тарас Щадило | S | T30 | todo |
+| [T33](./t33-ui-card-quota-limit-actions.md) | Add quota reset and personal-limit actions to the user card | ui | Тарас Щадило | S | T30 | done |
 | [T34](./t34-ui-card-restriction-deletion-actions.md) | Add restriction and scheduled-deletion actions to the user card | ui | Тарас Щадило | M | T33 | todo |
 | [T35](./t35-ui-settings-screen.md) | Build the service-settings screen: default limits, switches and maintenance banner | ui | Тарас Щадило | M | T28 | done |
 | [T36](./t36-ui-site-service-status-banner.md) | Read the public service status on the site: maintenance banner and YouTube-off fallback | ui | Тарас Щадило | M | — | done |
