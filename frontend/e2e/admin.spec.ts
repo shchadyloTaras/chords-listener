@@ -56,7 +56,7 @@ function card(): AdminUserCard {
     },
     recentJobs: [
       {
-        id: 'j1', uid: 'u-mallory', email: HOSTILE_EMAIL, userDeleted: false, service: false, kind: 'analysis', origin: 'link',
+        id: 'j1', uid: 'u-mallory', email: HOSTILE_EMAIL, userDeleted: false, service: false, kind: 'analysis', origin: 'link', sourceType: 'other',
         status: 'error', reason: 'other', errorText: HOSTILE_STRINGS[1], title: HOSTILE_STRINGS[0],
         acceptedAt: '2026-10-08T09:00:00Z', finishedAt: '2026-10-08T09:00:30Z',
       },
