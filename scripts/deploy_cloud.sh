@@ -140,8 +140,19 @@ else
 fi
 
 # ------------------------------------------------------------------------------ deploy
-# YouTube fragments: chords-api calls chords-fetch (scripts/deploy_fetch.sh) when that service exists
-FETCH_URL=$(gc run services describe "${FETCH_SERVICE:-chords-fetch}" --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
+# YouTube fragments: chords-api calls chords-fetch (scripts/deploy_fetch.sh) when that service exists. Only "not found"
+# means it does not: --env-vars-file replaces every variable, so a failed lookup (permissions, network, API) must not
+# silently deploy the API without CHORDS_FETCH_URL.
+FETCH_SERVICE="${FETCH_SERVICE:-chords-fetch}"
+if FETCH_URL=$(gc run services describe "$FETCH_SERVICE" --region "$REGION" --format='value(status.url)' 2>"$TMP/fetch.err"); then
+  :
+elif grep -qE 'NOT_FOUND|could not be found' "$TMP/fetch.err"; then
+  FETCH_URL=""
+else
+  cat "$TMP/fetch.err" >&2
+  echo "could not check whether $FETCH_SERVICE exists: not deploying $SERVICE without knowing (its env vars would lose CHORDS_FETCH_URL)" >&2
+  exit 1
+fi
 log "Deploying $SERVICE ($DEPLOY_IMAGE)"
 (
   umask 077

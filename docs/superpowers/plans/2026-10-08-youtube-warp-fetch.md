@@ -4532,7 +4532,7 @@ Expected: the last lines include `YouTube fragments: https://chords-fetch-…run
 python3 scripts/smoke_fetch.py
 ```
 
-Expected: `19/19 checks passed; download_blocked: 0` (18 fragments + the dedup check). A few `download_blocked` mean YouTube flags the WARP address: report the numbers, do not retry in a loop.
+Expected: `21/21 checks passed; download_blocked: 0` (the pre-clean of earlier fragment tracks, 18 fragments, the dedup check, the delete of the tracks it made). A few `download_blocked` mean YouTube flags the WARP address: report the numbers, do not retry in a loop.
 
 - [ ] **Step 5: Web release (owner confirms; merging to `main` publishes GitHub Pages)**
 
