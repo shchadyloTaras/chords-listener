@@ -61,6 +61,7 @@ const job = (over: Partial<AdminJobHistoryItem> = {}): AdminJobHistoryItem => ({
   service: false,
   kind: 'analysis',
   origin: 'link',
+  sourceType: 'other',
   status: 'error',
   reason: 'youtube_blocked',
   errorText: "Sign in to confirm you're not a bot",
@@ -107,6 +108,14 @@ describe('AC-07 job history screen', () => {
     await change('Джерело', 'link')
     await change('Причина', 'youtube_blocked')
     expect(load.mock.lastCall![0]).toEqual({ status: 'error', origin: 'link', reason: 'youtube_blocked', from: '2026-10-02', to: '2026-10-08' })
+  })
+
+  it('filters by the source type: YouTube or another source', async () => {
+    const load = vi.fn<JobsLoad>(async () => page([job({ sourceType: 'youtube' })]))
+    await mountJobs(load)
+    await change('Тип джерела', 'youtube')
+    expect(load.mock.lastCall![0]).toEqual({ sourceType: 'youtube', from: '2026-10-02', to: '2026-10-08' })
+    expect(text()).toContain('YouTube')
   })
 
   it('shows the number of jobs per failure reason, labelled in plain words', async () => {

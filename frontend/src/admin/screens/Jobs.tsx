@@ -2,10 +2,10 @@ import { useState } from 'react'
 import { Button } from '../../components/ui/IconButton'
 import { useT } from '../../i18n'
 import { adminErrorMessage, listJobHistory } from '../../lib/adminApi'
-import type { AdminFailureReason, AdminHistoryStatus, AdminJobFilters, AdminJobHistoryItem, AdminJobHistoryPage, AdminOrigin, AdminPaging } from '../../types'
+import type { AdminFailureReason, AdminHistoryStatus, AdminJobFilters, AdminJobHistoryItem, AdminJobHistoryPage, AdminOrigin, AdminPaging, AdminSourceType } from '../../types'
 import { useAdminData } from '../useAdminData'
 import { Field, fieldClass, PeriodInputs, PeriodRule } from './PeriodInputs'
-import { ORIGIN_LABEL, REASONS } from './labels'
+import { ORIGIN_LABEL, REASONS, SOURCE_TYPE_LABEL } from './labels'
 import { isValidPeriod, lastDays, PERIOD_RULE } from './period'
 
 type Load = (filters: AdminJobFilters, paging: AdminPaging, signal: AbortSignal) => Promise<AdminJobHistoryPage>
@@ -17,6 +17,7 @@ interface Draft {
   status: '' | AdminHistoryStatus
   reason: '' | AdminFailureReason
   origin: '' | AdminOrigin
+  sourceType: '' | AdminSourceType
   from: string
   to: string
 }
@@ -27,6 +28,7 @@ function toFilters(d: Draft): AdminJobFilters {
   if (d.status) f.status = d.status
   if (d.reason) f.reason = d.reason
   if (d.origin) f.origin = d.origin
+  if (d.sourceType) f.sourceType = d.sourceType
   if (d.from) f.from = d.from
   if (d.to) f.to = d.to
   return f
@@ -132,7 +134,7 @@ function Results({ filters, load }: { filters: AdminJobFilters; load: Load }) {
  */
 export function Jobs({ load = listJobHistory }: { load?: Load }) {
   const t = useT()
-  const [draft, setDraft] = useState<Draft>(() => ({ status: '', reason: '', origin: '', ...lastDays(7) }))
+  const [draft, setDraft] = useState<Draft>(() => ({ status: '', reason: '', origin: '', sourceType: '', ...lastDays(7) }))
   const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }))
   const ok = periodOk(draft)
   const filters = toFilters(draft)
@@ -167,6 +169,16 @@ export function Jobs({ load = listJobHistory }: { load?: Load }) {
             {(Object.keys(ORIGIN_LABEL) as AdminOrigin[]).map((o) => (
               <option key={o} value={o}>
                 {ORIGIN_LABEL[o]}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Тип джерела">
+          <select aria-label="Тип джерела" className={fieldClass} value={draft.sourceType} onChange={(e) => set({ sourceType: e.target.value as Draft['sourceType'] })}>
+            <option value="">Усі</option>
+            {(Object.keys(SOURCE_TYPE_LABEL) as AdminSourceType[]).map((s) => (
+              <option key={s} value={s}>
+                {SOURCE_TYPE_LABEL[s]}
               </option>
             ))}
           </select>

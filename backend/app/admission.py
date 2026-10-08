@@ -6,8 +6,8 @@ The five entries (a link, an upload, a file from storage, a re-analysis, a vocal
 
 1. the account  - a restriction, a scheduled deletion or a purge marker -> ``cloud_restricted`` (403). The reason the
                   administrator wrote is never in the answer.
-2. the switches - paused analyses (link, file, re-analysis) -> ``analyses_paused``; a link analysis while YouTube
-                  is off -> ``youtube_disabled``; a transcription while vocals are off -> ``vocals_disabled`` (503).
+2. the switches - paused analyses (link, file, re-analysis) -> ``analyses_paused``; a YouTube link analysis while
+                  YouTube is off -> ``youtube_disabled``; a transcription while vocals are off -> ``vocals_disabled`` (503).
 3. the limit    - running jobs and today's quota, each against the *effective* limit (``app.quotas.effective_limits``:
                   the personal value of each set field over the default, until the end date inclusive).
 4. ``Quotas.consume``, last: a refusal anywhere above counted nothing.
@@ -99,9 +99,12 @@ class Admission:
         self.state(uid)
         self._settings()
 
-    def check(self, uid: str, kind: str, origin: str, *, running: int, quotas: Quotas) -> None:
+    def check(
+        self, uid: str, kind: str, origin: str, *, running: int, quotas: Quotas, youtube: bool = False
+    ) -> None:
         """May ``uid`` start one more job of ``kind`` ("analysis" | "reanalysis" | "vocals") whose audio comes from
-        ``origin`` ("link" | "file" | "mic" | "tab"), with ``running`` jobs in progress? Raises ``SourceError``
+        ``origin`` ("link" | "file" | "mic" | "tab"), with ``running`` jobs in progress? ``youtube``: the link is a
+        YouTube one (the only kind the YouTube switch refuses; a SoundCloud or direct link is not)? Raises ``SourceError``
         (``cloud_restricted``, ``analyses_paused``, ``youtube_disabled``, ``vocals_disabled``, ``quota_exceeded``);
         otherwise counts the job in today's quota."""
         if kind not in QUOTA_OF:
@@ -111,7 +114,7 @@ class Admission:
         switches = self._settings().switches
         if kind != "vocals" and switches.analyses_paused:
             raise SourceError("analyses_paused", PAUSED)
-        if kind == "analysis" and origin == "link" and not switches.youtube_enabled:
+        if kind == "analysis" and origin == "link" and youtube and not switches.youtube_enabled:
             raise SourceError("youtube_disabled", YOUTUBE_OFF)
         if kind == "vocals" and not switches.vocals_enabled:
             raise SourceError("vocals_disabled", VOCALS_OFF)

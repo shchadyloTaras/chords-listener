@@ -225,6 +225,8 @@ export interface VocalNotes {
 // JSON is camelCase; timestamps are ISO strings; UtcDay is "YYYY-MM-DD".
 
 export type AdminOrigin = 'link' | 'file' | 'mic' | 'tab'
+/** a job's source for the history filter: a YouTube video, or anything else */
+export type AdminSourceType = 'youtube' | 'other'
 export type AdminJobKind = 'analysis' | 'vocals'
 export type AdminHistoryStatus = 'running' | 'done' | 'error'
 export type AdminFailureReason =
@@ -405,6 +407,7 @@ export interface AdminJobHistoryItem {
   service: boolean
   kind: AdminJobKind
   origin: AdminOrigin
+  sourceType: AdminSourceType
   status: AdminHistoryStatus
   reason: AdminFailureReason | null
   errorText: string | null
@@ -475,6 +478,7 @@ export interface AdminJobFilters {
   status?: AdminHistoryStatus
   reason?: AdminFailureReason
   origin?: AdminOrigin
+  sourceType?: AdminSourceType
   from?: string
   to?: string
 }

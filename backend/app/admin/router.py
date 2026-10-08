@@ -73,6 +73,7 @@ from .models import (
     Restriction,
     RunningJob,
     Settings,
+    SourceType,
     StatsDay,
     StatsPeriod,
     StatsRange,
@@ -244,7 +245,8 @@ def _job_item(doc: Document, email: Optional[str], deleted: bool) -> JobHistoryI
     return JobHistoryItem(
         id=doc.id, uid=uid, email=email, user_deleted=deleted,
         service=d.get("service") is True or (isinstance(uid, str) and stats.is_service(uid)),
-        kind=d.get("kind"), origin=d.get("origin"), status=d.get("status"), reason=d.get("reason"),
+        kind=d.get("kind"), origin=d.get("origin"),
+        source_type="youtube" if d.get("sourceType") == "youtube" else "other", status=d.get("status"), reason=d.get("reason"),
         error_text=error_text[:200] if isinstance(error_text, str) else None,
         title=title[:300] if isinstance(title, str) else None,
         accepted_at=_time(d.get("acceptedAt")) or _EPOCH, finished_at=_time(d.get("finishedAt")),
@@ -616,20 +618,21 @@ def list_job_history(
     status: Optional[HistoryStatus] = None,
     reason: Optional[FailureReason] = None,
     origin: Optional[Origin] = None,
+    source_type: Optional[SourceType] = Query(None, alias="sourceType"),
     from_: Optional[date] = Query(None, alias="from"),
     to: Optional[date] = None,
     after: Optional[str] = Query(None, max_length=512),
     before: Optional[str] = Query(None, max_length=512),
     limit: int = Query(PAGE_SIZE, ge=1, le=PAGE_SIZE),
 ) -> JobHistoryPage:
-    """Job history of all users, newest first: combined filters (``adminJobs_{status,reason,origin}_acceptedAt``), a
+    """Job history of all users, newest first: combined filters (``adminJobs_{status,reason,origin,sourceType}_acceptedAt``), a
     page of at most 50 and a ``count()`` per failure reason (50 + 7 reads, plus the users' emails)."""
     _period(from_, to)
     if after and before:
         _refuse("invalid_value", "Use either after or before, not both")
     db = database(request)
     filters: list[Filter] = [
-        (name, "==", value) for name, value in (("status", status), ("reason", reason), ("origin", origin)) if value
+        (name, "==", value) for name, value in (("status", status), ("reason", reason), ("origin", origin), ("sourceType", source_type)) if value
     ]
     if from_:
         filters.append(("acceptedAt", ">=", _utc(from_)))

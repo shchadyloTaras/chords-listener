@@ -184,6 +184,7 @@ const job = (over: Partial<AdminJobHistoryItem> = {}): AdminJobHistoryItem => ({
   service: false,
   kind: 'analysis',
   origin: 'link',
+  sourceType: 'other',
   status: 'done',
   reason: null,
   errorText: null,

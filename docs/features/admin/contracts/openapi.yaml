@@ -259,7 +259,7 @@ paths:
       summary: Job history of all users, filtered, with per-reason counts
       description: |
         US-04, AC-07. Newest first (`acceptedAt` desc). Filters combine (zig-zag merge over the
-        `adminJobs_{status,reason,origin}_acceptedAt` indexes). `countsByReason` = `count()` per failure
+        `adminJobs_{status,reason,origin,sourceType}_acceptedAt` indexes). `countsByReason` = `count()` per failure
         reason under the same filters. A purged user's jobs show `email: null`, `userDeleted: true`,
         `title: null`. History is kept 90 days (TTL), so a period is at most 90 days.
       operationId: listJobHistory
@@ -276,6 +276,11 @@ paths:
           name: origin
           schema: { $ref: "#/components/schemas/Origin" }
           example: link
+        - in: query
+          name: sourceType
+          description: YouTube or another source (AC-07 «YouTube»); a record from before the field counts as `other`
+          schema: { $ref: "#/components/schemas/SourceType" }
+          example: youtube
         - in: query
           name: from
           description: first UTC day included
@@ -1229,6 +1234,10 @@ components:
       type: string
       enum: [link, file, mic, tab]
       description: «джерело» (CONTEXT) — link = URL/YouTube on the server, tab = tab recording
+    SourceType:
+      type: string
+      enum: [youtube, other]
+      description: the job's source for the history filter (AC-07) - a YouTube video, or anything else (file, microphone, another site)
     UploadOrigin:
       type: string
       enum: [file, mic]
@@ -1529,7 +1538,7 @@ components:
     # ------------------------------------------------------------------ job history
     JobHistoryItem:
       type: object
-      required: [id, uid, email, userDeleted, service, kind, origin, status, reason, errorText, title, acceptedAt, finishedAt]
+      required: [id, uid, email, userDeleted, service, kind, origin, sourceType, status, reason, errorText, title, acceptedAt, finishedAt]
       additionalProperties: false
       properties:
         id: { type: string }
@@ -1539,6 +1548,7 @@ components:
         service: { type: boolean }
         kind: { $ref: "#/components/schemas/JobKind" }
         origin: { $ref: "#/components/schemas/Origin" }
+        sourceType: { $ref: "#/components/schemas/SourceType" }
         status: { $ref: "#/components/schemas/HistoryStatus" }
         reason:
           oneOf:

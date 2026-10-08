@@ -74,6 +74,7 @@ erDiagram
         bool service
         string kind
         string origin
+        string sourceType
         string status
         string reason
         string errorText
@@ -215,6 +216,7 @@ Exists **only for users an admin has acted on**. No document means the normal st
 | `service` | bool | NOT NULL | `uid == SMOKE_UID`: labelled «службовий», excluded from stats and reconciliation (spec OQ, resolved 2026-10-08) |
 | `kind` | string | `analysis` \| `vocals` | |
 | `origin` | string | `link` \| `file` \| `mic` \| `tab` | «джерело» from CONTEXT. `<!-- TBD (api): POST /api/jobs/storage can't tell mic from file today; it needs a client origin hint. Re-analysis inherits the track's origin -->` |
+| `sourceType` | string | `youtube` \| `other` | AC-07 «YouTube» filter: `youtube` when the job's source is a YouTube video (link, fragment, tab capture), else `other`. Records from before the field read as `other` |
 | `status` | string | `running` \| `done` \| `error` | `running` from accept to finish |
 | `reason` | string \| null | set iff `status == error` | fixed list: `youtube_blocked`, `download_failed`, `unsupported_format`, `too_long`, `too_large`, `analysis_failed`, `other`. Mapped from `ErrorCode` in `admin/history.py`; stale-job sweep → `other` |
 | `errorText` | string \| null | ≤ 200 chars | short error text, shown as plain text (AC-05/07). Never indexed |
@@ -369,6 +371,7 @@ Shared REST helper: [`_fsrest.py`](./migrations/_fsrest.py).
 | `adminJobs_status_acceptedAt` | `status` ASC, `acceptedAt` DESC | history filtered by result (AC-07); stale-`running` sweep (`status == running AND acceptedAt < now − 2 h`) |
 | `adminJobs_reason_acceptedAt` | `reason` ASC, `acceptedAt` DESC | history filtered by reason + per-reason `count()` (AC-07) |
 | `adminJobs_origin_acceptedAt` | `origin` ASC, `acceptedAt` DESC | history filtered by source (AC-07). Combined filters merge these three indexes (zig-zag merge on the shared `acceptedAt DESC` suffix) |
+| `adminJobs_sourceType_acceptedAt` | `sourceType` ASC, `acceptedAt` DESC | history filtered by YouTube / other (AC-07); merges with the three above |
 | `adminJobs_uid_acceptedAt` | `uid` ASC, `acceptedAt` DESC | the user's recent jobs on the card (US-03); purge anonymization (`uid == X`) |
 | `adminAudit_adminUid_at` | `adminUid` ASC, `at` DESC | journal filtered by admin (US-06) |
 | `adminAudit_targetUid_at` | `targetUid` ASC, `at` DESC | journal filtered by user (US-06); purge redaction (`targetUid == X`) |

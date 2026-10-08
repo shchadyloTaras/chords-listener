@@ -8,7 +8,7 @@ files_hint: ["backend/app/admission.py", "backend/app/jobs.py", "backend/app/adm
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 9 — review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T41 — Apply the YouTube switch to YouTube links only and filter the history by source type

@@ -185,6 +185,21 @@ def outage(env: Env, down: bool) -> None:
 # ===================================================================== AC-01: accept
 
 
+def test_accept_records_the_source_type_of_the_job(env):
+    env.p.accept(AcceptedJob(id="j1", uid="u1", kind="analysis", origin="link", accepted_at=NOON, source_type="youtube"))
+    env.p.accept(job("j2"))
+    assert env.job("j1")["sourceType"] == "youtube" and env.job("j2")["sourceType"] == "other"
+
+
+def test_a_buffered_accept_keeps_its_source_type(env):
+    outage(env, True)
+    env.p.accept(AcceptedJob(id="j1", uid="u1", kind="analysis", origin="link", accepted_at=NOON, source_type="youtube"))
+    assert env.buffered()[0]["payload"]["sourceType"] == "youtube"
+    outage(env, False)
+    assert env.p.replay_pending() == 1
+    assert env.job("j1")["sourceType"] == "youtube"
+
+
 def test_accept_records_the_job_and_counts_it_into_its_utc_day(env):
     assert env.p.accept(job()) is True
     j = env.job("j1")

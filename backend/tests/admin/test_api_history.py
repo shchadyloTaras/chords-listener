@@ -212,10 +212,29 @@ def test_history_filtered_by_error_and_link_returns_only_such_jobs_with_per_reas
     first = body["items"][0]
     assert first == {
         "id": "yt-blocked-1", "uid": "u1", "email": "user-1@example.test", "userDeleted": False, "service": False,
-        "kind": "analysis", "origin": "link", "status": "error", "reason": "youtube_blocked",
+        "kind": "analysis", "origin": "link", "sourceType": "other", "status": "error", "reason": "youtube_blocked",
         "errorText": "Download failed", "title": "Test song",
         "acceptedAt": "2026-10-08T09:00:00Z", "finishedAt": "2026-10-08T09:00:30Z",
     }
+
+
+def test_history_filters_by_source_type_and_old_records_without_one_still_list(env: Env, mem: MemDb) -> None:
+    """AC-07 (review S1-4): «YouTube» is a source type; a record from before the field is «other»."""
+    mem.put(make_user("u1", "user-1@example.test"))
+    mem.put(
+        make_job("u1", "done", None, "link", at("2026-10-08", 9), job_id="yt", sourceType="youtube"),
+        make_job("u1", "done", None, "link", at("2026-10-07", 9), job_id="sc", sourceType="other"),
+        make_job("u1", "done", None, "file", at("2026-10-06", 9), job_id="old"),
+    )
+    period = {"from": "2026-10-02", "to": "2026-10-08"}
+
+    youtube = env.get("/api/admin/jobs", sourceType="youtube", **period).json()
+    assert ids(youtube) == ["yt"] and youtube["items"][0]["sourceType"] == "youtube"
+    assert ids(env.get("/api/admin/jobs", sourceType="other", **period).json()) == ["sc"]
+    everything = env.get("/api/admin/jobs", **period).json()
+    assert ids(everything) == ["yt", "sc", "old"]
+    assert everything["items"][2]["sourceType"] == "other"
+    assert env.get("/api/admin/jobs", sourceType="tiktok", **period).status_code == 422
 
 
 def test_history_without_filters_lists_every_job_in_the_period_and_counts_only_failures(env: Env, mem: MemDb) -> None:

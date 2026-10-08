@@ -29,7 +29,7 @@ from app.firestore import FirestoreIndex, PreconditionFailed, Transaction
 from app.storage import read_json, write_json_atomic
 
 from . import stats
-from .models import JobKind, Origin
+from .models import JobKind, Origin, SourceType
 
 log = logging.getLogger("chords.admin.history")
 
@@ -81,6 +81,7 @@ class AcceptedJob:
     origin: Origin
     accepted_at: datetime
     title: Optional[str] = None
+    source_type: SourceType = "other"  # "youtube" | "other": what the admin history filters by (AC-07)
 
 
 @dataclass(frozen=True)
@@ -190,6 +191,7 @@ class Projections:
             self._accept(AcceptedJob(
                 id=op["jobId"], uid=payload["uid"], kind=payload["kind"], origin=payload["origin"],
                 accepted_at=datetime.fromisoformat(payload["acceptedAt"]), title=payload.get("title"),
+                source_type=payload.get("sourceType", "other"),
             ))
         elif op["op"] == "finish":
             self._finish(FinishedJob(
@@ -212,7 +214,7 @@ class Projections:
             if tx.get(path) is not None:
                 return  # a replay
             doc = {
-                "uid": job.uid, "service": service, "kind": job.kind, "origin": job.origin, "status": "running",
+                "uid": job.uid, "service": service, "kind": job.kind, "origin": job.origin, "sourceType": job.source_type, "status": "running",
                 "reason": None, "errorText": None, "title": _cut(job.title, TITLE_CHARS), "trackId": None,
                 "acceptedAt": job.accepted_at, "finishedAt": None, "day": day,
                 "expireAt": job.accepted_at + RETENTION, "anonymizedAt": None,
@@ -274,8 +276,8 @@ class Projections:
 
     @staticmethod
     def _accept_payload(job: AcceptedJob) -> dict[str, Any]:
-        return {"uid": job.uid, "kind": job.kind, "origin": job.origin, "acceptedAt": _iso(job.accepted_at),
-                "title": job.title}
+        return {"uid": job.uid, "kind": job.kind, "origin": job.origin, "sourceType": job.source_type,
+                "acceptedAt": _iso(job.accepted_at), "title": job.title}
 
     @staticmethod
     def _finish_payload(job: FinishedJob) -> dict[str, Any]:

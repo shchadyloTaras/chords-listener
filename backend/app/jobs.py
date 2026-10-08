@@ -194,12 +194,14 @@ class JobManager:
             live = [r for r in self._jobs.values() if not r.finished and not r.cancel.is_set()]
         return sorted(live, key=lambda r: r.created_ts)
 
-    def admit(self, quota: Optional[str] = "analyses", *, kind: Optional[str] = None, origin: str = "file") -> None:
+    def admit(
+        self, quota: Optional[str] = "analyses", *, kind: Optional[str] = None, origin: str = "file", youtube: bool = False
+    ) -> None:
         """Cloud mode: may the current user start one more job now? The admission gate (restriction, switches,
         effective limits) decides, then one unit of the daily ``quota`` ("analyses" | "vocals") is counted. Raises
         ``SourceError`` (403 / 503 from the gate, 429 ``QuotaExceeded``); a refusal counts nothing.
         ``kind`` ("analysis" | "reanalysis" | "vocals"; default from ``quota``) and ``origin`` ("link" | "file" |
-        "mic" | "tab") tell the gate what is being started. Feature code that creates its own jobs calls this right
+        "mic" | "tab") and ``youtube`` (the link is a YouTube one) tell the gate what is being started. Feature code that creates its own jobs calls this right
         before submitting."""
         if not self.settings.cloud:
             return
@@ -215,7 +217,7 @@ class JobManager:
             elif self.admission is not None and uid:
                 self.admission.check(
                     uid, kind or ("vocals" if quota == "vocals" else "analysis"), origin,
-                    running=running, quotas=self.quotas,
+                    running=running, quotas=self.quotas, youtube=youtube,
                 )
             else:
                 self.quotas.admit(quota, running, uid)
@@ -254,7 +256,7 @@ class JobManager:
             running = self._find_active(keys)
             if running:
                 return running.to_model()
-            self.admit(origin="link")
+            self.admit(origin="link", youtube=bool(url.youtube_id))
             rec = self._new_record(
                 "url",
                 options,
@@ -283,7 +285,7 @@ class JobManager:
             running = self._find_active(keys)
             if running:
                 return running.to_model()
-            self.admit(origin="link")
+            self.admit(origin="link", youtube=True)
             rec = self._new_record(
                 "url",
                 options,
@@ -618,6 +620,7 @@ class JobManager:
                 id=rec.id, uid=rec.uid, kind="vocals" if rec.kind == "vocals" else "analysis",
                 origin=rec.origin if rec.origin in ORIGINS else "file",  # type: ignore[arg-type]
                 accepted_at=datetime.fromtimestamp(rec.created_ts, timezone.utc), title=rec.title,
+                source_type="youtube" if (rec.source or {}).get("type") == "youtube" else "other",
             ))
         except Exception:
             log.warning("admin history: could not record job %s", rec.id, exc_info=True)

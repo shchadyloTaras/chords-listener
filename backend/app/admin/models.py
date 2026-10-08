@@ -47,6 +47,7 @@ Email = Annotated[str, StringConstraints(max_length=MAX_EMAIL_CHARS)]
 Count = Annotated[int, Field(ge=0)]
 
 Origin = Literal["link", "file", "mic", "tab"]
+SourceType = Literal["youtube", "other"]  # a job's source for the history filter: a YouTube video or anything else
 JobKind = Literal["analysis", "vocals"]
 HistoryStatus = Literal["running", "done", "error"]
 FailureReason = Literal[
@@ -320,6 +321,7 @@ class JobHistoryItem(Model):
     service: bool
     kind: JobKind
     origin: Origin
+    source_type: SourceType  # records from before the field read as "other"
     status: HistoryStatus
     reason: Optional[FailureReason]  # set iff status == error
     error_text: Optional[Annotated[str, StringConstraints(max_length=200)]]

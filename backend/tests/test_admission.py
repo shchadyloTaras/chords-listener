@@ -227,6 +227,25 @@ def test_a_tab_recording_of_a_youtube_video_is_not_a_link_analysis(make_cloud, m
     assert used(env)["analyses"] == 1
 
 
+def test_youtube_off_still_accepts_a_soundcloud_link(make_cloud, media) -> None:
+    """AC-27 (review S1-2): the switch refuses YouTube links only, not every link analysis."""
+    env = make_env(make_cloud)
+    youtube_off(env)
+    res = env.client.post("/api/jobs", json={"url": "https://soundcloud.com/artist/track"}, headers=H("alice"))
+    assert res.status_code == 201, res.text
+    assert used(env)["analyses"] == 1
+    assert_error(env.client.post("/api/jobs", json={"url": VIDEO_ID}, headers=H("alice")), 503, "youtube_disabled")
+
+
+def test_youtube_off_refuses_a_youtube_fragment(make_cloud, media) -> None:
+    env = make_env(make_cloud)
+    env.jobs.clip_fetcher = lambda *a, **k: None  # the fragment is refused before anything is downloaded
+    youtube_off(env)
+    res = env.client.post("/api/jobs", json={"url": VIDEO_ID, "clip": {"start": 10}}, headers=H("alice"))
+    assert_error(res, 503, "youtube_disabled")
+    assert used(env)["analyses"] == 0
+
+
 def test_other_users_are_not_affected_by_one_restriction(make_cloud, media) -> None:
     env = make_env(make_cloud)
     restrict(env)
@@ -447,6 +466,17 @@ def code_of(call: Callable[[], Any]) -> Optional[str]:
 
 def check(unit, kind: str = "analysis", origin: str = "file", running: int = 0, uid: str = "alice") -> None:
     unit.admission.check(uid, kind, origin, running=running, quotas=unit.quotas)
+
+
+def test_the_youtube_switch_refuses_only_youtube_links(unit) -> None:
+    unit.db.docs["adminConfig/settings"] = {
+        "limits": {"analyses": 40, "vocals": 15, "jobs": 2, "maxDurationMin": 30, "maxUploadMb": 500},
+        "switches": {"analysesPaused": False, "youtubeEnabled": False, "vocalsEnabled": True}, "updatedBy": ADMIN,
+    }
+    unit.runtime.invalidate()
+    unit.admission.check("alice", "analysis", "link", running=0, quotas=unit.quotas, youtube=False)
+    assert code_of(lambda: unit.admission.check(
+        "alice", "analysis", "link", running=0, quotas=unit.quotas, youtube=True)) == "youtube_disabled"
 
 
 def test_a_restriction_takes_effect_within_a_minute(unit) -> None:
