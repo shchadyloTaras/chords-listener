@@ -11,6 +11,8 @@ After a track changes (cloud mode) the ``Publisher`` brings three things in step
 Publishing never fails the user's request: ``publish`` / ``unpublish`` / ``sweep_pending`` / ``backfill``
 return instead of raising. A transient failure is retried with a growing pause; a lasting one is written to
 ``users/<uid>/publish-pending.json`` (``{"ids": {trackId: "publish" | "unpublish"}}``) for ``sweep_pending``.
+A uid whose account was purged (``is_tombstoned(uid)``, ADR-0011) is never published again: its retries are dropped
+and a failed publish for it is not queued, so a late retry cannot bring the account's data back.
 Lock order: the per-track publish lock first, then ``TrackStore._lock``, never the reverse.
 
 ``python -m app.publish backfill [--uid UID]`` publishes the tracks that exist already (see ``main``).
@@ -114,8 +116,10 @@ class Publisher:
         gcs_client_factory: Callable[[], Any],
         attempts: int = 3,
         backoff_s: float = 0.5,
+        is_tombstoned: Optional[Callable[[str], bool]] = None,
     ) -> None:
         self.store = store
+        self._is_tombstoned = is_tombstoned
         self.index = index
         self.bucket_name = bucket
         self.attempts = max(1, attempts)
@@ -150,6 +154,8 @@ class Publisher:
         """Publish the track unless the index has it already (self-heal for tracks that predate publishing).
         True when it is published (or was); False when it was queued instead. An index that cannot say is
         treated as lacking the track."""
+        if self._purged(uid):
+            return True
         try:
             if self.index.exists(uid, track_id):
                 return True
@@ -166,6 +172,10 @@ class Publisher:
         for path in _listing(PENDING_FILE + " files", lambda: sorted(users_dir.glob(f"*/{PENDING_FILE}"))):
             uid = path.parent.name
             if not valid_uid(uid):
+                continue
+            if self._purged(uid):  # the account is gone: its queued retries go with it
+                with _pending_lock:
+                    path.unlink(missing_ok=True)
                 continue
             with _pending_lock:
                 ids = _read_pending(path)
@@ -216,9 +226,24 @@ class Publisher:
         with self._lock_for(uid, track_id):
             return self._run(uid, track_id, "publish", lambda: self._publish_once(uid, track_id), attempts)
 
+    def _purged(self, uid: str) -> bool:
+        """Is the account purged (ADR-0011)? A check that cannot be made says no: the purge erases again what a
+        publish in that window brought back, and the check is repeated by the next one."""
+        if self._is_tombstoned is None:
+            return False
+        try:
+            return bool(self._is_tombstoned(uid))
+        except Exception:
+            log.warning("could not check the tombstone of %s", uid, exc_info=True)
+            return False
+
     def _run(self, uid: str, track_id: str, kind: str, action: Callable[[], None], attempts: int) -> bool:
         """Run ``action`` (the track's lock is held), again with a growing pause while the failure is
-        transient. A lasting failure is queued in the user's pending file; success clears the entry. Never raises."""
+        transient. A lasting failure is queued in the user's pending file; success clears the entry. Never raises.
+        For a purged account nothing runs: the entry is dropped and the call counts as done."""
+        if self._purged(uid):
+            self._set_pending(uid, track_id, None)
+            return True
         tried = 0
         while True:
             try:

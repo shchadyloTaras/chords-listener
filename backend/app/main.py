@@ -30,6 +30,7 @@ from app.engine import engine_info
 
 from .admin.audit import AuditFailure
 from .admin.authz import ADMIN_PREFIX, AdminAuthz, HiddenFromCaller, ReauthRequired, unguarded_admin_routes
+from .admin.deletion import AuthAdmin, BucketEraser, Purger
 from .admin.directory import Directory
 from .admin.history import Projections, pending_path
 from .admin.router import router as admin_router_default
@@ -308,11 +309,15 @@ def create_app(
     # this app's own ``Settings`` while ``adminConfig/settings`` does not exist
     admin_settings = RuntimeSettings(admin_db, env=lambda: settings) if admin_db is not None else None
     admission = Admission(admin_db, admin_settings) if admin_settings is not None else None
+    # whether a uid's account was purged (``adminTombstones/<uid>``, ADR-0011): the job results and the publish path check it
+    is_tombstoned: Optional[Callable[[str], bool]] = (
+        (lambda uid: admin_db.get(f"adminTombstones/{uid}") is not None) if admin_db is not None else None
+    )
     jobs = JobManager(
         settings, store, fetcher or YtDlpFetcher(settings.max_upload_bytes), analyzer, vocal_transcriber=vocal_transcriber,
         # admin job history and the late-job discard of purged accounts (docs/features/admin): none without a database
         projections=projections,
-        is_tombstoned=(lambda uid: admin_db.get(f"adminTombstones/{uid}") is not None) if admin_db is not None else None,
+        is_tombstoned=is_tombstoned,
         admission=admission,
     )
     bucket = (
@@ -331,6 +336,7 @@ def create_app(
             FirestoreIndex(settings.firebase_project),
             bucket=settings.upload_bucket,
             gcs_client_factory=gcs_client_factory or (lambda: default_client(settings.firebase_project)),
+            is_tombstoned=is_tombstoned,
         )
     else:
         # Not a mere warning: clients that read the index keep reading it, so nothing new or changed would show
@@ -382,7 +388,20 @@ def create_app(
     app.state.admin_settings = admin_settings  # ... and its ``settings`` (None: built on first use)
     app.state.admission = admission  # None without a database: no gate (local mode)
     if sweeper is _UNSET:
-        sweeper = Sweeper(admin_db, projections, admin_directory) if admin_db is not None else None
+        sweeper = None
+        if admin_db is not None:
+            # the purges step of the sweep (ADR-0011): the same database and e-mail index as the admin routes
+            erase_objects = None
+            if settings.upload_bucket:
+                eraser = BucketEraser(
+                    settings.upload_bucket, gcs_client_factory or (lambda: default_client(settings.firebase_project))
+                )
+                erase_objects = eraser.erase
+            purger = Purger(
+                admin_db, directory=admin_directory, users_dir=settings.users_dir,
+                auth=AuthAdmin(settings.firebase_project), erase_objects=erase_objects,
+            )
+            sweeper = Sweeper(admin_db, projections, admin_directory, purge=purger.run)
     app.state.sweeper = sweeper
     if scheduler_verifier is _UNSET:
         scheduler_verifier = _scheduler_verifier_from_env() if settings.cloud else None

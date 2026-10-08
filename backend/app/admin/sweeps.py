@@ -15,7 +15,9 @@ attempt stopped:
                  when no job of it is still running (otherwise the next slot does). Frozen and restored days never
                  change. A day left live two days ago is caught up the same way;
 * ``emailIndex`` ``Directory.full_sync``;
-* ``purges``     the purge hook (T25); a no-op until it lands.
+* ``purges``     ``deletion.Purger.run``: the accounts whose 7-day window has passed are erased tombstone-first, and
+                 interrupted purges are resumed (ADR-0011). A purge that stops raises, so the slot fails and the
+                 scheduler's retry resumes it.
 
 A step that raises marks the slot ``failed`` and the endpoint answers 500, so Cloud Scheduler retries (the slot is
 taken over and resumed); an instance that died mid-sweep leaves a ``running`` slot that is taken over after 30 min.
@@ -80,7 +82,7 @@ def _int(value: Any) -> int:
 
 
 class Sweeper:
-    """One sweep per slot. ``purge`` is the purge step (T25): a callable run after the index sync."""
+    """One sweep per slot. ``purge`` is the purge step (``deletion.Purger.run``): a callable run after the index sync."""
 
     def __init__(
         self,
