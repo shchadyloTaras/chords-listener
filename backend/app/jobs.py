@@ -381,6 +381,8 @@ class JobManager:
 
     def _new_record(self, kind: str, options: dict[str, Any], *, keys: set[str], **fields: Any) -> JobRecord:
         fields.setdefault("uid", current_uid())
+        # Every submit path passes its origin; a record made without one (already-analyzed, tests) takes it from the source.
+        fields.setdefault("origin", "link" if (fields.get("source") or {}).get("type") in ("youtube", "url") else "file")
         rec = JobRecord(id=secrets.token_hex(8), kind=kind, created_at=utc_now(), options=dict(options), **fields)
         with self._lock:
             self._jobs[rec.id] = rec
