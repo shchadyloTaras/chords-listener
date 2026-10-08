@@ -76,8 +76,10 @@ export function createReferenceTone(): ReferenceTone {
     stop,
     dispose() {
       stop()
-      ctx?.close().catch(() => undefined)
+      // close only after the fade-out has played: closing at once cuts the tone mid-wave (a click)
+      const done = ctx
       ctx = null
+      if (done) setTimeout(() => done.close().catch(() => undefined), (FADE_S + 0.03) * 1000)
     },
   }
 }

@@ -107,12 +107,24 @@ describe('createReferenceTone', () => {
     expect(FakeContext.made[0].oscs).toHaveLength(2)
   })
 
-  it('dispose stops the tone and closes the context', () => {
-    const tone = createReferenceTone()
-    tone.play(440)
-    tone.dispose()
-    expect(tone.playing).toBe(false)
-    expect(FakeContext.made[0].close).toHaveBeenCalledTimes(1)
+  it('dispose stops the tone and closes the context once the fade-out has played (no click)', () => {
+    vi.useFakeTimers()
+    try {
+      const tone = createReferenceTone()
+      tone.play(440)
+      tone.dispose()
+      expect(tone.playing).toBe(false)
+      expect(FakeContext.made[0].close).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(FADE_S * 1000)
+      expect(FakeContext.made[0].close).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(50)
+      expect(FakeContext.made[0].close).toHaveBeenCalledTimes(1)
+      // playing again later starts in a new context
+      tone.play(220)
+      expect(FakeContext.made).toHaveLength(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('does nothing without Web Audio', () => {
