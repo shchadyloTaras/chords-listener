@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AdminApiError } from '../../lib/adminApi'
 import type { AdminAuditEntry, AdminPage } from '../../types'
 import { useApp } from '../../store'
+import { SWITCH_LABEL } from './labels'
+import { fieldClass } from './PeriodInputs'
 
 const listAudit = vi.fn()
 vi.mock('../../lib/adminApi', async (importOriginal) => ({
@@ -211,6 +213,18 @@ describe('Audit screen filters and paging', () => {
 
     await act(async () => button('Скинути')!.click())
     expect(listAudit).toHaveBeenLastCalledWith({}, {}, expect.any(AbortSignal))
+  })
+
+  it('uses the filter fields of the other screens, focus outline included', async () => {
+    await show(page([RESET]))
+    const fields = host.querySelectorAll('form input, form select')
+    expect(fields.length).toBe(3)
+    for (const field of fields) expect(field.className).toBe(fieldClass)
+  })
+
+  it('names a switch in the words of the settings screen', async () => {
+    await show(page([entry({ id: 's', at: '2026-10-08T10:00:00Z', action: 'switch_changed', setting: 'switches.vocalsEnabled', before: { on: true }, after: { on: false } })]))
+    expect(host.textContent).toContain(SWITCH_LABEL.vocalsEnabled)
   })
 
   it('offers every journaled action in the action filter', async () => {

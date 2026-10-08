@@ -11,6 +11,7 @@ import { useApp } from '../../store'
 import type { AdminJobFilters, AdminJobHistoryItem, AdminJobHistoryPage, AdminPaging, AdminStatsDay, AdminStatsRange } from '../../types'
 import { Jobs } from './Jobs'
 import { Stats } from './Stats'
+import { KIND_LABEL, ORIGIN_LABEL } from './labels'
 
 let root: Root
 let host: HTMLDivElement
@@ -270,6 +271,14 @@ describe('AC-08 daily statistics', () => {
     expect(rows.filter((r) => r.textContent?.includes('триває'))).toHaveLength(1)
     expect(rows[1].textContent).toContain('2026-10-07')
     expect(rows[1].textContent).not.toContain('триває')
+  })
+
+  it('names the columns in the words of the other screens (labels.ts) and fills them from the day', async () => {
+    await mountStats(async (from, to) => ({ from, to, days: [liveDay('2026-10-08', { analyses: { link: 2, file: 1, mic: 7, tab: 9 } })] }))
+    const headers = [...host.querySelectorAll('thead th')].map((th) => th.textContent)
+    expect(headers.slice(0, 6)).toEqual(['День', ORIGIN_LABEL.link, ORIGIN_LABEL.file, ORIGIN_LABEL.mic, ORIGIN_LABEL.tab, KIND_LABEL.vocals])
+    const cells = [...host.querySelectorAll('tbody tr')[0].querySelectorAll('td')].map((td) => td.textContent)
+    expect(cells.slice(0, 5)).toEqual(['2', '1', '7', '9', '4'])
   })
 
   it('offers 7, 30 and 90 day presets', async () => {

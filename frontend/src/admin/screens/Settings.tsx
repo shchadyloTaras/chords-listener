@@ -6,6 +6,7 @@ import { adminErrorMessage, AdminApiError } from '../../lib/adminApi'
 import { INPUT_CLASS } from '../ui'
 import type { AdminBanner, AdminDefaultLimits, AdminSettings, AdminSwitchName } from '../../types'
 import { useAdminData } from '../useAdminData'
+import { SWITCH_LABEL } from './labels'
 
 /** The calls the screen makes (replaceable in tests). */
 export type SettingsApi = Pick<typeof adminApi, 'getSettings' | 'setDefaultLimits' | 'setSwitch' | 'setBanner'>
@@ -81,7 +82,7 @@ interface SwitchRow {
 const SWITCHES: readonly SwitchRow[] = [
   {
     name: 'analysesPaused',
-    label: 'Пауза нових аналізів',
+    label: SWITCH_LABEL.analysesPaused,
     on: (s) => s.analysesPaused,
     send: (on) => !on,
     text: 'Нові хмарні аналізи (посилання й файли) не приймаються і не рахуються в квоту; користувач бачить пояснення й може розпізнати в браузері.',
@@ -89,14 +90,14 @@ const SWITCHES: readonly SwitchRow[] = [
   },
   {
     name: 'youtubeEnabled',
-    label: 'Завантаження з YouTube',
+    label: SWITCH_LABEL.youtubeEnabled,
     on: (s) => s.youtubeEnabled,
     send: (on) => !on,
     text: 'Вимкнено: сайт одразу пропонує «Слухати у вкладці», спроба не витрачається.',
   },
   {
     name: 'vocalsEnabled',
-    label: 'Розпізнавання вокалу',
+    label: SWITCH_LABEL.vocalsEnabled,
     on: (s) => s.vocalsEnabled,
     send: (on) => !on,
     text: 'Вимкнено: транскрипція вокалу тимчасово недоступна, акорди й бібліотека працюють як звичайно.',

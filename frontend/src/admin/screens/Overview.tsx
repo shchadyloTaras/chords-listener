@@ -5,15 +5,13 @@ import { useAdminT } from '../ui'
 import { adminErrorMessage, getOverview } from '../../lib/adminApi'
 import type { AdminOrigin, AdminOverview, AdminSwitchName } from '../../types'
 import { useAdminData } from '../useAdminData'
-import { KIND_LABEL, ORIGIN_LABEL, REASONS } from './labels'
+import { KIND_LABEL, ORIGIN_LABEL, REASONS, SWITCH_LABEL } from './labels'
 
 // The admin page is Ukrainian-only (like its menu): the admin is the owner. Failure reasons come from the
 // dictionary (admin.reason.*), shared with the other screens.
-const SWITCHES: ReadonlyArray<{ name: AdminSwitchName; label: string }> = [
-  { name: 'analysesPaused', label: 'Пауза нових аналізів' },
-  { name: 'youtubeEnabled', label: 'Завантаження з YouTube на сервері' },
-  { name: 'vocalsEnabled', label: 'Транскрипція вокалу' },
-]
+const SWITCHES: ReadonlyArray<{ name: AdminSwitchName; label: string }> = (['analysesPaused', 'youtubeEnabled', 'vocalsEnabled'] as const).map(
+  (name) => ({ name, label: SWITCH_LABEL[name] }),
+)
 
 function Card({ label, value, id, children }: { label: string; value: number | string; id: string; children?: ReactNode }) {
   return (

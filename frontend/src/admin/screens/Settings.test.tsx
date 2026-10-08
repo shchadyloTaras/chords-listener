@@ -22,6 +22,7 @@ vi.mock('../../lib/auth', () => ({
 import { AdminApiError } from '../../lib/adminApi'
 import * as adminApi from '../../lib/adminApi'
 import { Settings, type SettingsApi } from './Settings'
+import { SWITCH_LABEL } from './labels'
 
 const SETTINGS: AdminSettings = {
   limits: { analyses: 40, vocals: 15, jobs: 2, maxDurationMin: 20, maxUploadMb: 500 },
@@ -220,9 +221,9 @@ describe('default limits (AC-24, AC-25)', () => {
 describe('switches (AC-26, AC-27, AC-28)', () => {
   it('shows the current state of the three switches', async () => {
     await render(fakeApi())
-    expect(switchOf('Пауза нових аналізів').getAttribute('aria-checked')).toBe('false')
-    expect(switchOf('Завантаження з YouTube').getAttribute('aria-checked')).toBe('true')
-    expect(switchOf('Розпізнавання вокалу').getAttribute('aria-checked')).toBe('true')
+    expect(switchOf(SWITCH_LABEL.analysesPaused).getAttribute('aria-checked')).toBe('false')
+    expect(switchOf(SWITCH_LABEL.youtubeEnabled).getAttribute('aria-checked')).toBe('true')
+    expect(switchOf(SWITCH_LABEL.vocalsEnabled).getAttribute('aria-checked')).toBe('true')
   })
 
   it('says that accepted jobs are never stopped', async () => {
@@ -233,20 +234,20 @@ describe('switches (AC-26, AC-27, AC-28)', () => {
   it('turns YouTube off and on with the switch, without asking for the password', async () => {
     const api = fakeApi()
     await render(api)
-    await click(switchOf('Завантаження з YouTube'))
+    await click(switchOf(SWITCH_LABEL.youtubeEnabled))
     expect(api.setSwitch).toHaveBeenLastCalledWith('youtubeEnabled', false)
-    expect(switchOf('Завантаження з YouTube').getAttribute('aria-checked')).toBe('false')
-    await click(switchOf('Завантаження з YouTube'))
+    expect(switchOf(SWITCH_LABEL.youtubeEnabled).getAttribute('aria-checked')).toBe('false')
+    await click(switchOf(SWITCH_LABEL.youtubeEnabled))
     expect(api.setSwitch).toHaveBeenLastCalledWith('youtubeEnabled', true)
-    expect(switchOf('Завантаження з YouTube').getAttribute('aria-checked')).toBe('true')
+    expect(switchOf(SWITCH_LABEL.youtubeEnabled).getAttribute('aria-checked')).toBe('true')
   })
 
   it('turns vocal transcription off with the switch', async () => {
     const api = fakeApi()
     await render(api)
-    await click(switchOf('Розпізнавання вокалу'))
+    await click(switchOf(SWITCH_LABEL.vocalsEnabled))
     expect(api.setSwitch).toHaveBeenCalledWith('vocalsEnabled', false)
-    expect(switchOf('Розпізнавання вокалу').getAttribute('aria-checked')).toBe('false')
+    expect(switchOf(SWITCH_LABEL.vocalsEnabled).getAttribute('aria-checked')).toBe('false')
   })
 
   it('warns beside the pause switch that turning it on asks for the password, and not beside the others', async () => {
@@ -265,8 +266,8 @@ describe('switches (AC-26, AC-27, AC-28)', () => {
       }),
     })
     await render(api)
-    await click(switchOf('Завантаження з YouTube'))
-    expect(switchOf('Завантаження з YouTube').getAttribute('aria-checked')).toBe('true')
+    await click(switchOf(SWITCH_LABEL.youtubeEnabled))
+    expect(switchOf(SWITCH_LABEL.youtubeEnabled).getAttribute('aria-checked')).toBe('true')
     expect(section('Перемикачі сервісу').textContent).toContain('Зміну не застосовано, повторіть')
   })
 })
@@ -291,27 +292,27 @@ describe('pause needs a fresh login only when turned on (AC-34)', () => {
   it('asks for the password, then pauses', async () => {
     fetchMock.mockResolvedValueOnce(json({ detail: 'Sign in again', code: 'reauth_required' }, 401)).mockResolvedValueOnce(json(paused))
     await render(realApi())
-    await click(switchOf('Пауза нових аналізів'))
+    await click(switchOf(SWITCH_LABEL.analysesPaused))
     expect(auth.requestSignIn).toHaveBeenCalledTimes(1)
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ value: true })
-    expect(switchOf('Пауза нових аналізів').getAttribute('aria-checked')).toBe('true')
+    expect(switchOf(SWITCH_LABEL.analysesPaused).getAttribute('aria-checked')).toBe('true')
   })
 
   it('leaves the pause off, with an explanation, when the password is not confirmed', async () => {
     auth.requestSignIn.mockResolvedValue(false)
     fetchMock.mockResolvedValue(json({ detail: 'Sign in again', code: 'reauth_required' }, 401))
     await render(realApi())
-    await click(switchOf('Пауза нових аналізів'))
-    expect(switchOf('Пауза нових аналізів').getAttribute('aria-checked')).toBe('false')
+    await click(switchOf(SWITCH_LABEL.analysesPaused))
+    expect(switchOf(SWITCH_LABEL.analysesPaused).getAttribute('aria-checked')).toBe('false')
     expect(section('Перемикачі сервісу').textContent).toContain('Підтвердіть дію, увійшовши ще раз')
   })
 
   it('does not ask for the password when the pause is turned off or another switch changes', async () => {
     fetchMock.mockImplementation(async () => json(SETTINGS))
     await render(realApi(async () => paused))
-    await click(switchOf('Пауза нових аналізів'))
-    await click(switchOf('Завантаження з YouTube'))
+    await click(switchOf(SWITCH_LABEL.analysesPaused))
+    await click(switchOf(SWITCH_LABEL.youtubeEnabled))
     expect(auth.requestSignIn).not.toHaveBeenCalled()
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })

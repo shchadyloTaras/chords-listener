@@ -5,14 +5,15 @@ import { adminErrorMessage, getStats } from '../../lib/adminApi'
 import type { AdminStatsDay, AdminStatsRange } from '../../types'
 import { useAdminData } from '../useAdminData'
 import { PeriodInputs, PeriodRule } from './PeriodInputs'
-import { REASONS } from './labels'
+import { KIND_LABEL, ORIGIN_LABEL, REASONS } from './labels'
 import { daysOf, isValidPeriod, lastDays, PERIOD_RULE, utcToday } from './period'
 
 type Load = (from: string, to: string, signal: AbortSignal) => Promise<AdminStatsRange>
 
 const PRESETS = [7, 30, 90] as const
 const DEFAULT_DAYS = 30
-const HEADERS = ['День', 'Посилання', 'Файл', 'Мікрофон', 'Вкладка', 'Вокал', 'Невдалі', 'Причини збоїв', 'Активні', 'Нові']
+const ORIGINS = ['link', 'file', 'mic', 'tab'] as const
+const HEADERS = ['День', ...ORIGINS.map((o) => ORIGIN_LABEL[o]), KIND_LABEL.vocals, 'Невдалі', 'Причини збоїв', 'Активні', 'Нові']
 
 /** A day the server has no record of: nothing happened (the contract omits such days). */
 const emptyDay = (day: string): AdminStatsDay => ({
@@ -60,10 +61,11 @@ function LiveRow({ day }: { day: AdminStatsDay }) {
         {day.day}
         {day.state === 'live' && <span className="ml-2 text-xs text-muted">триває</span>}
       </th>
-      <td className={num}>{day.analyses.link}</td>
-      <td className={num}>{day.analyses.file}</td>
-      <td className={num}>{day.analyses.mic}</td>
-      <td className={num}>{day.analyses.tab}</td>
+      {ORIGINS.map((o) => (
+        <td key={o} className={num}>
+          {day.analyses[o]}
+        </td>
+      ))}
       <td className={num}>{day.vocals}</td>
       <td className={num}>{day.failed}</td>
       <td className="px-3 py-2 text-muted">

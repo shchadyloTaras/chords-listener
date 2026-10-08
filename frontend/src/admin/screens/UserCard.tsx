@@ -4,7 +4,7 @@ import { Button } from '../../components/ui/IconButton'
 import { Modal } from '../../components/ui/Modal'
 import { formatBytes, formatTime } from '../../components/ui/format'
 import { useAdminT } from '../ui'
-import { KIND_LABEL, ORIGIN_LABEL } from './labels'
+import { KIND_LABEL, ORIGIN_LABEL, STATUS_LABEL } from './labels'
 import { adminErrorMessage, getUserCard, listUserTracks, removePersonalLimit, resetQuota } from '../../lib/adminApi'
 import type {
   AdminAccountState,
@@ -35,7 +35,6 @@ function formatWhen(iso: string | null): string {
 }
 
 const SOURCE_LABEL: Record<AdminTrackMeta['sourceType'], string> = { youtube: 'YouTube', url: 'Посилання', file: 'Файл' }
-const STATUS_LABEL: Record<AdminJobHistoryItem['status'], string> = { running: 'Виконується', done: 'Готово', error: 'Помилка' }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AdminOverview } from '../../types'
 import { useApp } from '../../store'
 import { Overview } from './Overview'
+import { SWITCH_LABEL } from './labels'
 
 const getOverview = vi.hoisted(() => vi.fn())
 vi.mock('../../lib/adminApi', async (importOriginal) => ({
@@ -97,6 +98,10 @@ describe('Overview screen', () => {
     expect(q('switch-vocalsEnabled')?.getAttribute('data-state')).toBe('on')
     expect(q('switch-analysesPaused')?.textContent).toContain('Увімкнено')
     expect(q('switch-youtubeEnabled')?.textContent).toContain('Вимкнено')
+    // the same words as on the settings screen and in the journal (labels.ts)
+    for (const name of ['analysesPaused', 'youtubeEnabled', 'vocalsEnabled'] as const) {
+      expect(q(`switch-${name}`)?.textContent).toContain(SWITCH_LABEL[name])
+    }
   })
 
   it('renders an email as text, never as markup', async () => {

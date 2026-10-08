@@ -4,6 +4,8 @@ import { useAdminT } from '../ui'
 import { ADMIN_ERROR_CODES, adminErrorKey, adminErrorMessage, listAudit, type AdminErrorCode } from '../../lib/adminApi'
 import type { AdminAuditAction, AdminAuditEntry, AdminAuditFilters, AdminAuditOutcome } from '../../types'
 import { useAdminData } from '../useAdminData'
+import { SWITCH_LABEL } from './labels'
+import { fieldClass } from './PeriodInputs'
 
 // The journal screen (US-06, AC-10 / AC-10b / AC-11): a read-only, paged list of what admins did, newest first.
 // It has no control that changes or deletes a record — the API has no such operation either. Like the menu, the
@@ -34,9 +36,9 @@ const OUTCOME_LABEL: Record<AdminAuditOutcome, string> = {
 const SETTING_LABEL: Record<string, string> = {
   limits: 'Типові ліміти',
   banner: 'Банер',
-  'switches.analysesPaused': 'Перемикач: пауза аналізів',
-  'switches.youtubeEnabled': 'Перемикач: YouTube',
-  'switches.vocalsEnabled': 'Перемикач: вокал',
+  'switches.analysesPaused': `Перемикач «${SWITCH_LABEL.analysesPaused}»`,
+  'switches.youtubeEnabled': `Перемикач «${SWITCH_LABEL.youtubeEnabled}»`,
+  'switches.vocalsEnabled': `Перемикач «${SWITCH_LABEL.vocalsEnabled}»`,
 }
 
 const NONE = '—'
@@ -148,8 +150,6 @@ function toFilters(draft: Draft): AdminAuditFilters {
   return filters
 }
 
-const FIELD = 'h-9 rounded-lg border border-border-strong bg-surface-2 px-2 text-sm text-text'
-
 export function Audit() {
   const t = useAdminT()
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT)
@@ -187,15 +187,15 @@ export function Audit() {
       <form onSubmit={onSubmit} className="mt-4 flex flex-wrap items-end gap-3">
         <label className="flex flex-col gap-1 text-xs text-muted">
           Хто (uid адміністратора)
-          <input name="adminUid" className={FIELD} value={draft.adminUid} onChange={(e) => setDraft({ ...draft, adminUid: e.target.value })} />
+          <input name="adminUid" className={fieldClass} value={draft.adminUid} onChange={(e) => setDraft({ ...draft, adminUid: e.target.value })} />
         </label>
         <label className="flex flex-col gap-1 text-xs text-muted">
           Над ким (uid користувача)
-          <input name="targetUid" className={FIELD} value={draft.targetUid} onChange={(e) => setDraft({ ...draft, targetUid: e.target.value })} />
+          <input name="targetUid" className={fieldClass} value={draft.targetUid} onChange={(e) => setDraft({ ...draft, targetUid: e.target.value })} />
         </label>
         <label className="flex flex-col gap-1 text-xs text-muted">
           Дія
-          <select name="action" className={FIELD} value={draft.action} onChange={(e) => setDraft({ ...draft, action: e.target.value as Draft['action'] })}>
+          <select name="action" className={fieldClass} value={draft.action} onChange={(e) => setDraft({ ...draft, action: e.target.value as Draft['action'] })}>
             <option value="">Усі дії</option>
             {ACTIONS.map((a) => (
               <option key={a} value={a}>

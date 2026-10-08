@@ -8,7 +8,7 @@ files_hint: ["frontend/src/admin/screens/labels.ts", "frontend/src/admin/screens
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 10 — re-review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T61 — Use one label per status and switch across the admin screens
@@ -19,4 +19,4 @@ status: "todo"
 
 **Re-review fix 16. STATUS_LABEL and SWITCH_LABEL live in screens/labels.ts and are the only wording; the stats headers come from ORIGIN_LABEL / KIND_LABEL; the journal filters use the shared fieldClass; tests assert the shared words.**
 
-- [ ] lint + type-check clean (ruff / oxlint + tsc)
+- [x] lint + type-check clean (ruff / oxlint + tsc)

@@ -5,12 +5,10 @@ import { adminErrorMessage, listJobHistory } from '../../lib/adminApi'
 import type { AdminFailureReason, AdminHistoryStatus, AdminJobFilters, AdminJobHistoryItem, AdminJobHistoryPage, AdminOrigin, AdminPaging, AdminSourceType } from '../../types'
 import { useAdminData } from '../useAdminData'
 import { Field, fieldClass, PeriodInputs, PeriodRule } from './PeriodInputs'
-import { KIND_LABEL, ORIGIN_LABEL, REASONS, SOURCE_TYPE_LABEL } from './labels'
+import { KIND_LABEL, ORIGIN_LABEL, REASONS, SOURCE_TYPE_LABEL, STATUS_LABEL } from './labels'
 import { isValidPeriod, lastDays, PERIOD_RULE } from './period'
 
 type Load = (filters: AdminJobFilters, paging: AdminPaging, signal: AbortSignal) => Promise<AdminJobHistoryPage>
-
-const STATUS_LABEL: Record<AdminHistoryStatus, string> = { running: 'Виконується', done: 'Успішна', error: 'Невдала' }
 
 interface Draft {
   status: '' | AdminHistoryStatus

@@ -23,6 +23,7 @@ vi.mock('../../lib/adminApi', async (importActual) => ({
 
 import { AdminApiError } from '../../lib/adminApi'
 import { UserCard } from './UserCard'
+import { STATUS_LABEL } from './labels'
 import { Users } from './Users'
 
 // the same set the back-end fixtures plant (backend/tests/admin/fixtures.py HOSTILE_STRINGS)
@@ -305,6 +306,10 @@ describe('UserCard — profile, quota, limit and state', () => {
     expect(text()).toContain(HOSTILE_STRINGS[1])
     expect(text()).toContain(HOSTILE_STRINGS[5])
     expect(host.querySelector('img, b')).toBeNull()
+    // the result in the words of the job-history screen (labels.ts): «невдала» / «успішна» (AC-07)
+    expect(text()).toContain(STATUS_LABEL.error)
+    expect(text()).toContain(STATUS_LABEL.done)
+    expect(STATUS_LABEL).toEqual({ running: 'Виконується', done: 'Успішна', error: 'Невдала' })
   })
 
   it('shows the text of an API error', async () => {
