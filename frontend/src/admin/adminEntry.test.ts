@@ -70,6 +70,25 @@ describe('admin.html', () => {
 })
 
 describe('vite config', () => {
+  it('leaves the policy of a production build exactly as written', async () => {
+    const { adminBuildCsp } = await import('../../vite.config')
+    expect(adminBuildCsp(html, {})).toBe(html)
+    expect(adminBuildCsp(html, { VITE_CLOUD_API_URL: 'https://chords-api-84488579848.europe-west1.run.app' })).toBe(html)
+    expect(adminBuildCsp(html, { VITE_FIREBASE_EMULATORS: 'false' })).toBe(html)
+  })
+
+  it('lets an emulator build reach the local API and the Auth emulator only (live e2e)', async () => {
+    const { adminBuildCsp, AUTH_EMULATOR_ORIGIN } = await import('../../vite.config')
+    const written = cspOf(html)
+    const built = cspOf(adminBuildCsp(html, { VITE_CLOUD_API_URL: 'http://127.0.0.1:8775', VITE_FIREBASE_EMULATORS: 'true' }))
+    expect(built['connect-src']).toEqual(["'self'", 'http://127.0.0.1:8775', AUTH_EMULATOR_ORIGIN, ...written['connect-src'].slice(1)])
+    expect(AUTH_EMULATOR_ORIGIN).toBe('http://127.0.0.1:9099')
+    // still no Firestore (nor Storage) emulator: the admin page reads everything through the API
+    expect(built['connect-src'].join(' ')).not.toMatch(/:8080|:9199|firestore/)
+    // everything but connect-src is untouched
+    expect({ ...built, 'connect-src': [] }).toEqual({ ...written, 'connect-src': [] })
+  })
+
   it('builds admin.html next to index.html', async () => {
     const { default: config } = await import('../../vite.config')
     const input = (config as { build?: { rollupOptions?: { input?: Record<string, string> } } }).build?.rollupOptions?.input
