@@ -11,10 +11,10 @@ import { useTourFlags, useTourTrigger } from '../tour/hooks'
 import './chords.css'
 import { ChordLegend } from './ChordLegend'
 import { ChordPopoverHost } from './ChordPopover'
-import { useHarmoniumDrone } from './HarmoniumDrone'
 import { useChordHotkeys } from './hotkeys'
 import { ChordModelContext, useBuildChordModel } from './model'
 import { NowPlaying } from './NowPlaying'
+import { PlayAlongRuntimeHost } from './PlayAlong'
 import { Overlays } from './Overlays'
 import { LivePianoSlot } from './piano/LivePianoSlot'
 import { ScoreSlot } from './score/ScoreSlot'
@@ -22,6 +22,7 @@ import { SheetView } from './SheetView'
 import { TimelineView } from './TimelineView'
 import { Toolbar } from './Toolbar'
 import { useChordUi } from './uiStore'
+import { useHarmoniumDrone } from './useHarmoniumDrone'
 
 export function ChordWorkspace() {
   const t = useT()
@@ -73,6 +74,7 @@ function Workspace({ track }: { track: Track }) {
     <ChordModelContext value={model}>
       <div className="mx-auto w-full max-w-[1180px] px-4 pt-4 pb-[calc(var(--chords-bottom-offset,96px)+48px)] sm:px-6 sm:pt-6">
         <NowPlaying ref={hero} />
+        <PlayAlongRuntimeHost />
         <LivePianoSlot />
         <div className="h-3" />
         <Toolbar heroVisible={heroVisible} />
