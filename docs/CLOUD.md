@@ -215,7 +215,7 @@ The staged files in [`docs/features/admin/migrations/`](features/admin/migration
 | # | File | Run |
 |---|---|---|
 | 01 | `01_add_track_size.up.py` | adds `sizeBytes` to every published track; it measures the track files, so `CHORDS_DATA_DIR` must point at the mounted bucket (the same files the service sees at `/data`) |
-| 02 | `02_admin_indexes_and_ttl.up.json` | `npx -y firebase-tools@15 deploy --only firestore:indexes --project build-chords-listener`; wait until the indexes are built (Firebase console → Firestore → Indexes) |
+| 02 | `02_admin_indexes_and_ttl.up.json` | `npx -y firebase-tools@15 deploy --only firestore:indexes --project build-chords-listener`; wait until the indexes are built (Firebase console → Firestore → Indexes). 18 composite indexes: each of 9 in both directions, because Firestore reads an index only in its declared direction (the way back, a range with no order and a `count()` over a period need the ascending one; data-model.md → Indexes) |
 | 03 | `03_admin_rules.up.rules` | `npx -y firebase-tools@15 deploy --only firestore:rules,storage --project build-chords-listener` (`storage.rules` refuses a purged account's uploads by reading Firestore: accept the CLI's offer to grant the Storage service agent its cross-service Firestore role, step 3 of "Library in Firestore" above) |
 | 04 | `04_seed_runtime_config.up.py` | creates `adminConfig/settings` and `publicStatus/current` from the `CHORDS_*` values, only if absent |
 | 05 | `05_build_email_index.up.py` | builds the e-mail search index from `users` |

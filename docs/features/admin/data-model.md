@@ -369,15 +369,19 @@ Shared REST helper: [`_fsrest.py`](./migrations/_fsrest.py).
 
 | Index | Columns | Query it serves |
 |---|---|---|
-| `adminJobs_status_acceptedAt` | `status` ASC, `acceptedAt` DESC | history filtered by result (AC-07); stale-`running` sweep (`status == running AND acceptedAt < now − 2 h`) |
-| `adminJobs_reason_acceptedAt` | `reason` ASC, `acceptedAt` DESC | history filtered by reason + per-reason `count()` (AC-07) |
-| `adminJobs_origin_acceptedAt` | `origin` ASC, `acceptedAt` DESC | history filtered by source (AC-07). Combined filters merge these three indexes (zig-zag merge on the shared `acceptedAt DESC` suffix) |
-| `adminJobs_sourceType_acceptedAt` | `sourceType` ASC, `acceptedAt` DESC | history filtered by YouTube / other (AC-07); merges with the three above |
-| `adminJobs_uid_acceptedAt` | `uid` ASC, `acceptedAt` DESC | the user's recent jobs on the card (US-03); purge anonymization (`uid == X`) |
-| `adminAudit_adminUid_at` | `adminUid` ASC, `at` DESC | journal filtered by admin (US-06) |
-| `adminAudit_targetUid_at` | `targetUid` ASC, `at` DESC | journal filtered by user (US-06); purge redaction (`targetUid == X`) |
-| `adminAudit_action_at` | `action` ASC, `at` DESC | journal filtered by action type (US-06). Combined filters merge with the two above |
-| `adminAudit_action_outcome_at` | `action` ASC, `outcome` ASC, `at` DESC | `count()` of `deletion_scheduled` + `applied` in the last 60 min (AC-35) |
+Every composite index is declared **twice, `DESC` and `ASC` on its last field** (18 in all): Firestore reads a composite index only in its declared direction. Probed in production on 2026-10-08 with the 9 descending ones built: `uid == x` ordered by `acceptedAt` DESC was served and ASC answered `FAILED_PRECONDITION` "The query requires an index"; so did a range with no order (its implicit order is that field ascending) and a `count()` over a period. Combined filters merge indexes that share the last field **in the query's direction**. The offline tests check every query against this file (`IndexGuard` in `backend/tests/admin/fixtures.py`, T64).
+
+| Index | Columns | Query it serves (DESC · ASC) |
+|---|---|---|
+| `adminJobs_status_acceptedAt` | `status` ASC, `acceptedAt` DESC · ASC | history filtered by result, newest first (AC-07) · the way back; per-reason `count()` over a period; stale-`running` sweep (`status == running AND acceptedAt < now − 2 h`, no order) |
+| `adminJobs_reason_acceptedAt` | `reason` ASC, `acceptedAt` DESC · ASC | history filtered by reason (AC-07) · the way back; per-reason `count()` over a period |
+| `adminJobs_origin_acceptedAt` | `origin` ASC, `acceptedAt` DESC · ASC | history filtered by source (AC-07) · the way back; counts over a period. Combined filters merge these indexes |
+| `adminJobs_sourceType_acceptedAt` | `sourceType` ASC, `acceptedAt` DESC · ASC | history filtered by YouTube / other (AC-07) · the way back; counts over a period; merges with the three above |
+| `adminJobs_uid_acceptedAt` | `uid` ASC, `acceptedAt` DESC · ASC | the user's recent jobs on the card (US-03) · purge anonymization (`uid == X`, pages by `acceptedAt` ascending) |
+| `adminAudit_adminUid_at` | `adminUid` ASC, `at` DESC · ASC | journal filtered by admin (US-06) · the way back |
+| `adminAudit_targetUid_at` | `targetUid` ASC, `at` DESC · ASC | journal filtered by user (US-06) · the way back; purge redaction (`targetUid == X`, by `at` ascending) |
+| `adminAudit_action_at` | `action` ASC, `at` DESC · ASC | journal filtered by action type (US-06) · the way back. Combined filters merge with the two above |
+| `adminAudit_action_outcome_at` | `action` ASC, `outcome` ASC, `at` DESC · ASC | — · `count()` of `deletion_scheduled` + `applied` in the last 60 min (AC-35: `at >` with no order) |
 | *(auto)* `adminAudit.matchedUids` array-contains | — | purge redaction of search queries |
 | *(auto)* `adminAccounts.deletion.purgeAfter` | — | sweep: due purges |
 | *(auto)* `adminTombstones.status` | — | sweep: interrupted purges |

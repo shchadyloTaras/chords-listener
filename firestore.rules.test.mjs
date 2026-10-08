@@ -566,16 +566,24 @@ describe('promoted migrations 02 and 03 (firestore.indexes.json, firestore.rules
     assert.equal(readFileSync(new URL('./firestore.rules', import.meta.url), 'utf8'), staged('03_admin_rules.up.rules'))
   })
 
-  test('there are 9 composite indexes: 5 on adminJobs, 4 on adminAudit, newest first', () => {
-    assert.equal(indexes.indexes.length, 9)
+  test('there are 18 composite indexes: each of 5 on adminJobs and 4 on adminAudit in both directions (T64)', () => {
+    // Firestore reads a composite index only in its declared direction (production, 2026-10-08): the page newest first
+    // needs the descending one; the way back, a range without an order (the stale-jobs sweep) and a count() over a
+    // period (per-reason counts, the deletion cap) need the ascending one.
+    assert.equal(indexes.indexes.length, 18)
     const by = (group) => indexes.indexes.filter((i) => i.collectionGroup === group)
-    assert.equal(by('adminJobs').length, 5)
-    assert.equal(by('adminAudit').length, 4)
+    assert.equal(by('adminJobs').length, 10)
+    assert.equal(by('adminAudit').length, 8)
+    const shapes = new Map()
     for (const index of indexes.indexes) {
       const last = index.fields.at(-1)
-      assert.equal(last.order, 'DESCENDING', `${index.collectionGroup} sorts by ${last.fieldPath} newest first`)
       assert.equal(last.fieldPath, index.collectionGroup === 'adminJobs' ? 'acceptedAt' : 'at')
+      for (const lead of index.fields.slice(0, -1)) assert.equal(lead.order, 'ASCENDING')
+      const key = `${index.collectionGroup}:${index.fields.slice(0, -1).map((f) => f.fieldPath).join(',')}`
+      shapes.set(key, [...(shapes.get(key) ?? []), last.order])
     }
+    assert.equal(shapes.size, 9)
+    for (const [key, orders] of shapes) assert.deepEqual(orders.sort(), ['ASCENDING', 'DESCENDING'], `${key} both ways`)
   })
 
   test('4 TTL policies on expireAt keep history 90 d and audit 365 d (retention behind AC-10, AC-11)', () => {

@@ -91,7 +91,9 @@ class _Allow:
 
 @pytest.fixture
 def mem() -> MemDb:
-    return MemDb(bill_misses=True)  # a missed get and an empty page cost 1 read each, as Firestore bills
+    # a missed get and an empty page cost 1 read each, as Firestore bills; every query and count must be one the
+    # deployed indexes serve (T64: the per-reason counts with a period and the way back were refused in production)
+    return MemDb(bill_misses=True, indexed=True)
 
 
 @pytest.fixture
@@ -261,6 +263,26 @@ def test_history_pages_of_50_by_cursor_forwards_and_back_without_gaps_or_repeats
     assert back["nextCursor"] is not None
     start = env.get("/api/admin/jobs", before=pages[0]["nextCursor"]).json()  # before job 49: jobs 0 .. 48
     assert ids(start) == expected[:49] and start["hasPrev"] is False and start["hasNext"] is True
+
+
+@pytest.mark.parametrize("filters", [
+    {"status": "error"}, {"reason": "other"}, {"origin": "link"}, {"sourceType": "youtube"},
+    {"status": "error", "reason": "other", "origin": "link", "sourceType": "youtube"},
+])
+def test_history_goes_back_under_its_filters_and_period(env: Env, mem: MemDb, filters: dict[str, str]) -> None:
+    """The way back sorts acceptedAt ascending: each filter needs its ascending index (T64; production refused it with
+    the descending ones alone). The guard of ``mem`` checks every query and count against firestore.indexes.json."""
+    mem.put(make_user("u1", "user-1@example.test"))
+    for n in range(7):
+        mem.put(make_job("u1", "error", "other", "link", at("2026-10-05", 9, n), job_id=f"j{n}", sourceType="youtube"))
+    period = {"from": "2026-10-01", "to": "2026-10-08"}
+    first = env.get("/api/admin/jobs", limit=3, **filters, **period).json()
+    second = env.get("/api/admin/jobs", limit=3, after=first["nextCursor"], **filters, **period).json()
+    back = env.get("/api/admin/jobs", limit=3, before=second["nextCursor"], **filters, **period)
+    assert back.status_code == 200, back.text
+    assert ids(first) == ["j6", "j5", "j4"] and ids(second) == ["j3", "j2", "j1"]
+    assert ids(back.json()) == ["j4", "j3", "j2"]                              # the 3 jobs newer than second's last
+    assert first["countsByReason"] == {"other": 7}
 
 
 def test_history_limit_and_cursor_are_validated(env: Env, mem: MemDb) -> None:

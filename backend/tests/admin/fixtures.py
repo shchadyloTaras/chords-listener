@@ -374,14 +374,16 @@ class IndexGuard:
 
     * Equality filters alone: merged single-field indexes.
     * One field that is ranged and / or ordered, with no equality filter: its single-field index.
-    * Otherwise the sort (the orders, or the ranged field ascending when there are none) must close composite indexes
-      whose leading fields together are exactly the equality fields (one index, or several merged on that sort).
-      An index read backwards serves the reversed sort too.
+    * Otherwise the sort (the orders, or the ranged field ascending when there are none: an aggregation too) must
+      close composite indexes whose leading fields together are exactly the equality fields (one index, or several
+      merged on that sort), each in exactly the query's direction. Firestore never reads a composite index backwards:
+      with (uid ASC, acceptedAt DESC) deployed, ``uid == x`` ordered by acceptedAt ASC is FAILED_PRECONDITION
+      (production probe, 2026-10-08).
     A range must be on the first ordered field, and on one field only."""
 
-    def __init__(self, path: Path = INDEXES_FILE, *, aliases: Optional[dict[str, str]] = None) -> None:
+    def __init__(self, path: Optional[Path] = None, *, aliases: Optional[dict[str, str]] = None) -> None:
         self.aliases = dict(aliases or {})  # a collection a test renamed -> the collection group it stands for
-        spec = json.loads(path.read_text(encoding="utf-8"))
+        spec = json.loads((path or INDEXES_FILE).read_text(encoding="utf-8"))
         self.composites: dict[str, list[Tail]] = {}
         for index in spec["indexes"]:
             fields = tuple((f["fieldPath"], f["order"] == "DESCENDING") for f in index["fields"])
@@ -407,11 +409,10 @@ class IndexGuard:
         single = all((group, f) not in self.exempt for f in equal | {f for f, _ in tail})
         if single and (not tail or (len(tail) == 1 and not equal)):
             return
-        flipped = tuple((f, not desc) for f, desc in tail)
         covered: set[str] = set()
         for fields in self.composites.get(group, []):
             lead, end = fields[:len(fields) - len(tail)], fields[len(fields) - len(tail):]
-            if tail and end in (tail, flipped) and {f for f, _ in lead} <= equal:
+            if tail and end == tail and {f for f, _ in lead} <= equal:
                 covered |= {f for f, _ in lead}
                 if not equal:
                     return
@@ -709,10 +710,11 @@ class DirectoryDb(MemDb):
 
 
 class UsersDb(MemDb):
-    """``MemDb`` whose commits that write the journal can be made to fail (``fail_audit``)."""
+    """``MemDb`` whose commits that write the journal can be made to fail (``fail_audit``); every query and count is
+    checked against the deployed indexes (the deletion cap's count, the card's jobs, ...)."""
 
     def __init__(self) -> None:
-        super().__init__()
+        super().__init__(indexed=True)
         self.fail_audit = False
 
     def audit_docs(self) -> list[dict[str, Any]]:

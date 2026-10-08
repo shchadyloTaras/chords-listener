@@ -260,7 +260,8 @@ paths:
       summary: Job history of all users, filtered, with per-reason counts
       description: |
         US-04, AC-07. Newest first (`acceptedAt` desc). Filters combine (zig-zag merge over the
-        `adminJobs_{status,reason,origin,sourceType}_acceptedAt` indexes). `countsByReason` = `count()` per failure
+        `adminJobs_{status,reason,origin,sourceType}_acceptedAt` indexes, descending for a page, ascending for the way
+        back and for the counts over a period: Firestore reads an index only in its declared direction). `countsByReason` = `count()` per failure
         reason under the same filters. A purged user's jobs show `email: null`, `userDeleted: true`,
         `title: null`. History is kept 90 days (TTL), so a period is at most 90 days.
       operationId: listJobHistory

@@ -70,3 +70,4 @@
 | [T61](./t61-use-one-label-per-status-and-switch-across-the-adm.md) | Use one label per status and switch across the admin screens | ui | Тарас Щадило | S | T52 | done |
 | [T62](./t62-make-the-test-plan-say-what-is-tested-where-today.md) | Make the test plan say what is tested where today | docs | Тарас Щадило | S | T50 | done |
 | [T63](./t63-import-the-shared-test-fakes-from-fixtures-never-f.md) | Import the shared test fakes from fixtures, never from another test module | tests | Тарас Щадило | S | T58 | done |
+| [T64](./t64-check-every-query-against-an-index-in-its-declared.md) | Check every query against an index in its declared direction, and keep the 18 ascending/descending indexes in step | tests | Тарас Щадило | S | T58 | done |

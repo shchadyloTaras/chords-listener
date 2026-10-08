@@ -79,6 +79,13 @@ class FakeBucket:
 
 
 class Env:
+    @staticmethod
+    def groups(tag: str) -> dict[str, str]:
+        """This test's collections -> the real ones they stand for (whose indexes apply)."""
+        return {f"t25_users_{tag}": "users", f"t25_accounts_{tag}": "adminAccounts", f"t25_tombs_{tag}": "adminTombstones",
+                f"t25_jobs_{tag}": "adminJobs", f"t25_audit_{tag}": "adminAudit", f"t25_index_{tag}": "adminEmailIndex",
+                f"t25_stats_{tag}": "adminStats", f"t25_sweeps_{tag}": "adminSweeps"}
+
     def __init__(self, db: FirestoreIndex, tmp_path: Path, tag: str, mode: str) -> None:
         self.db, self.tag, self.mode = db, tag, mode
         self.users, self.accounts, self.tombstones = f"t25_users_{tag}", f"t25_accounts_{tag}", f"t25_tombs_{tag}"
@@ -216,8 +223,11 @@ class Env:
 @pytest.fixture(params=["fake", pytest.param("emulator", marks=pytest.mark.skipif(
     not (FS_HOST and AUTH_HOST), reason="needs the Firestore and Auth emulators"))])
 def env(request, tmp_path) -> Env:
-    db: FirestoreIndex = MemDb() if request.param == "fake" else FirestoreIndex(PROJECT, emulator_host=FS_HOST)
-    e = Env(db, tmp_path, uuid.uuid4().hex[:10], request.param)
+    tag = uuid.uuid4().hex[:10]
+    # offline, every query of the purge must be one the deployed indexes serve (T64)
+    db: FirestoreIndex = (MemDb(indexed=True, aliases=Env.groups(tag)) if request.param == "fake"
+                          else FirestoreIndex(PROJECT, emulator_host=FS_HOST))
+    e = Env(db, tmp_path, tag, request.param)
     e.seed()
     return e
 
@@ -525,7 +535,7 @@ def test_the_apps_sweeper_purges(env, monkeypatch, tmp_path):
                         allowed_hosts=("testserver", "localhost"))
     deleted: list[str] = []
     monkeypatch.setattr(AuthAdmin, "delete_user", lambda self, uid: deleted.append(uid))
-    db = MemDb()
+    db = MemDb(indexed=True)
     db.commit([
         db.update_op(f"users/{env.uid}", {"email": env.gone_email, "createdAt": NOW - timedelta(days=9)}),
         db.update_op(f"adminAccounts/{env.uid}", {"deletion": {
@@ -631,7 +641,7 @@ def test_a_user_without_a_tombstone_still_queues_a_failed_publish(pub_world):
 def test_the_apps_publisher_checks_the_tombstone_in_the_admin_database(tmp_path):
     from app.main import create_app
 
-    db = MemDb()
+    db = MemDb(indexed=True)
     db.commit([db.update_op("adminTombstones/u-gone", {"status": "purging", "purgeAfter": DUE, "startedAt": NOW,
                                                       "doneAt": None})])
     settings = Settings(data_dir=tmp_path / "d", frontend_dist=tmp_path / "no-dist", auth="firebase",

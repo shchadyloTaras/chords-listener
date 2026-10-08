@@ -297,6 +297,18 @@ def test_limit_shortens_the_page_and_before_goes_back(db: FakeDb, client: TestCl
     assert back["nextCursor"]  # continues after the page's last record, like any page with hasNext
 
 
+@pytest.mark.parametrize("filters", [
+    {"adminUid": ADMIN}, {"targetUid": VICTIM}, {"action": "view_card"}, {"adminUid": ADMIN, "action": "view_card"},
+])
+def test_before_goes_back_under_each_filter(db: FakeDb, client: TestClient, filters: dict[str, str]) -> None:
+    """The way back sorts ``at`` ascending: each filter needs its ascending index (T64)."""
+    db.put_all([make_audit("view_card", target_uid=VICTIM, at=minutes(i)) for i in range(1, 8)])
+    p1 = listed(client, limit=3, **filters)
+    p2 = listed(client, limit=3, after=p1["nextCursor"], **filters)
+    back = listed(client, limit=3, before=p2["nextCursor"], **filters)
+    assert [e["id"] for e in back["items"]] == [p1["items"][2]["id"], p2["items"][0]["id"], p2["items"][1]["id"]]
+
+
 def test_filters_hold_across_pages(db: FakeDb, client: TestClient) -> None:
     db.put_all(
         [make_audit("quota_reset", target_uid=VICTIM, at=minutes(i)) for i in range(1, 6)]

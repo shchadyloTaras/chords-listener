@@ -5,6 +5,7 @@ is set) prove the seeder and the read counter against a real Firestore.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 from datetime import datetime, timezone
@@ -248,8 +249,6 @@ def test_the_guard_is_off_by_default():
     ([("status", "==", "error")], ["-acceptedAt"]),                                      # one composite index
     ([("status", "==", "error"), ("reason", "==", "other")], ["-acceptedAt"]),           # two of them, merged
     ([("status", "==", "error"), ("acceptedAt", ">=", T0)], ["-acceptedAt"]),            # the range on the ordered field
-    ([("uid", "==", "u1")], ["acceptedAt"]),                                             # an index read backwards
-    ([("status", "==", "running"), ("acceptedAt", "<", T0)], []),                        # the range orders implicitly
     ([("day", "==", "2026-03-01")], []),                                                 # equalities: single-field indexes
     ([], ["-acceptedAt"]),                                                               # one field: its single-field index
 ])
@@ -269,6 +268,68 @@ def test_the_guard_refuses_what_no_index_serves(collection, filters, order_by):
     db = fx.MemDb(indexed=True)
     with pytest.raises(AssertionError, match="firestore.indexes.json"):
         db.run_query(collection, filters=filters, order_by=order_by)
+
+
+def indexes_file(tmp_path: Path, *indexes: tuple[str, list[tuple[str, str]]]) -> Path:
+    """A ``firestore.indexes.json`` holding just ``indexes``: (collection group, [(field, ASCENDING | DESCENDING)])."""
+    spec = {"indexes": [{"collectionGroup": group, "queryScope": "COLLECTION",
+                         "fields": [{"fieldPath": f, "order": o} for f, o in fields]} for group, fields in indexes],
+            "fieldOverrides": []}
+    path = tmp_path / "firestore.indexes.json"
+    path.write_text(json.dumps(spec))
+    return path
+
+
+def test_the_guard_reads_an_index_only_in_its_declared_direction(tmp_path):
+    """Production, 2026-10-08: with (uid ASC, acceptedAt DESC) deployed, ``uid == x`` ordered by acceptedAt DESC is
+    served and ASC is FAILED_PRECONDITION "The query requires an index" (T64)."""
+    guard = fx.IndexGuard(indexes_file(tmp_path, ("adminJobs", [("uid", "ASCENDING"), ("acceptedAt", "DESCENDING")])))
+    guard.check("adminJobs", [("uid", "==", "u1")], ["-acceptedAt"])                   # as declared
+    with pytest.raises(AssertionError, match="firestore.indexes.json"):
+        guard.check("adminJobs", [("uid", "==", "u1")], ["acceptedAt"])                # the reversed sort
+    with pytest.raises(AssertionError, match="firestore.indexes.json"):
+        guard.check("adminJobs", [("uid", "==", "u1"), ("acceptedAt", "<", T0)], [])   # a range sorts ascending
+    with pytest.raises(AssertionError, match="firestore.indexes.json"):
+        guard.check("adminJobs", [("uid", "==", "u1"), ("acceptedAt", "<", T0)], None)  # an aggregation too
+
+
+def test_merged_indexes_must_each_sort_in_the_direction_of_the_query(tmp_path):
+    guard = fx.IndexGuard(indexes_file(
+        tmp_path,
+        ("adminJobs", [("status", "ASCENDING"), ("acceptedAt", "DESCENDING")]),
+        ("adminJobs", [("reason", "ASCENDING"), ("acceptedAt", "DESCENDING")]),
+        ("adminJobs", [("status", "ASCENDING"), ("acceptedAt", "ASCENDING")]),
+    ))
+    both = [("status", "==", "error"), ("reason", "==", "other")]
+    guard.check("adminJobs", both, ["-acceptedAt"])                                     # both indexes sort this way
+    guard.check("adminJobs", [both[0]], ["acceptedAt"])                                 # its own ascending index
+    with pytest.raises(AssertionError, match="firestore.indexes.json"):
+        guard.check("adminJobs", both, ["acceptedAt"])                                  # reason has no ascending one
+
+
+def test_a_range_without_an_order_sorts_ascending_and_an_aggregation_needs_the_same_index(tmp_path):
+    """Production, 2026-10-08: ``status == running AND acceptedAt < t`` with no orderBy (the sweep's stale jobs) and
+    ``count()`` of ``reason == x AND acceptedAt >= t`` were FAILED_PRECONDITION against the descending indexes alone:
+    the implicit order of an inequality is that field ascending, and an aggregation needs the query's index (T64)."""
+    stale = [("status", "==", "running"), ("acceptedAt", "<", T0)]
+    only_desc = fx.IndexGuard(indexes_file(tmp_path, ("adminJobs", [("status", "ASCENDING"), ("acceptedAt", "DESCENDING")])))
+    for order in ([], None):
+        with pytest.raises(AssertionError, match="firestore.indexes.json"):
+            only_desc.check("adminJobs", stale, order)
+    only_desc.check("adminJobs", stale, ["-acceptedAt"])                                   # the declared sort
+    only_desc.check("adminJobs", [("acceptedAt", ">=", T0)], None)                         # a range alone: single-field
+    asc = fx.IndexGuard(indexes_file(tmp_path, ("adminJobs", [("status", "ASCENDING"), ("acceptedAt", "ASCENDING")])))
+    asc.check("adminJobs", stale, [])
+    asc.check("adminJobs", stale, None)
+
+
+def test_memdb_checks_a_count_like_the_query_it_counts(tmp_path, monkeypatch):
+    monkeypatch.setattr(fx, "INDEXES_FILE", indexes_file(
+        tmp_path, ("adminJobs", [("reason", "ASCENDING"), ("acceptedAt", "DESCENDING")])))
+    db = fx.MemDb(indexed=True)
+    db.run_query("adminJobs", filters=[("reason", "==", "other"), ("acceptedAt", ">=", T0)], order_by=["-acceptedAt"])
+    with pytest.raises(AssertionError, match="firestore.indexes.json"):
+        db.count("adminJobs", filters=[("reason", "==", "other"), ("acceptedAt", ">=", T0)])
 
 
 def test_the_guard_checks_aggregations_and_their_kinds():
