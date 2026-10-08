@@ -1,9 +1,9 @@
-// "Живе фортепіано": the song's notes falling onto a piano keyboard whose keys go down in sync with the
-// audio (notes transcribed once per track, see lib/transcription — from the instruments stem when the
-// server separated the vocals), plus chord-preview notes and, when the vocals were transcribed, the
-// sung melody as an outlined overlay with its own toggle. Under the title: what the panel is doing,
-// then (notes ready) a legend for the two kinds of bars, or an offer to separate the voice when the
-// notes still come from the full mix.
+// "Живе фортепіано" ("Жива фісгармонія" on the harmonium): the song's notes falling onto a piano
+// keyboard whose keys go down in sync with the audio (notes transcribed once per track, see
+// lib/transcription — from the instruments stem when the server separated the vocals), plus
+// chord-preview notes and, when the vocals were transcribed, the sung melody as an outlined overlay with
+// its own toggle. Under the title: what the panel is doing, then (notes ready) a legend for the two
+// kinds of bars, or an offer to separate the voice when the notes still come from the full mix.
 // Lazy-loaded by LivePianoSlot; rendered under the now-playing hero when the instrument is a keyboard:
 // the piano's keys fitted to the song, the harmonium's own 37 keys (C3–C6).
 
@@ -37,6 +37,8 @@ export default function LivePiano() {
   const { track, chords, spelling, rhythm, transpose } = model
   const setSetting = useApp((s) => s.setSetting)
   const keyboard = useApp((s) => (s.instrument === 'harmonium' ? 'harmonium' : 'piano'))
+  /** the panel is named after the instrument: "Live harmonium" on the harmonium */
+  const nameSuffix = keyboard === 'harmonium' ? '.harmonium' : ''
   const { notes, source } = usePianoNotes(track)
   // the Live keys tour: the panel is shown with its notes ready (never the demo: it has no audio)
   const notesReady = keysNotesReady(notes)
@@ -153,17 +155,17 @@ export default function LivePiano() {
 
   const hide = useCallback(() => {
     setSetting('liveKeys', false)
-    useApp.getState().toast(t('keys.hidden'), 'info', { label: t('keys.show'), run: () => useApp.getState().setSetting('liveKeys', true) })
-  }, [setSetting, t])
+    useApp.getState().toast(t(`keys.hidden${nameSuffix}`), 'info', { label: t('keys.show'), run: () => useApp.getState().setSetting('liveKeys', true) })
+  }, [setSetting, t, nameSuffix])
 
   const progress = notes.status === 'computing' ? notes.progress : null
   const canRecompute = notes.status === 'ready' || notes.status === 'error'
 
   return (
-    <section aria-label={t('keys.title')} className="mt-3 overflow-hidden rounded-[22px] border border-border bg-surface">
+    <section aria-label={t(`keys.title${nameSuffix}`)} className="mt-3 overflow-hidden rounded-[22px] border border-border bg-surface">
       <div className="relative flex items-center gap-2 px-4 py-2 sm:px-5">
         <div className="min-w-0 flex-1">
-          <h2 className="font-display text-[15px] leading-tight font-semibold tracking-tight">{t('keys.title')}</h2>
+          <h2 className="font-display text-[15px] leading-tight font-semibold tracking-tight">{t(`keys.title${nameSuffix}`)}</h2>
           <Status state={notes} onRetry={() => request()} />
           <VocalsLine notes={notes} source={source} vocals={vocals} showVocals={showVocals} />
         </div>
@@ -185,7 +187,7 @@ export default function LivePiano() {
             <RotateCcw size={15} />
           </IconButton>
         )}
-        <IconButton label={t('keys.hide')} size="sm" onClick={hide}>
+        <IconButton label={t(`keys.hide${nameSuffix}`)} size="sm" onClick={hide}>
           <X size={16} />
         </IconButton>
         {progress !== null && (
