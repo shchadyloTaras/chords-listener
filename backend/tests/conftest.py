@@ -41,3 +41,18 @@ def read_counter(monkeypatch):
     counter = ReadCounter()
     counter.install(monkeypatch)
     return counter
+
+
+@pytest.fixture(autouse=True)
+def no_real_firebase_auth(monkeypatch):
+    """Offline, the admin's Firebase Auth lookups never reach Google (a developer's own credentials would be used, and
+    looking for them on a machine without any can take seconds): they fail at once, which the admin reads as "Auth
+    does not know". Under the Auth emulator (``FIREBASE_AUTH_EMULATOR_HOST``) the lookups go there instead."""
+    if os.environ.get("FIREBASE_AUTH_EMULATOR_HOST"):
+        return
+
+    def refuse() -> None:
+        raise RuntimeError("tests never call the real Firebase Auth")
+
+    monkeypatch.setattr("app.admin.identity._default_session", refuse)
+

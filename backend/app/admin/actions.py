@@ -334,9 +334,17 @@ def emails_match(typed: Optional[str], actual: Optional[str]) -> bool:
 
 
 def _user_email(svc: "AdminServices", uid: str) -> Optional[str]:
+    """The e-mail a deletion is confirmed against: the profile's, else the e-mail index's, else Firebase Auth's (an
+    account whose profile was never written, review S2-1)."""
     doc = svc.db.get(f"{USERS}/{uid}")
     email = doc.data.get("email") if doc is not None else None
-    return email if isinstance(email, str) and email else svc.directory.email_of(uid)
+    if isinstance(email, str) and email:
+        return email
+    email = svc.directory.email_of(uid)
+    if email:
+        return email
+    account = svc.account(uid)
+    return account.email if account is not None else None
 
 
 def _scheduled_since(svc: "AdminServices", since: datetime) -> int:

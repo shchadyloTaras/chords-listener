@@ -9,6 +9,7 @@ error that is not journaled (like a form validation error); every other refusal 
 """
 from __future__ import annotations
 
+import os
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -686,7 +687,8 @@ def test_cancelling_twice_the_second_time_is_not_scheduled(world) -> None:
 
 
 def test_s2_1_admin_actions_work_when_the_profile_document_is_missing(world) -> None:
-    """The rules let a user delete their own ``users/{uid}``; the account is still known from ``adminAccounts``."""
+    """No ``users/{uid}`` (never written, or deleted before the rules forbade it): the account is still known from
+    ``adminAccounts``."""
     w = world()
     seed_account(w, restriction=restriction(reason=FIXED_REASON), deletion=deletion())
     del w.db.docs[f"users/{UID}"]
@@ -731,6 +733,48 @@ def test_s2_4_cancel_uses_the_time_of_the_commit_not_the_time_of_the_request(wor
     assert err.value.code == "not_scheduled"
 
 
+# =========================================================================== T55: an account only Firebase Auth knows
+
+
+def auth_knows(w: SimpleNamespace, uid: str = UID, email: str = EMAIL) -> None:
+    """Firebase Auth has the account; nothing else does (no profile, no e-mail index entry, no admin state): a profile
+    that was never written, or one deleted before the rules forbade it (review S2-1)."""
+    def account(asked: str) -> Optional[SimpleNamespace]:
+        return SimpleNamespace(email=email, last_login_at=None, created_at=SINCE) if asked == uid else None
+
+    w.services.account = account
+
+
+def test_t55_an_account_only_firebase_auth_knows_has_a_card_songs_and_can_be_restricted(world) -> None:
+    w = world()
+    auth_knows(w)
+    assert f"users/{UID}" not in w.db.docs and f"adminAccounts/{UID}" not in w.db.docs
+
+    card = w.get(f"/api/admin/users/{UID}")
+    assert card.status_code == 200, card.text
+    assert card.json()["profile"]["email"] == EMAIL
+    assert w.get(f"/api/admin/users/{UID}/tracks").status_code == 200
+    res = w.client.put(f"/api/admin/users/{UID}/restriction", json={"reason": REASON}, headers=H(BOSS))
+    assert res.status_code == 200 and res.json()["status"] == "restricted"
+
+
+def test_t55_its_deletion_is_confirmed_against_the_auth_email(world) -> None:
+    w = world()
+    auth_knows(w)
+    assert schedule(w, email="someone.else@example.test").json()["code"] == "confirm_email_mismatch"
+    res = schedule(w, email="  ivan.p@EXAMPLE.test ")
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "deletion_scheduled"
+
+
+def test_t55_a_purged_account_stays_unknown_whatever_auth_says(world) -> None:
+    w = world()
+    auth_knows(w)
+    w.db.docs[f"adminTombstones/{UID}"] = {"status": "done"}
+    assert w.get(f"/api/admin/users/{UID}").status_code == 404
+    assert schedule(w).status_code == 404
+
+
 # =========================================================================== the Firestore emulator (when there is one)
 
 
@@ -773,3 +817,34 @@ def test_emulator_deletion_is_a_real_transaction_with_its_journal_record_and_the
         restored = admin_db.get(f"adminAccounts/{other}").data["restriction"]
         assert restored["reason"] == "spam" and restored["since"].startswith("2026-10-01T09:00:00")
         assert not admin_db.get(f"adminAccounts/{other}").data.get("deletion")
+
+
+@pytest.mark.skipif(not os.environ.get("FIREBASE_AUTH_EMULATOR_HOST"), reason="needs the Auth emulator (FIREBASE_AUTH_EMULATOR_HOST)")
+def test_emulator_an_account_without_a_profile_is_found_and_its_deletion_confirmed_through_firebase_auth(
+        admin_db: FirestoreIndex, tmp_path: Path) -> None:
+    """T55 with the real lookup: an Auth emulator account that has no profile, no index entry and no admin state."""
+    import uuid
+
+    import requests
+    from admin.fixtures import seed as seed_docs
+
+    host = os.environ["FIREBASE_AUTH_EMULATOR_HOST"]
+    email = f"t55-{uuid.uuid4().hex[:8]}@example.test"
+    signed_up = requests.post(f"http://{host}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=emulator",
+                              json={"email": email, "password": uuid.uuid4().hex, "returnSecureToken": True}, timeout=10)
+    assert signed_up.status_code == 200, signed_up.text
+    uid = signed_up.json()["localId"]
+    seed_docs(admin_db, [make_admin("t55-boss"), make_user("t55-boss", ADMIN_EMAIL)])
+    app = create_app(settings_for(tmp_path), analyzer=never, engine_info_fn=lambda: ENGINE_INFO,
+                     token_verifier=FakeVerifier(Clock()), admin_db=admin_db)
+    app.state.admin_authz.clock = Clock()
+    with TestClient(app) as client:
+        card = client.get(f"/api/admin/users/{uid}", headers=H("t55-boss"))
+        assert card.status_code == 200, card.text
+        assert card.json()["profile"]["email"] == email
+        url = f"/api/admin/users/{uid}/deletion"
+        assert client.post(url, json={"confirmEmail": "nope@example.test"}, headers=H("t55-boss")).json()["code"] == \
+            "confirm_email_mismatch"
+        res = client.post(url, json={"confirmEmail": email.upper()}, headers=H("t55-boss"))
+        assert res.status_code == 200 and res.json()["status"] == "deletion_scheduled", res.text
+        assert client.get("/api/admin/users/t55-nobody-knows", headers=H("t55-boss")).status_code == 404

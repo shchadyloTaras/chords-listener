@@ -315,8 +315,10 @@ describe('users/{uid}', () => {
     )
   })
 
-  test('owner can delete their profile', async () => {
-    assert.equal(await remove(alice, alice.uid), OK)
+  test('the owner cannot delete their profile: only the server’s purge removes it (T55, S2-1)', async () => {
+    // without a profile the account was unknown to the admin's search and card while it kept using the cloud
+    assert.equal(await remove(alice, alice.uid), DENIED)
+    assert.equal(await read(alice, alice.uid), OK)
   })
 
   test('a purged account (tombstone) cannot write its profile back with a still-valid token (S2-2)', async () => {
@@ -324,7 +326,8 @@ describe('users/{uid}', () => {
     assert.equal(await createProfile(carol), OK)
     await seedDoc(`adminTombstones/${carol.uid}`, { status: 'purging' })
     assert.equal(await updateProfile(carol), DENIED)
-    assert.equal(await remove(carol, carol.uid), OK)
+    assert.equal(await remove(carol, carol.uid), DENIED)
+    await seedDelete(`users/${carol.uid}`) // the purge deletes the profile (service account)
     assert.equal(await createProfile(carol), DENIED)
   })
 
@@ -418,6 +421,12 @@ async function seedDoc(path, fields) {
     body: JSON.stringify({ fields: encodeFields(fields) }),
   })
   assert.equal(res.status, 200, `seed ${path}`)
+}
+
+/** Deletes any document the way the API's service account does (admin token, rules bypassed). */
+async function seedDelete(path) {
+  const res = await fetch(`${DOCS}/${path}`, { method: 'DELETE', headers: { Authorization: 'Bearer owner' } })
+  assert.equal(res.status, 200, `delete ${path}`)
 }
 
 async function getDoc(user, path) {

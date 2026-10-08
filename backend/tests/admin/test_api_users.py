@@ -685,6 +685,33 @@ def test_last_login_is_unknown_when_auth_has_none_or_cannot_answer(response: Any
     assert auth.last_login_at("u1") is None
 
 
+def test_an_account_is_read_from_firebase_auth_with_its_email_and_dates() -> None:
+    auth, session = lookup(FakeResponse(200, {"users": [{
+        "localId": "u1", "email": "Ivan.P@example.test", "lastLoginAt": "1791397200000", "createdAt": "1788000000000"}]}))
+    account = auth.account("u1")
+    assert account is not None and account.email == "Ivan.P@example.test"
+    assert account.last_login_at == datetime.fromtimestamp(1791397200, timezone.utc)
+    assert account.created_at == datetime.fromtimestamp(1788000000, timezone.utc)
+    assert session.calls[0][1]["json"] == {"localId": ["u1"]}
+
+
+@pytest.mark.parametrize("response", [
+    FakeResponse(200, {}),                                                   # Firebase Auth has no such account
+    FakeResponse(200, {"users": []}),
+    FakeResponse(403, {"error": {"message": "denied"}}),
+    RuntimeError("no credentials"),
+])
+def test_no_account_when_auth_has_none_or_cannot_answer(response: Any) -> None:
+    auth, _ = lookup(response)
+    assert auth.account("u1") is None
+
+
+def test_an_auth_account_without_an_email_is_still_an_account() -> None:
+    auth, _ = lookup(FakeResponse(200, {"users": [{"localId": "u1"}]}))
+    account = auth.account("u1")
+    assert account is not None and account.email is None and account.last_login_at is None
+
+
 # =========================================================================== emulator (only with FIRESTORE_EMULATOR_HOST)
 
 

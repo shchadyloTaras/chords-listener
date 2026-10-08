@@ -31,8 +31,8 @@ from app.main import create_app
 @pytest.fixture
 def world(tmp_path: Path):
     """``world()`` builds the real app (admin router, allowlist authz, audit writer, email-index directory, runtime
-    settings) over a ``UsersDb`` holding the admin ``BOSS`` and the default limits. Firebase Auth's last sign-in is
-    faked: ``login(uid)``."""
+    settings) over a ``UsersDb`` holding the admin ``BOSS`` and the default limits. Firebase Auth is faked: the last
+    sign-in is ``login(uid)``, and it knows no account unless a test sets ``services.account``."""
     clients: list[TestClient] = []
 
     def build(login: Callable[[str], Optional[datetime]] = lambda uid: LOGIN_AT) -> SimpleNamespace:
@@ -49,6 +49,7 @@ def world(tmp_path: Path):
         )
         services = get_services(app)
         services.last_login = login
+        services.account = lambda uid: None
         client = TestClient(app)
         client.__enter__()
         clients.append(client)

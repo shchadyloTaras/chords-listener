@@ -52,7 +52,7 @@ from . import actions
 from .authz import ADMIN_PREFIX, AdminRoute, current_admin_uid, require_fresh_login
 from .directory import MAX_RESULTS, USERS, Directory, parse_time
 from .history import JOBS, REASONS
-from .identity import AuthLookup
+from .identity import AuthAccount, AuthLookup
 from .models import (
     MAX_EMAIL_CHARS,
     MIN_SEARCH_CHARS,
@@ -136,27 +136,34 @@ def _shared(app: FastAPI, name: str, build: Callable[[FirestoreIndex], Any]) -> 
     return value
 
 
+def _nobody(_uid: str) -> Optional[AuthAccount]:
+    return None
+
+
 @dataclass
 class AdminServices:
     """What the admin handlers share, built once per app from ``app.state.admin_db`` (``get_services``). Its
     ``directory`` is ``app.state.admin_directory`` (the app's one email-index cache, which the background sweep
-    rebuilds) and its ``settings`` is ``app.state.admin_settings`` (the app's one settings cache). Tests replace a
-    field (or the whole object in ``app.state.admin_services``) to fake the one thing they cannot run for real."""
+    rebuilds) and its ``settings`` is ``app.state.admin_settings`` (the app's one settings cache); ``last_login`` and
+    ``account`` ask Firebase Auth. Tests replace a field (or the whole object in ``app.state.admin_services``) to fake
+    the one thing they cannot run for real."""
 
     db: Any
     audit: Audit
     directory: Directory
     settings: RuntimeSettings
     last_login: Callable[[str], Optional[datetime]]
+    account: Callable[[str], Optional[AuthAccount]] = _nobody
 
 
 def get_services(app: FastAPI) -> AdminServices:
     def build(db: FirestoreIndex) -> AdminServices:
+        auth = AuthLookup(app.state.settings.firebase_project)
         return AdminServices(
             db=db, audit=Audit(db),
             directory=_shared(app, "admin_directory", Directory),
             settings=_shared(app, "admin_settings", RuntimeSettings),
-            last_login=AuthLookup(app.state.settings.firebase_project).last_login_at,
+            last_login=auth.last_login_at, account=auth.account,
         )
 
     return _shared(app, "admin_services", build)
@@ -335,9 +342,10 @@ def _admin_email(svc: AdminServices, uid: str) -> str:
 
 
 def _live_user(svc: AdminServices, uid: str) -> Optional[Document]:
-    """The account of ``uid``: its ``users`` document, or an empty one when the user deleted their own profile. None
-    when ``uid`` is unknown or the account was purged (tombstone). An account is known from its profile, its admin
-    state (``adminAccounts``) or the e-mail index: the profile alone is not required (review S2-1)."""
+    """The account of ``uid``: its ``users`` document, or one made of what else is known when there is no profile (one
+    that was never written). None when ``uid`` is unknown or the account was purged (tombstone). Without a profile an
+    account is known from the e-mail index, from Firebase Auth (which also gives the e-mail and the sign-up date) or
+    from its admin state (``adminAccounts``): the profile alone is not required (review S2-1)."""
     if not valid_uid(uid):
         return None
     if svc.db.get(f"{TOMBSTONES}/{uid}") is not None:
@@ -345,10 +353,18 @@ def _live_user(svc: AdminServices, uid: str) -> Optional[Document]:
     user = svc.db.get(f"{USERS}/{uid}")
     if user is not None:
         return user
+    data: dict[str, Any] = {}
     email = svc.directory.email_of(uid)
-    if svc.db.get(f"adminAccounts/{uid}") is None and email is None:
+    account = svc.account(uid) if email is None else None
+    if account is not None:
+        email = account.email
+        if account.created_at is not None:
+            data["createdAt"] = account.created_at
+    if email is None and account is None and svc.db.get(f"adminAccounts/{uid}") is None:
         return None
-    return Document(f"{USERS}/{uid}", {"email": email} if email else {})
+    if email:
+        data["email"] = email
+    return Document(f"{USERS}/{uid}", data)
 
 
 # --------------------------------------------------------------------------- tracks (metadata only, AC-06)

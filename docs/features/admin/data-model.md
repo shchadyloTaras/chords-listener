@@ -348,6 +348,7 @@ Written **only** by `scripts/admin_grant.py` with the owner's ADC (ADR-0006). Th
 - Daily quota counters: `<data>/users/<uid>/quota.json` (unchanged; reset under the `Quotas` lock, ADR-0003).
 - Non-admin probe rate limit (AC-36), the 10-per-60-min deletion lock, and caches: process memory (max 1 instance, SAD §11).
 - «Останній вхід»: read live from Firebase Auth (`lastLoginAt`) on card open, not stored, so there's nothing to purge or drift.
+- An account with no `users/{uid}` (never written; clients cannot delete it, only the purge does) is still known to the admin: Firebase Auth's `accounts:lookup` gives its existence, e-mail and sign-up date, read live and not stored (T55).
 
 ## Indexes
 

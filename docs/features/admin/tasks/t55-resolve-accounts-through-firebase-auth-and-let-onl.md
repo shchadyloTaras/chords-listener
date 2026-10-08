@@ -8,7 +8,7 @@ files_hint: ["firestore.rules", "docs/features/admin/migrations/03_admin_rules.u
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 10 — re-review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T55 — Resolve accounts through Firebase Auth and let only the purge delete a profile
@@ -19,4 +19,4 @@ status: "todo"
 
 **Re-review fix 8 (review S2-1). firestore.rules (and staged migration 03) refuse every client delete of users/{uid}; rules tests prove it. With no profile, no index entry and no admin state, an account Firebase Auth knows is found by the card, restricted, and scheduleDeletion confirms against its Auth e-mail.**
 
-- [ ] lint + type-check clean (ruff / oxlint + tsc)
+- [x] lint + type-check clean (ruff / oxlint + tsc)
