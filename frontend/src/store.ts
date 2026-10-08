@@ -70,6 +70,8 @@ export interface Settings {
   syncOffsetMs: number
   /** the screen stays on while the app is open and visible (Screen Wake Lock, lib/wakeLock.ts); this device only */
   keepAwake: boolean
+  /** the harmonium's drone: the song's tonic held while the song plays (lib/sound/drone.ts); this device only */
+  harmoniumDrone: boolean
 }
 
 export interface AppState extends Settings {
@@ -128,6 +130,7 @@ const defaultSettings: Settings = {
   liveKeys: true,
   syncOffsetMs: 0,
   keepAwake: true,
+  harmoniumDrone: false,
 }
 
 let toastSeq = 1
@@ -214,6 +217,7 @@ export const useApp = create<AppState>()(
         liveKeys: s.liveKeys,
         syncOffsetMs: s.syncOffsetMs,
         keepAwake: s.keepAwake,
+        harmoniumDrone: s.harmoniumDrone,
       }),
     },
   ),

@@ -11,6 +11,7 @@ import { useTourFlags, useTourTrigger } from '../tour/hooks'
 import './chords.css'
 import { ChordLegend } from './ChordLegend'
 import { ChordPopoverHost } from './ChordPopover'
+import { useHarmoniumDrone } from './HarmoniumDrone'
 import { useChordHotkeys } from './hotkeys'
 import { ChordModelContext, useBuildChordModel } from './model'
 import { NowPlaying } from './NowPlaying'
@@ -59,6 +60,7 @@ function Workspace({ track }: { track: Track }) {
   const hero = useRef<HTMLElement>(null)
   const heroVisible = useMostlyVisible(hero)
   useChordHotkeys(model)
+  useHarmoniumDrone(track.key, model.transpose)
   // the Song tour: the track has loaded with no error (this component exists only then)
   useTourFlags({ hasChords: model.hasChords, sheetView: view === 'sheet' })
   useTourTrigger('song', true)
