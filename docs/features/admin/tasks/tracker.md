@@ -56,4 +56,4 @@
 | [T47](./t47-test-the-site-s-admission-refusals-and-share-one-i.md) | Test the site's admission refusals and share one isAdminRefusal helper | ui | Тарас Щадило | S | T46 | done |
 | [T48](./t48-stop-leaking-admin-routes-via-options-and-require.md) | Stop leaking admin routes via OPTIONS and require a verified email in the grant script | app | Тарас Щадило | S | T45 | done |
 | [T49](./t49-consolidate-the-in-memory-firestore-fakes-and-fix.md) | Consolidate the in-memory Firestore fakes and fix the AC-13b settings test | tests | Тарас Щадило | S | T48 | done |
-| [T50](./t50-run-the-emulator-tests-in-ci-and-align-the-test-pl.md) | Run the emulator tests in CI and align the test plan with the levels used | tests | Тарас Щадило | S | T49 | todo |
+| [T50](./t50-run-the-emulator-tests-in-ci-and-align-the-test-pl.md) | Run the emulator tests in CI and align the test plan with the levels used | tests | Тарас Щадило | S | T49 | done |

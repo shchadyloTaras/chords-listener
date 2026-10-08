@@ -38,7 +38,7 @@ target_surfaces: [backend-service, web-frontend]  # read from sad.md frontmatter
 | AC-03 пошук і картка | `email search matches substring anywhere case-insensitively` | unit | «ivan» знаходить і «ivan.p@…», і «John.Ivanov@…» | T16 |
 | AC-03 | `user card shows profile, quota usage, personal limit and state` | integration | Картка містить дату реєстрації, останній вхід, кількість пісень, зайняте місце, використання квоти щодо ліміту, персональний ліміт і стан | T17 |
 | AC-03 | `user songs are paged by 50 newest first` | integration | 120 пісень → сторінки 50/50/20, від нових до старих | T17 |
-| AC-03 | `admin finds user and opens card through the UI` | e2e-through-UI | Пошук «ivan» показує обох; картка відкривається з усіма полями | T30 |
+| AC-03 | `admin finds user and opens card through the UI` | component (`frontend/src/admin/screens/UserCard.test.tsx`: «lists every match with a link to its card», «shows registration, last login, songs, storage and quota…»); без браузера | Пошук «ivan» показує обох; картка відкривається з усіма полями | T30 |
 | AC-04 закороткий / без збігів | `search shorter than 3 characters is not executed` | unit | Рядок < 3 символів відхилено валідатором, пошук не виконано | T04 |
 | AC-04 | `search with no matches reports nobody found` | integration | Порожній результат; запит пошуку записаний у журнал | T17 |
 | AC-04 | `search box asks for 3 characters and shows «Нікого не знайдено»` | component | Підказка про мінімум 3 символи; для порожнього результату — «Нікого не знайдено» | T30 |
@@ -75,7 +75,7 @@ target_surfaces: [backend-service, web-frontend]  # read from sad.md frontmatter
 | AC-15 завершення ліміту | `personal limit applies through end date inclusive in UTC` | unit | Останній день — персональний; наступна доба UTC — типовий (межа 23:59:59 / 00:00:00) | T14 |
 | AC-15 | `expired personal limit falls back to default and card shows «завершився»` | integration | 41-й аналіз сьогодні відхилено; картка показує «завершився» | T14, T17 |
 | AC-16 хмарне обмеження | `restriction is stored with reason and journaled` | integration | Стан «хмарне обмеження», причина й дата в картці; запис журналу | T21 |
-| AC-16 | `restricted user's new cloud jobs are refused within a minute` | e2e | Від моменту обмеження нові аналізи й транскрипції відхиляються не пізніше ніж за 60 с (реальний час, перевірка щосекунди) | T13, T14, T21 |
+| AC-16 | `restricted user's new cloud jobs are refused within a minute` | integration (реальний час не використовується; керований годинник: `backend/tests/test_admission.py` «a restriction takes effect within a minute») | Від моменту обмеження нові аналізи й транскрипції відхиляються не пізніше ніж за 60 с (реальний час, перевірка щосекунди) | T13, T14, T21 |
 | AC-16 | `restriction action shows state and reason on the card` | component | Стан і причина видимі лише в адмінці | T34 |
 | AC-17 самодія | `admin cannot restrict or schedule deletion of own account` | integration | Обидві дії не виконані, пояснення; відхилені спроби записані в журнал | T21, T22 |
 | AC-18 досвід обмеженого | `restricted user is refused at every cloud job entry without spending quota` | integration | Посилання YouTube, завантаження файлу, повторний аналіз, транскрипція вокалу — усі відхилені; квота не змінилась; відповідь без причини від адміна | T14 |
@@ -84,11 +84,11 @@ target_surfaces: [backend-service, web-frontend]  # read from sad.md frontmatter
 | AC-19 прийняті задачі | `jobs accepted before restriction complete into the library` | integration | Задача, прийнята до обмеження, завершується, пісня з'являється | T12 |
 | AC-19 | `lifting restriction restores cloud analysis without data loss` | integration | Після зняття новий аналіз приймається; усі пісні на місці | T21 |
 | AC-20 запланувати видалення | `confirmed deletion is scheduled 7 days out with immediate restriction` | integration | Стан «заплановане видалення» з датою +7 днів; хмарне обмеження діє одразу; запис у журналі | T22 |
-| AC-20 | `admin schedules deletion by typing the user's email` | e2e-through-UI | Підтвердження email → картка показує заплановане видалення з датою | T34 |
+| AC-20 | `admin schedules deletion by typing the user's email` | component (`frontend/src/admin/actions/RestrictionActions.test.tsx`: «schedules the deletion once the email is typed and shows the state with the date») | Підтвердження email → картка показує заплановане видалення з датою | T34 |
 | AC-21 хибний email | `deletion confirm email must match exactly` | unit | Інший email відхилено; правило порівняння задокументоване тестом (регістр / пробіли) | T22 |
 | AC-21 | `mismatched email does not schedule deletion` | integration | Видалення не заплановане, пояснення | T22 |
 | AC-21 | `deletion dialog explains the email rule` | component | Пояснення «введіть саме email цього користувача» | T34 |
-| AC-22 остаточне видалення | `account is purged after the 7-day window` | e2e | Керований годинник +7 днів → фонове прибирання → акаунт, пісні, аудіо, правки, квоти й ліміти стерто; вхід неможливий | T24, T25 |
+| AC-22 остаточне видалення | `account is purged after the 7-day window` | integration (керований годинник; `backend/tests/admin/test_purge.py`: «a due account is purged everywhere», «nothing of the purged user is left anywhere…») | Керований годинник +7 днів → фонове прибирання → акаунт, пісні, аудіо, правки, квоти й ліміти стерто; вхід неможливий | T24, T25 |
 | AC-22 | `purge is idempotent and safe to retry` | integration | Повторний запуск прибирання після часткового збою доводить видалення до кінця без помилок | T25 |
 | AC-22 | `late job result for a purged user is discarded` | integration | Задача, що завершилась після видалення, не повертає пісню | T12, T25 |
 | AC-22 | `purge anonymizes audit and job history and keeps frozen days unchanged` | integration | Записи журналу й історії без email і назв пісень, користувач «видалений»; підсумки завершених днів не змінились; email відсутній в індексі пошуку | T25 |
@@ -96,35 +96,35 @@ target_surfaces: [backend-service, web-frontend]  # read from sad.md frontmatter
 | AC-23 | `cancel deletion action on the card` | component | Після скасування картка показує попередній стан | T34 |
 | AC-23b обмеження під видаленням | `restriction changes are refused while deletion is scheduled` | integration | Накласти / зняти обмеження відхилено з поясненням «спершу скасуйте видалення» | T21 |
 | AC-23b | `card offers only «Скасувати видалення» for a scheduled user` | component | Інші дії над станом недоступні | T34 |
-| AC-24 типовий ліміт | `default limit change applies within a minute without redeploy` | e2e | Зміна 40 → 30: не пізніше ніж за 60 с користувачі без чинного персонального ліміту обмежені 30 (реальний час, перевірка щосекунди); журнал зі старим і новим значенням | T13, T23 |
+| AC-24 типовий ліміт | `default limit change applies within a minute without redeploy` | integration (керований годинник; `backend/tests/admin/test_actions_settings.py` «default limit change applies without redeploy within a minute», `backend/tests/admin/test_nfr.py` «a default limit changed on one instance applies on another within a minute») | Зміна 40 → 30: не пізніше ніж за 60 с користувачі без чинного персонального ліміту обмежені 30 (реальний час, перевірка щосекунди); журнал зі старим і новим значенням | T13, T23 |
 | AC-24 | `default limit change is journaled and mirrored` | integration | Налаштування оновлене, запис журналу з було / стало | T23 |
 | AC-25 неприпустимий типовий ліміт | `default limits validator enforces every range` | unit | Відхилено порожнє, 0, від'ємне й поза діапазоном; прийнято межі 1–1000, 1–150, 1–4, 1–120 хв, 1 МБ–0,5 ГБ | T04 |
 | AC-25 | `invalid default limits are not saved` | integration | Налаштування не змінене, журнал без запису | T23 |
 | AC-25 | `settings form explains ranges and points to the pause switch` | component | Допустимі значення біля полів; підказка про «Пауза нових аналізів» | T35 |
 | AC-26 пауза | `pause refuses new cloud analyses without spending quota` | integration | Посилання й файл відхилені з поясненням про паузу; квота не змінилась | T14, T23 |
 | AC-26 | `jobs accepted before pause complete` | integration | Прийнята до паузи задача завершується | T12, T14 |
-| AC-26 | `user sees pause explanation and in-browser option` | e2e-through-UI | Після паузи користувач на сайті бачить пояснення й пропозицію розпізнати в браузері | T35, T37 |
+| AC-26 | `user sees pause explanation and in-browser option` | component (`frontend/src/components/chords/vocalsRefusal.test.tsx`, `frontend/src/components/layout/TrackActions.refusal.test.tsx`: пояснення про паузу; пропозиція розпізнати в браузері окремо не перевіряється — див. Known gaps) | Після паузи користувач на сайті бачить пояснення й пропозицію розпізнати в браузері | T35, T37 |
 | AC-27 YouTube вимкнено | `public status document matches the agreed shape` | contract | Документ, який пише сервер, валідується схемою, яку читає сайт (банер UA/EN + стан перемикачів) | T13, T36 |
-| AC-27 | `site offers «Слухати у вкладці» without contacting the server` | e2e-through-UI | При вимкненому YouTube сайт одразу пропонує «Слухати у вкладці»; журнал запитів сервера порожній для цієї спроби | T36 |
+| AC-27 | `site offers «Слухати у вкладці» without contacting the server` | component (`frontend/src/components/input/startLink.test.ts`: «signed in on the cloud: «Слухати у вкладці» is offered at once, without a request»; `frontend/src/lib/serviceStatus.test.ts`: читання статусу без запиту до сервера) | При вимкненому YouTube сайт одразу пропонує «Слухати у вкладці»; журнал запитів сервера порожній для цієї спроби | T36 |
 | AC-27 | `stale site is refused by server without spending quota` | integration | Сервер відхиляє YouTube-спробу з ознакою «вимкнено»; квота не змінилась; прийняті раніше завантаження завершуються | T14 |
 | AC-28 транскрипція вимкнена | `vocal transcription off refuses without spending quota` | integration | Транскрипцію не запущено, квота не змінилась; аналіз акордів і бібліотека працюють; прийняті транскрипції завершуються | T14, T12 |
 | AC-28 | `site explains transcription is temporarily unavailable` | component | Пояснення показане, акорди доступні | T37 |
-| AC-29 банер | `guest sees banner in UI language without waking the server` | e2e-through-UI | Гість бачить банер мовою інтерфейсу (UA і EN); журнал запитів сервера порожній | T36 |
+| AC-29 банер | `guest sees banner in UI language without waking the server` | component (`frontend/src/components/layout/ServiceBanner.test.ts`: «a guest sees the banner in the interface language, and no request goes to any server») | Гість бачить банер мовою інтерфейсу (UA і EN); журнал запитів сервера порожній | T36 |
 | AC-29 | `banner publish writes the public status mirror and journal` | integration | Публічний документ містить обидва тексти; запис журналу | T23 |
-| AC-29 | `site banner matches approved baseline` | visual-regression | Знімок банера UA і EN збігається з еталоном | T36 |
+| AC-29 | `site banner matches approved baseline` | — (немає; див. Known gaps) | Знімок банера UA і EN збігається з еталоном | T36 |
 | AC-30 неприпустимий банер | `banner text must be 1–250 characters in both languages` | unit | Відхилено порожній і 251 символ будь-якою мовою; прийнято 1 і 250 | T04 |
 | AC-30 | `invalid banner is not published` | integration | Публічний документ не змінився, журнал без запису | T23 |
 | AC-30 | `banner form explains the length rule` | component | Пояснення «від 1 до 250 символів обома мовами» | T35 |
 | AC-31 не-адмін | `every admin route answers a non-admin exactly like an unknown route` | contract | Для кожного маршруту адмінського роутера (перелік береться з самого роутера) відповідь не-адміну ідентична «не знайдено» для неіснуючої адреси; новий маршрут без перевірки прав ламає тест | T09 |
-| AC-31 | `non-admin opening the admin page sees only «Сторінку не знайдено»` | e2e-through-UI | Жодних даних, назв дій чи меню адмінки | T27 |
-| AC-32 зняття прав | `revoked admin is refused within a minute` | e2e | Від зняття позначки не пізніше ніж за 60 с кожна адмінська дія й читання відмовлені (реальний час, перевірка щосекунди) | T09, T26 |
+| AC-31 | `non-admin opening the admin page sees only «Сторінку не знайдено»` | component (`frontend/src/admin/AdminApp.test.ts`: «shows a non-admin only «Сторінку не знайдено»», «answers a failed access check exactly like a non-admin») | Жодних даних, назв дій чи меню адмінки | T27 |
+| AC-32 зняття прав | `revoked admin is refused within a minute` | integration (керований годинник; `backend/tests/admin/test_authz.py` «revoked admin is refused within a minute», `backend/tests/admin/test_nfr.py`, `backend/tests/test_admin_grant.py` на емуляторі) | Від зняття позначки не пізніше ніж за 60 с кожна адмінська дія й читання відмовлені (реальний час, перевірка щосекунди) | T09, T26 |
 | AC-33 журнал перший (дії) | `failed audit write leaves state unchanged for every mutation` | integration | Для кожної дії (скидання квоти, ліміт, обмеження, зняття, видалення, скасування, типові ліміти, перемикач, банер) зламаний запис журналу → стан не змінився | T10, T01 |
 | AC-33 | `admin sees «not applied, retry» when audit fails` | component | Повідомлення, що зміну не застосовано і її треба повторити | T28 |
 | AC-33b журнал перший (перегляди) | `failed audit write withholds search results and user card` | integration | Пошук і картка при зламаному записі журналу не повертають особистих даних | T10, T17 |
 | AC-33b | `admin sees «data unavailable, retry» when view audit fails` | component | Повідомлення про недоступні дані й повтор | T28 |
 | AC-34 свіжий вхід | `fresh-login rule is 15 minutes` | unit | 14:59 — свіжий, 15:01 — потрібен повторний вхід | T09 |
 | AC-34 | `stale login blocks deletion and pause until re-auth` | integration | Заплановане видалення й пауза не виконані без свіжого входу; після свіжого — виконані й записані в журнал | T09, T22, T23 |
-| AC-34 | `admin re-enters password before scheduling deletion` | e2e-through-UI | Запит пароля; після підтвердження дія виконана | T28, T34 |
+| AC-34 | `admin re-enters password before scheduling deletion` | component (`frontend/src/admin/actions/RestrictionActions.test.tsx`: «explains that a fresh login is needed, keeps the email, and a second try goes through»; `frontend/src/lib/adminApi.test.ts`: «re-logs in on reauth_required…») | Запит пароля; після підтвердження дія виконана | T28, T34 |
 | AC-35 ліміт видалень | `deletion cap is 10 per rolling 60 minutes across all admins` | unit | 10 у вікні — 11-те відхилено; після виходу найстарішого з вікна — прийнято | T22 |
 | AC-35 | `11th deletion within 60 minutes by any admin is refused and journaled` | integration | Два адміни разом 10 → 11-те відхилено з поясненням; спроба в журналі | T22 |
 | AC-36 перебір не-адміном | `non-admin probe limit is 30 per rolling 60 seconds` | unit | 30 у вікні → наступний відхилено; після виходу з вікна — знову обробляється | T09 |
@@ -165,9 +165,9 @@ target_surfaces: [backend-service, web-frontend]  # read from sad.md frontmatter
 |---|---|---|
 | ≤ 200 читань сховища на екран / сторінку списку | Лічильник читань емулятора для кожного адмінського ендпоінта на наборах 1 000 × 20 і 1 × 1 000; assert ≤ 200 | integration (per-suite seed) |
 | Набуття чинності змінами ≤ 60 с | AC-16, AC-24, AC-32 + перемикачі й персональні ліміти: зміна → перевірка щосекунди | e2e (реальний час) |
-| Банер / перемикачі на сайті ≤ 5 хв | Зміна → відкриття сайту гостем і користувачем щохвилини | e2e-through-UI (реальний час) |
+| Банер / перемикачі на сайті ≤ 5 хв | Зміна → відкриття сайту гостем і користувачем щохвилини | component (`ServiceBanner.test.ts`, керований годинник; реальний час — Known gaps) |
 | 0 запитів від вкладки без дій | AC-02 | e2e-through-UI |
-| 0 запитів до сервера для банера й перемикачів | AC-27, AC-29 | e2e-through-UI |
+| 0 запитів до сервера для банера й перемикачів | AC-27, AC-29 | component (`ServiceBanner.test.ts`, `startLink.test.ts`, `serviceStatus.test.ts`) |
 | Повнота видалення 100 % / 0 залишків | AC-22 + пошук email і об'єктів видаленого користувача, зокрема в індексі пошуку | e2e + integration |
 | Журнал ≥ 365 днів, незмінний | Перевірка політики строку зберігання в міграції 02 + AC-11 | integration + contract |
 | Історія задач ≥ 90 днів | Перевірка політики строку зберігання в міграції 02 | integration |
@@ -179,3 +179,14 @@ target_surfaces: [backend-service, web-frontend]  # read from sad.md frontmatter
 - **On every PR:** unit, contract, component, visual-regression, integration (емулятор; керований годинник, тож без реальних очікувань).
 - **On schedule / pre-release:** e2e та e2e-through-UI (браузер + сервер + емулятор), тести поширення змін у реальному часі (≤ 60 с, ≤ 5 хв, 30-хвилинне спостереження за вкладкою), NFR-набір з 10 000 користувачів і лічильником читань, load-сценарії.
 - **Once per stage release, cloud:** вимір холодного старту (p95 ≤ 15 с).
+
+## Known gaps
+
+Рядки плану вище, для яких на жодному рівні ще немає тесту (станом на T50, 2026-10-08). Не приховуються і не вважаються покритими.
+
+| Рядок плану | Чого бракує | Найближче покриття |
+|---|---|---|
+| AC-29 `site banner matches approved baseline` (visual-regression) | Немає знімків банера UA/EN і еталона; у проєкті немає інструмента візуальної регресії для сайту | Вміст і мова банера — `ServiceBanner.test.ts` (component) |
+| AC-26 пропозиція розпізнати в браузері після паузи | Тест перевіряє лише пояснення про паузу, а не кнопку «розпізнати в браузері» | `vocalsRefusal.test.tsx`, `TrackActions.refusal.test.tsx` |
+| Реальний час (e2e, браузер + сервер + емулятор): AC-02 для сайту, AC-16, AC-22, AC-24, AC-32; NFR «банер / перемикачі ≤ 5 хв» | Немає запланованого (schedule / pre-release) набору з реальним часом і справжнім сервером; ці вимоги перевіряються лише з керованим годинником (integration / component) | Рядки вище зі своїми файлами; `ServiceBanner.test.ts` «is gone for the next visit within 5 minutes…» |
+| NFR «огляд адмінки p95 ≤ 2 с» у браузері на прогрітому сервері та «p95 ≤ 15 с» холодного старту | Немає ні браузерного виміру, ні виміру на хмарному розгортанні | `backend/tests/admin/test_nfr.py` перевіряє читання і пошук, не час відкриття екрана |

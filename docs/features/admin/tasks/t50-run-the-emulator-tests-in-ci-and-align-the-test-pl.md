@@ -8,7 +8,7 @@ files_hint: ["/.github/workflows/pages.yml", "README.md", "test-plan.md"]
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 9 — review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T50 — Run the emulator tests in CI and align the test plan with the levels used
@@ -19,4 +19,4 @@ status: "todo"
 
 **Review S2-5, S2-12. CI has a job running the backend emulator suite (README notes how to run it locally), and test-plan.md rows name the level each AC is actually tested at.**
 
-- [ ] lint + type-check clean (ruff / oxlint + tsc)
+- [x] lint + type-check clean (ruff / oxlint + tsc)
