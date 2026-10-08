@@ -183,3 +183,44 @@ def test_local_clip_fetcher(tmp_path: Path) -> None:
     cancel.set()
     with pytest.raises(Cancelled):
         fetcher.fetch(VIDEO_ID, 0, 30, tmp_path, lambda f: None, cancel)
+
+
+def test_ffmpeg_cuts_the_fragment_through_an_http_proxy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # yt-dlp keeps the SOCKS proxy; ffmpeg, which cuts the fragment, gets the HTTP CONNECT proxy as its input option.
+    import yt_dlp
+
+    FakeYDL.made.clear()
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", FakeYDL)
+    media = RemoteMedia(url=f"https://www.youtube.com/watch?v={VIDEO_ID}", extractor="youtube", media_id=VIDEO_ID,
+                        title="Song", video_id=VIDEO_ID, info={"id": VIDEO_ID})
+    fetcher = YtDlpFetcher(10_000, proxy="socks5h://127.0.0.1:40000", ffmpeg_proxy="http://127.0.0.1:40001")
+    fetcher.download_clip(media, 72.0, 102.0, tmp_path, lambda f: None, threading.Event())
+    opts = FakeYDL.made[-1].opts
+    assert opts["proxy"] == "socks5h://127.0.0.1:40000"
+    assert opts["external_downloader_args"] == {"ffmpeg_i": ["-http_proxy", "http://127.0.0.1:40001"]}
+
+
+def test_without_an_ffmpeg_proxy_the_clip_adds_no_downloader_args(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import yt_dlp
+
+    FakeYDL.made.clear()
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", FakeYDL)
+    media = RemoteMedia(url=f"https://www.youtube.com/watch?v={VIDEO_ID}", extractor="youtube", media_id=VIDEO_ID,
+                        title="Song", video_id=VIDEO_ID, info={"id": VIDEO_ID})
+    YtDlpFetcher(10_000).download_clip(media, 72.0, 102.0, tmp_path, lambda f: None, threading.Event())
+    assert "external_downloader_args" not in FakeYDL.made[-1].opts
+
+
+def test_download_is_unchanged_and_takes_no_range(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Regression guard: a whole-track download keeps the old options (no range, no ffmpeg args), even with proxies set.
+    import yt_dlp
+
+    FakeYDL.made.clear()
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", FakeYDL)
+    media = RemoteMedia(url=f"https://www.youtube.com/watch?v={VIDEO_ID}", extractor="youtube", media_id=VIDEO_ID,
+                        title="Song", video_id=VIDEO_ID, info={"id": VIDEO_ID})
+    fetcher = YtDlpFetcher(10_000, proxy="socks5h://127.0.0.1:40000", ffmpeg_proxy="http://127.0.0.1:40001")
+    path = fetcher.download(media, tmp_path, lambda f: None, threading.Event())
+    assert path == tmp_path / "source.webm"
+    opts = FakeYDL.made[-1].opts
+    assert "download_ranges" not in opts and "external_downloader_args" not in opts

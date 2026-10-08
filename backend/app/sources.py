@@ -371,9 +371,10 @@ def _strip_topic(name: Optional[str]) -> Optional[str]:
 class YtDlpFetcher:
     """UrlFetcher backed by the yt-dlp Python API."""
 
-    def __init__(self, max_bytes: int, proxy: Optional[str] = None) -> None:
+    def __init__(self, max_bytes: int, proxy: Optional[str] = None, ffmpeg_proxy: Optional[str] = None) -> None:
         self.max_bytes = max_bytes
         self.proxy = proxy  # e.g. socks5h://127.0.0.1:40000 (chords-fetch: Cloudflare WARP)
+        self.ffmpeg_proxy = ffmpeg_proxy  # http://… (CONNECT) proxy for ffmpeg, which cuts fragments and can't use SOCKS
 
     def _opts(self, **extra: Any) -> dict[str, Any]:
         opts: dict[str, Any] = {
@@ -467,7 +468,11 @@ class YtDlpFetcher:
         """Only ``[start, end]`` of the media: yt-dlp's download_ranges has ffmpeg fetch and cut just that part."""
         from yt_dlp.utils import download_range_func
 
-        return self._download(media, dest_dir, progress, cancel, download_ranges=download_range_func(None, [(start, end)]))
+        extra: dict[str, Any] = {"download_ranges": download_range_func(None, [(start, end)])}
+        if self.ffmpeg_proxy:
+            # ffmpeg does the cut and can't use SOCKS or yt-dlp's env proxy: its input gets the HTTP CONNECT proxy.
+            extra["external_downloader_args"] = {"ffmpeg_i": ["-http_proxy", self.ffmpeg_proxy]}
+        return self._download(media, dest_dir, progress, cancel, **extra)
 
     def _download(
         self, media: RemoteMedia, dest_dir: Path, progress: ProgressCb, cancel: threading.Event, **extra: Any
