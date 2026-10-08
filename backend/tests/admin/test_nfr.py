@@ -180,6 +180,10 @@ def endpoint_cases(uid: str, cursor: str) -> dict[tuple[str, str], list[tuple[st
         ("PUT", f"{p}/settings/limits"): [(f"{p}/settings/limits", {"analyses": 30, "vocals": 15, "jobs": 2, "maxDurationMin": 15, "maxUploadMb": 50})],
         ("PUT", f"{p}/settings/switches/{{name}}"): [(f"{p}/settings/switches/youtubeEnabled", {"value": False})],
         ("PUT", f"{p}/settings/banner"): [(f"{p}/settings/banner", {"enabled": True, "uk": "Технічні роботи", "en": "Maintenance"})],
+        ("POST", f"{p}/users/{{uid}}/quota/reset"): [(f"{p}/users/{uid}/quota/reset", None)],
+        # set before remove: the removal needs a stored limit (the cases run in this order on the same user)
+        ("PUT", f"{p}/users/{{uid}}/limit"): [(f"{p}/users/{uid}/limit", {"analyses": 5, "vocals": 2, "jobs": 1})],
+        ("DELETE", f"{p}/users/{{uid}}/limit"): [(f"{p}/users/{uid}/limit", None)],
     }
 
 
@@ -356,6 +360,9 @@ class TestPropagation:
                 ("PUT", "/api/admin/settings/limits", {"analyses": 1, "vocals": 1, "jobs": 1, "maxDurationMin": 1, "maxUploadMb": 1}),
                 ("PUT", "/api/admin/settings/switches/analysesPaused", {"value": True}),
                 ("PUT", "/api/admin/settings/banner", {"enabled": True, "uk": "x", "en": "y"}),
+                ("POST", "/api/admin/users/u1/quota/reset", None),
+                ("PUT", "/api/admin/users/u1/limit", {"analyses": 5}),
+                ("DELETE", "/api/admin/users/u1/limit", None),
             ]:
                 res = client.request(method, url, json=body, headers=as_trusted)
                 assert res.status_code == unknown.status_code == 404, (method, url, res.status_code)
