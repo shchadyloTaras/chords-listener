@@ -18,6 +18,9 @@ Served here:
   service settings, each written with its journal record in one commit (``actions.py``).
 * ``resetQuota`` (``POST /users/{uid}/quota/reset``, AC-12, AC-12b), ``setPersonalLimit`` and ``removePersonalLimit``
   (``PUT`` / ``DELETE /users/{uid}/limit``, AC-13..AC-15): each answers the account's state after the change.
+* ``restrictUser`` and ``unrestrictUser`` (``PUT`` / ``DELETE /users/{uid}/restriction``, AC-16, AC-17, AC-19, AC-23b):
+  the cloud restriction, one transaction with its journal record; own account and scheduled deletion are refused
+  (409) and journaled.
 """
 from __future__ import annotations
 
@@ -862,5 +865,26 @@ def set_personal_limit(uid: str, body: models.PersonalLimitIn, request: Request)
 def remove_personal_limit(uid: str, request: Request) -> AccountState:
     svc, admin_uid, admin_email = _acting_user(request, uid)
     actions.remove_personal_limit(svc, admin_uid=admin_uid, admin_email=admin_email, uid=uid)
+    _forget_account(request, uid)
+    return _account_state(svc, request, uid)
+
+
+@router.put("/users/{uid}/restriction", response_model=AccountState, operation_id="restrictUser")
+def restrict_user(uid: str, body: models.RestrictionIn, request: Request) -> AccountState:
+    """Put a cloud restriction on the user (or change its reason). Own account -> 409 ``self_target``, a scheduled
+    deletion -> 409 ``deletion_pending`` (both journaled as rejected). New jobs are refused from now on this server and
+    within a minute on the others; jobs already accepted are not touched (AC-19)."""
+    svc, admin_uid, admin_email = _acting_user(request, uid)
+    actions.restrict_user(svc, admin_uid=admin_uid, admin_email=admin_email, uid=uid, reason=body.reason, now=utc_now())
+    _forget_account(request, uid)
+    return _account_state(svc, request, uid)
+
+
+@router.delete("/users/{uid}/restriction", response_model=AccountState, operation_id="unrestrictUser")
+def unrestrict_user(uid: str, request: Request) -> AccountState:
+    """Lift the cloud restriction. A scheduled deletion -> 409 ``deletion_pending`` (journaled as rejected); not
+    restricted -> 409 ``not_set`` (nothing journaled)."""
+    svc, admin_uid, admin_email = _acting_user(request, uid)
+    actions.unrestrict_user(svc, admin_uid=admin_uid, admin_email=admin_email, uid=uid)
     _forget_account(request, uid)
     return _account_state(svc, request, uid)

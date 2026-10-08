@@ -184,6 +184,9 @@ def endpoint_cases(uid: str, cursor: str) -> dict[tuple[str, str], list[tuple[st
         # set before remove: the removal needs a stored limit (the cases run in this order on the same user)
         ("PUT", f"{p}/users/{{uid}}/limit"): [(f"{p}/users/{uid}/limit", {"analyses": 5, "vocals": 2, "jobs": 1})],
         ("DELETE", f"{p}/users/{{uid}}/limit"): [(f"{p}/users/{uid}/limit", None)],
+        # restrict before lift: lifting needs a stored restriction
+        ("PUT", f"{p}/users/{{uid}}/restriction"): [(f"{p}/users/{uid}/restriction", {"reason": "automated mass requests"})],
+        ("DELETE", f"{p}/users/{{uid}}/restriction"): [(f"{p}/users/{uid}/restriction", None)],
     }
 
 
@@ -363,6 +366,8 @@ class TestPropagation:
                 ("POST", "/api/admin/users/u1/quota/reset", None),
                 ("PUT", "/api/admin/users/u1/limit", {"analyses": 5}),
                 ("DELETE", "/api/admin/users/u1/limit", None),
+                ("PUT", "/api/admin/users/u1/restriction", {"reason": "abuse"}),
+                ("DELETE", "/api/admin/users/u1/restriction", None),
             ]:
                 res = client.request(method, url, json=body, headers=as_trusted)
                 assert res.status_code == unknown.status_code == 404, (method, url, res.status_code)

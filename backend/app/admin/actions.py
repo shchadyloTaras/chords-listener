@@ -19,6 +19,13 @@ User actions (AC-12, AC-12b, AC-13, AC-14, AC-15, AC-33):
 * ``set_personal_limit``    - ``adminAccounts/<uid>.personalLimit`` (the whole map) and its journal record in ONE commit.
 * ``remove_personal_limit`` - the same for removal; no limit set -> ``NotSet`` (409), nothing journaled.
 
+* ``restrict_user``         - the cloud restriction of ``adminAccounts/<uid>`` (reason, since, by) and its journal record in
+                              ONE transaction commit. ``unrestrict_user`` is the same for lifting it. Both read the account
+                              inside the transaction, so a deletion scheduled meanwhile is seen on the retry. Own account
+                              (restrict only) -> ``SelfTarget`` and a scheduled deletion -> ``DeletionPending`` (both 409,
+                              journaled as rejected attempts); lifting a restriction that is not there -> ``NotSet`` (409,
+                              nothing journaled). A restriction stops no job: it only writes configuration (AC-19).
+
 Every settings op is masked to the fields it changes, so a banner write cannot clobber the switches and the other way round.
 A failed commit raises ``NotApplied`` (503) and nothing changed, cache included; after a commit the server's own
 settings cache is refreshed at once (the other instances follow within its 30 s TTL, AC-24). No action stops or
@@ -27,10 +34,10 @@ before any of this (the request models), so a rejected form is never journaled (
 """
 from __future__ import annotations
 
-from datetime import datetime
-from typing import TYPE_CHECKING, Any, Optional
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Callable, Optional, TypeVar
 
-from app.firestore import server_timestamp
+from app.firestore import IndexError_, server_timestamp
 from app.quotas import KINDS, Quotas
 from app.sources import SourceError
 
@@ -43,6 +50,7 @@ if TYPE_CHECKING:  # router.py imports this module
 
 ACCOUNTS = "adminAccounts"
 LIMIT_NUMBERS = ("analyses", "vocals", "jobs")
+T = TypeVar("T")
 
 
 def _fresh(svc: "AdminServices") -> Settings:
@@ -123,10 +131,10 @@ def reset_quota(svc: "AdminServices", quotas: Quotas, *, admin_uid: str, admin_e
 
 
 class NotSet(SourceError):
-    """No personal limit to remove (409 ``not_set``)."""
+    """No personal limit (or restriction) to remove (409 ``not_set``): nothing changed, so nothing is journaled."""
 
-    def __init__(self) -> None:
-        super().__init__("not_set", "This user has no personal limit", 409)
+    def __init__(self, detail: str = "This user has no personal limit") -> None:
+        super().__init__("not_set", detail, 409)
 
 
 def _limit_view(stored: Any) -> Optional[dict[str, Any]]:
@@ -177,3 +185,103 @@ def remove_personal_limit(svc: "AdminServices", *, admin_uid: str, admin_email: 
     svc.audit.record_with([write], AuditEntry(
         action="limit_removed", admin_uid=admin_uid, admin_email=admin_email, target_uid=uid, before=before, after=None,
     ))
+
+
+# --------------------------------------------------------------------------- user actions: cloud restriction
+
+
+class SelfTarget(SourceError):
+    """An administrator cannot restrict (or delete) their own account (409 ``self_target``, AC-17)."""
+
+    def __init__(self) -> None:
+        super().__init__("self_target", "An admin can't restrict or delete their own account", 409)
+
+
+class DeletionPending(SourceError):
+    """The account is scheduled for deletion: its state changes only by cancelling it (409 ``deletion_pending``, AC-23b)."""
+
+    def __init__(self) -> None:
+        super().__init__("deletion_pending", "Cancel the scheduled deletion first", 409)
+
+
+def _zulu(when: datetime) -> str:
+    """A timestamp the way a stored one reads back (UTC, ``Z``)."""
+    return when.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _restriction_view(stored: Any) -> Optional[dict[str, Any]]:
+    """What the journal keeps of a stored restriction: the reason (admins only, redacted on purge) and the date."""
+    if not isinstance(stored, dict):
+        return None
+    since = stored.get("since")
+    return {"reason": stored.get("reason"), "since": _zulu(since) if isinstance(since, datetime) else since}
+
+
+def _refused(
+    svc: "AdminServices", action: str, refusal: Optional[SourceError], *, admin_uid: str, admin_email: str, uid: str
+) -> None:
+    """Answer a transaction that found a reason to refuse. ``NotSet`` just raises: nothing changed, nothing to
+    journal. Any other refusal is journaled as a rejected attempt first (``refusal.code`` is its reason); if the
+    record cannot be written ``NotApplied`` is raised instead: no record, no answer about the attempt."""
+    if refusal is None:
+        return
+    if not isinstance(refusal, NotSet):
+        svc.audit.record_first(AuditEntry(
+            action=action, admin_uid=admin_uid, admin_email=admin_email, target_uid=uid,
+            outcome="rejected", reject_reason=refusal.code,
+        ))
+    raise refusal
+
+
+def restrict_user(
+    svc: "AdminServices", *, admin_uid: str, admin_email: str, uid: str, reason: str, now: datetime
+) -> None:
+    """Put a cloud restriction on ``uid`` (or replace its reason) and journal it in one transaction commit. Refusals
+    are journaled as rejected attempts; a failed journal write or transaction raises ``NotApplied``, nothing changed."""
+    who = {"admin_uid": admin_uid, "admin_email": admin_email, "uid": uid}
+    stored = {"reason": reason, "since": now, "byAdminUid": admin_uid}
+
+    def work(tx: Any) -> Optional[SourceError]:
+        doc = tx.get(_account_path(uid))
+        data = doc.data if doc is not None else {}
+        if data.get("deletion"):
+            return DeletionPending()
+        write = svc.db.update_op(
+            _account_path(uid), {"restriction": stored}, mask=["restriction"], transforms=[server_timestamp("updatedAt")]
+        )
+        svc.audit.record_with([write], AuditEntry(
+            action="restrict", admin_uid=admin_uid, admin_email=admin_email, target_uid=uid,
+            before=_restriction_view(data.get("restriction")), after=_restriction_view(stored),
+        ), tx=tx)
+        return None
+
+    _refused(svc, "restrict", SelfTarget() if uid == admin_uid else _in_transaction(svc, work), **who)
+
+
+def unrestrict_user(svc: "AdminServices", *, admin_uid: str, admin_email: str, uid: str) -> None:
+    """Lift the cloud restriction of ``uid`` and journal it in one transaction commit. A scheduled deletion is
+    refused and journaled; no restriction is ``NotSet`` and nothing is journaled."""
+    def work(tx: Any) -> Optional[SourceError]:
+        doc = tx.get(_account_path(uid))
+        data = doc.data if doc is not None else {}
+        if data.get("deletion"):
+            return DeletionPending()
+        before = _restriction_view(data.get("restriction"))
+        if before is None:
+            return NotSet("This user is not restricted")
+        write = svc.db.update_op(_account_path(uid), {}, mask=["restriction"], transforms=[server_timestamp("updatedAt")])
+        svc.audit.record_with([write], AuditEntry(
+            action="unrestrict", admin_uid=admin_uid, admin_email=admin_email, target_uid=uid, before=before, after=None,
+        ), tx=tx)
+        return None
+
+    _refused(svc, "unrestrict", _in_transaction(svc, work), admin_uid=admin_uid, admin_email=admin_email, uid=uid)
+
+
+def _in_transaction(svc: "AdminServices", work: Callable[[Any], T]) -> T:
+    """Run ``work`` in a Firestore transaction. A database that cannot be reached (or keeps aborting) means nothing
+    changed: ``NotApplied``."""
+    try:
+        return svc.db.run_transaction(work)
+    except IndexError_ as exc:
+        raise NotApplied() from exc
