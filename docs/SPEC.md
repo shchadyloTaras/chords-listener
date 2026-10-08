@@ -86,6 +86,7 @@ Must be thread-safe (called from a worker thread) and must never import torch/he
 | POST | `/api/jobs/upload` | multipart `file` (+ optional form field `options` JSON) | `Job` (201) — dedup by content sha1 |
 | GET | `/api/jobs` | – | `Job[]` (active + recent, newest first) |
 | GET | `/api/jobs/{jobId}` | – | `Job` (frontend polls every 1 s, 3 s in a hidden tab) |
+| POST | `/api/jobs/{jobId}/cancel` | – | `Job`. The job stops at its next progress report and ends with `errorCode: "cancelled"`; a finished job is returned unchanged; 404 `not_found` for an unknown job (or another user's). |
 | GET | `/api/tracks` | – | `TrackSummary[]` newest first |
 | GET | `/api/tracks/{id}` | – | `Track` |
 | PATCH | `/api/tracks/{id}` | `{"title"?: str, "artist"?: str, "chords"?: ChordSegment[]}` | `Track` (user edits; sets `edited: true`; original detection kept on disk) |
