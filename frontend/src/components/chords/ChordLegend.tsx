@@ -59,7 +59,7 @@ export const ChordLegend = memo(function ChordLegend() {
         </h2>
         {parts.length >= 2 && (
           <Segmented<'parts' | 'all'>
-            size="sm"
+            variant="strong"
             label={t('chords.legend.view')}
             value={byParts ? 'parts' : 'all'}
             onChange={(v) => useApp.getState().setSetting('legendByParts', v === 'parts')}
