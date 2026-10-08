@@ -60,6 +60,7 @@ export function ClipTimeline({ start, duration, now, onChange, disabled, label }
     <div className="mt-3">
       <div
         ref={lineRef}
+        data-tour="clip.window"
         role="slider"
         tabIndex={disabled ? -1 : 0}
         aria-label={label}

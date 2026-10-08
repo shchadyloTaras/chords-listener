@@ -8,9 +8,11 @@ import { useDocumentTitle } from '../../hooks/useDocumentTitle'
 import { submitClip } from '../../hooks/useJobs'
 import { navigate, paths } from '../../hooks/useRoute'
 import { toApiError } from '../../lib/api'
+import { clipReady } from '../../lib/tour/trigger'
 import { useApp } from '../../store'
 import { errorText } from '../jobs/errorText'
 import { isEmbedBlockedError, loadYouTubeApi, videoTitle, type YTPlayer } from '../player/sources/youtubeApi'
+import { useTourTrigger } from '../tour/hooks'
 import { Button } from '../ui/IconButton'
 import { VideoSiteIcon } from '../ui/Logo'
 import { formatRange, formatTime } from '../ui/format'
@@ -160,6 +162,9 @@ export function ClipPage({ videoId, start: initialStart }: { videoId: string; st
   const ready = playerStatus === 'ready'
   const playerBroken = playerStatus === 'embed' || playerStatus === 'error'
 
+  // the picker's tour: once the player has loaded (not while a fragment is being sent)
+  useTourTrigger('clip', clipReady(playerStatus) && !busy)
+
   return (
     <div className="mx-auto w-full max-w-3xl px-4 pt-6 pb-24 sm:px-6 sm:pt-10">
       <Button variant="ghost" className="-ml-3" icon={<ArrowLeft className="size-4" />} onClick={() => navigate(paths.home())}>
@@ -209,10 +214,10 @@ export function ClipPage({ videoId, start: initialStart }: { videoId: string; st
         />
         {ready && !duration && <p className="mt-2 text-sm text-muted">{t('clip.needLength')}</p>}
         <div className="mt-4 flex flex-wrap gap-2">
-          <Button icon={<ArrowDownToLine className="size-4" />} onClick={fromHere} disabled={!ready}>
+          <Button icon={<ArrowDownToLine className="size-4" />} onClick={fromHere} disabled={!ready} data-tour="clip.from">
             {t('clip.fromHere')}
           </Button>
-          <Button icon={<Play className="size-4" />} onClick={preview} disabled={!ready}>
+          <Button icon={<Play className="size-4" />} onClick={preview} disabled={!ready} data-tour="clip.preview">
             {t('clip.preview')}
           </Button>
           <Button
@@ -221,6 +226,7 @@ export function ClipPage({ videoId, start: initialStart }: { videoId: string; st
             icon={busy ? <LoaderCircle className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
             onClick={analyze}
             disabled={busy}
+            data-tour="clip.analyze"
           >
             {t('clip.analyze')}
           </Button>

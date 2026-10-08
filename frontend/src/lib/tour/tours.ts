@@ -2,8 +2,8 @@
 // `data-tour` anchors each step spotlights, when a step is included, and the i18n keys of its texts.
 // Pure data and small helpers; the step logic is in machine.ts, the page side in components/tour.
 
-export type TourId = 'home' | 'song' | 'score' | 'keys' | 'listen' | 'capture'
-export const TOUR_IDS: readonly TourId[] = ['home', 'song', 'score', 'keys', 'listen', 'capture']
+export type TourId = 'home' | 'song' | 'score' | 'keys' | 'listen' | 'capture' | 'clip'
+export const TOUR_IDS: readonly TourId[] = ['home', 'song', 'score', 'keys', 'listen', 'capture', 'clip']
 
 /** What the page reports about itself (components/tour/hooks.ts useTourFlags); a missing flag reads as false. */
 export type TourFlag =
@@ -183,6 +183,17 @@ export const TOURS: Record<TourId, Tour> = {
       { id: 'controls', anchors: ['capture.controls'], when: ['canListenInTab'], centre: true },
       { id: 'videoNoTab', anchors: ['capture.video'], when: ['!canListenInTab'] },
       { id: 'alt', anchors: ['capture.alt'], when: ['!canListenInTab'] },
+    ],
+  },
+  // route `clip` (docs/superpowers/specs/2026-10-07-youtube-warp-fetch-design.md): the window, «Звідси»,
+  // «Прослухати», «Розібрати акорди»
+  clip: {
+    id: 'clip',
+    steps: [
+      { id: 'window', anchors: ['clip.window'], variants: ['touch'] },
+      { id: 'from', anchors: ['clip.from'] },
+      { id: 'preview', anchors: ['clip.preview'] },
+      { id: 'analyze', anchors: ['clip.analyze'] },
     ],
   },
 }
