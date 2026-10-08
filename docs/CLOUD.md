@@ -263,6 +263,89 @@ npx -y firebase-tools@15 emulators:exec --only auth,firestore,storage --project 
 
 `emulators:exec` sets `FIRESTORE_EMULATOR_HOST` and `FIREBASE_AUTH_EMULATOR_HOST` for the command, which is what un-skips the tests; the emulators are stopped afterwards. If a port is taken, an earlier emulator is still running — stop it first. `firebase-tools` is pinned to major version 15 here and in CI. CI also installs ffmpeg and sets `CHORDS_FAIL_ON_SKIP=1`, under which a test skipped for want of ffmpeg or an emulator fails instead (`backend/tests/strict_skips.py`); set it locally to check the same.
 
+### Live e2e (browser + server + emulators)
+
+The scheduled test level of the admin feature (docs/features/admin/test-plan.md): a real Chromium, the real backend
+in cloud mode and the Firebase emulators (Auth 9099, Firestore 8080, Storage 9199 — the ports a
+`VITE_FIREBASE_EMULATORS=true` build hardcodes), in real time: no stubs, no fake clocks. Specs in
+`frontend/e2e-live/`, config `frontend/playwright.live.config.ts`; the stubbed suite (`npm run test:e2e`,
+`frontend/e2e/`) is separate and unchanged. Locally, with Java 21+, ports 8080 / 9099 / 9199 / 8775 / 4183 free,
+`uv sync` done in `backend/` and Chromium installed once (`npx playwright install chromium`):
+
+```bash
+cd frontend
+npm run test:e2e:live                          # ~2 min: every spec except the 30-minute one
+LIVE_SLOW=1 npm run test:e2e:live              # + the idle-tab spec (30 real minutes; nightly in CI)
+npm run test:e2e:live -- revoke.spec.ts        # one spec (any Playwright argument after --)
+npm run test:e2e:live -- banner.spec.ts --update-snapshots   # re-take this platform's banner baselines
+```
+
+- `npm run test:e2e:live` (`frontend/e2e-live/run.mjs`) starts the emulators with
+  `npx -y firebase-tools@15 emulators:exec --only auth,firestore,storage` from the repository root (rules and ports
+  from `firebase.json`; on macOS the Homebrew openjdk is put on PATH when `java` is missing), in a temp directory of
+  their own, and stops them afterwards. Emulators already listening on all three ports are reused (their data is
+  wiped); only some of the ports taken is an error.
+- Playwright then starts the backend fresh (`python -m uvicorn app.main:app` from the `uv` environment in `backend/`, on 127.0.0.1:8775 with
+  `CHORDS_AUTH=firebase`, the emulator hosts, a scratch `CHORDS_DATA_DIR`, `CHORDS_UPLOAD_BUCKET`; its stdout/stderr,
+  uvicorn's access log included, go to `<tmp>/chords-live-e2e-8775/backend.log`, which the specs read as the
+  server's own record of requests) and the hosted build (`VITE_BASE=/chords-listener/`,
+  `VITE_FIREBASE_EMULATORS=true`, `VITE_CLOUD_API_URL=http://127.0.0.1:8775`, into `dist-e2e-live/`, gitignored) under
+  `vite preview` on localhost:4183. The emulator build's admin.html also allows the Auth emulator in connect-src
+  (`adminBuildCsp` in `frontend/vite.config.ts`); a production build's policy is unchanged.
+- Every spec starts from empty emulators, migration 04, an admin granted with `scripts/admin_grant.py grant <uid>`
+  and an ordinary user, both with fresh uids. Firestore and bucket seeding goes through
+  `backend/scripts/live_e2e.py` (the factories of `backend/tests/admin/fixtures.py`), which refuses to run without the
+  three emulator hosts. Its `sweep` command runs the server's own `Sweeper` + `Purger` (as `create_app` builds them
+  from the same environment): `POST /api/internal/sweep` accepts only a Google-signed OIDC token of the scheduler's
+  service account, which cannot be minted locally.
+- Knobs: `LIVE_SLOW=1`; `LIVE_IDLE_MIN` (default 30) for the idle-tab spec; `LIVE_API_PORT` / `LIVE_SITE_PORT`;
+  `LIVE_PYTHON` (default: `.venv/bin/python` of `backend/`); `LIVE_RUN_DIR` (the server's scratch and log);
+  `LIVE_P95_USERS` / `LIVE_P95_SONGS` (the data set of the p95 spec, default 1 000 × 20); `LIVE_FIREBASE_TOOLS`
+  (default `firebase-tools@15`).
+
+| Spec | What it proves, in real time |
+|---|---|
+| `banner.spec.ts` | AC-29: a guest sees the banner the admin published in Settings, UA then EN, with no request to the server (browser record and access log); banner screenshots match the baselines; turned off, the next visit shows none. AC-27 / NFR ≤ 5 min: with YouTube off the next visit sends a link to «Слухати у вкладці» at once |
+| `restriction.spec.ts` | AC-16 / AC-18: restricted on the card → the user's next cloud job is refused (`cloud_restricted`) within 60 s, nothing counted; the site explains it and offers the browser |
+| `default-limit.spec.ts` | AC-24: 40 → 30 in Settings → `GET /api/me` reports 30 within 60 s, the 31st analysis is refused, same server process; journal 40 → 30 |
+| `pause.spec.ts` | AC-26: pause on → an upload is refused (`analyses_paused`), explained, offered in the browser, nothing counted |
+| `revoke.spec.ts` | AC-32: `admin_grant.py revoke` → within 60 s the open pages' reads and actions get the unknown-address 404; nothing applied; a reload shows «Сторінку не знайдено» |
+| `purge.spec.ts` | AC-22: deletion scheduled on the card, `purgeAfter` moved into the past, sweep → no sign-in, no songs (index, files, bucket), search finds nobody, journal and job history show «видалений» only |
+| `overview-p95.spec.ts` | NFR: 20 browser openings of the overview on the warm server with 1 000 × 20 seeded, p95 ≤ 2 s |
+| `idle-tab.spec.ts` (`@slow`) | AC-02: admin tabs in front and in the background for 30 min send nothing to the server; a guest tab does not poll the public status |
+
+CI: `.github/workflows/admin-live-e2e.yml` runs it nightly (02:30 UTC, with `LIVE_SLOW=1`) and on demand
+(`workflow_dispatch`: `slow`, `update_snapshots`); the report, traces and the server log are uploaded on failure.
+
+**One-time step: the Linux banner baselines.** Screenshot baselines are per platform and only the macOS ones
+(`banner-uk-darwin.png`, `banner-en-darwin.png` in `frontend/e2e-live/banner.spec.ts-snapshots/`) are committed; until the Linux ones are,
+the nightly run fails at the banner comparison. Run the workflow by hand with `update_snapshots` ticked (Actions →
+"Admin live e2e" → Run workflow, or `gh workflow run admin-live-e2e.yml -f update_snapshots=true`), download the
+artifact `banner-baselines-linux` (`gh run download <run-id> -n banner-baselines-linux`), look at both PNGs, copy
+`banner-uk-linux.png` and `banner-en-linux.png` into `frontend/e2e-live/banner.spec.ts-snapshots/` and commit
+them. Repeat only when the banner's look changes on purpose (locally: `--update-snapshots` for the macOS pair).
+
+### Measuring the cold start
+
+NFR "admin overview from a sleeping server: p95 ≤ 15 s" needs the deployed service, so it is not part of CI.
+After a deploy, from any machine (standard library only; `gcloud` with the owner's login for `--verify-cold`):
+
+```bash
+python3 scripts/measure_cold_start.py --dry-run                 # the plan; sends nothing
+python3 scripts/measure_cold_start.py --verify-cold             # 5 × (20 min silence + GET /api/health)
+CHORDS_ADMIN_REFRESH_TOKEN=... python3 scripts/measure_cold_start.py --admin --verify-cold   # GET /api/admin/overview
+```
+
+Before each attempt it sends nothing for `--idle-min` minutes (default 20; Cloud Run stops an idle instance after
+~15), then times the first request to the whole answer; it prints every attempt and the nearest-rank p95 (with 5
+attempts, the slowest) and exits 1 over `--bound-s` (default 15). Something else waking the service meanwhile (a
+visitor, a 00:15 / 12:15 sweep) makes an attempt warm: `--verify-cold` asks Cloud Logging whether a new server
+process started for the request and counts only those (up to 10 tries for 5 cold ones). The admin variant takes the
+token from the environment only — never the command line — and never prints it: `CHORDS_ADMIN_REFRESH_TOKEN` (a
+Firebase refresh token of an admin; a fresh ID token is minted from it at securetoken.googleapis.com before each
+attempt, which does not touch the service) or `CHORDS_ADMIN_ID_TOKEN` (an ID token as is; it lasts an hour, about 2
+attempts). The run takes ~attempts × idle-min (≈ 1 h 40 min by default).
+
 ### Decisions taken at design (spec §8)
 
 Closed 2026-10-07: no 2FA in v1, no e-mails to users (a restricted or scheduled-for-deletion user sees the same cloud-restriction explanation, without the deletion date). Defaults applied: the support address in that explanation is the owner's (`SUPPORT_EMAIL` in `frontend/src/i18n/cloud.ts`), and the `smoke-test` account is shown apart as "службовий" and left out of the statistics.
