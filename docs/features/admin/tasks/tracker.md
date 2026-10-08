@@ -6,21 +6,21 @@
 | # | Task | Layer | Owner | Estimate | Blocked by | Status |
 |---|---|---|---|---|---|---|
 | [T01](./t01-firestore-client-batch-tx-query.md) | Extend the Firestore REST client with batched writes, transactions, queries and aggregations | infra | Тарас Щадило | M | — | done |
-| [T02](./t02-admin-test-fixtures.md) | Add admin test fixtures, hostile strings and an emulator seeder | tests | Тарас Щадило | S | T01 | todo |
+| [T02](./t02-admin-test-fixtures.md) | Add admin test fixtures, hostile strings and an emulator seeder | tests | Тарас Щадило | S | T01 | done |
 | [T03](./t03-admin-error-codes.md) | Register the 16 admin error codes and map admin validation errors to invalid_value | domain | Тарас Щадило | S | — | done |
-| [T04](./t04-admin-models-validators.md) | Define admin request/response models with the spec'd validation ranges | domain | Тарас Щадило | M | T03 | todo |
+| [T04](./t04-admin-models-validators.md) | Define admin request/response models with the spec'd validation ranges | domain | Тарас Щадило | M | T03 | done |
 | [T05](./t05-migration-track-size.md) | Promote migration 01 (tracks.sizeBytes backfill) and write sizeBytes on publish | migration | Тарас Щадило | S | — | done |
-| [T06](./t06-migration-indexes-ttl-rules.md) | Promote migrations 02–03: composite indexes, TTL/exemptions and Firestore rules | migration | Тарас Щадило | S | T05 | todo |
+| [T06](./t06-migration-indexes-ttl-rules.md) | Promote migrations 02–03: composite indexes, TTL/exemptions and Firestore rules | migration | Тарас Щадило | S | T05 | done |
 | [T07](./t07-migration-seed-config-email-index.md) | Promote migrations 04–05: seed runtime config + public status and build the email index | migration | Тарас Щадило | S | T06 | todo |
 | [T08](./t08-migration-restore-stats.md) | Promote migration 06: restore pre-launch daily stats from tracks | migration | Тарас Щадило | S | T07 | todo |
-| [T09](./t09-admin-router-authz.md) | Mount the admin router behind allowlist authz, 404-identical denial, probe rate limit and fresh-login check | app | Тарас Щадило | M | T01, T03 | todo |
+| [T09](./t09-admin-router-authz.md) | Mount the admin router behind allowlist authz, 404-identical denial, probe rate limit and fresh-login check | app | Тарас Щадило | M | T01, T03 | done |
 | [T10](./t10-admin-audit-writer.md) | Implement the audit writer: atomic with Firestore changes, journal-first otherwise, before any view response | app | Тарас Щадило | M | T01, T04 | todo |
 | [T11](./t11-history-stats-projections.md) | Build job-history and daily-stats projections with the failure-reason map and the pending buffer | app | Тарас Щадило | M | T01, T04 | todo |
 | [T12](./t12-jobmanager-projection-hooks.md) | Hook projections into JobManager, accept the origin hint and discard results for tombstoned uids | wiring | Тарас Щадило | S | T11 | todo |
 | [T13](./t13-runtime-settings-cache.md) | Implement runtime settings: 30 s lazy cache, env fallback and the public-status mirror writer | app | Тарас Щадило | S | T01, T04 | todo |
 | [T14](./t14-admission-gate.md) | Gate all five cloud-job entries through one admission check before Quotas.consume | app | Тарас Щадило | M | T03, T12, T13 | todo |
 | [T15](./t15-api-overview-settings.md) | Serve getOverview and getSettings | ports | Тарас Щадило | S | T09, T11, T13 | todo |
-| [T16](./t16-email-index-directory.md) | Implement the email-index directory: shard load, incremental catch-up and in-memory substring search | infra | Тарас Щадило | M | T01 | todo |
+| [T16](./t16-email-index-directory.md) | Implement the email-index directory: shard load, incremental catch-up and in-memory substring search | infra | Тарас Щадило | M | T01 | done |
 | [T17](./t17-api-search-card-tracks.md) | Serve searchUsers, getUserCard and listUserTracks with view journaling | ports | Тарас Щадило | M | T05, T09, T10, T16 | todo |
 | [T18](./t18-api-job-history-stats.md) | Serve listJobHistory and getStats | ports | Тарас Щадило | S | T09, T11 | todo |
 | [T19](./t19-api-audit-list.md) | Serve listAudit with email resolution and «видалений» for purged users | ports | Тарас Щадило | S | T09, T10, T16 | todo |
@@ -32,7 +32,7 @@
 | [T25](./t25-purge-deletion.md) | Implement tombstone-first, idempotent account purge with anonymization | app | Тарас Щадило | M | T10, T22, T24 | todo |
 | [T26](./t26-ops-grant-scheduler-alerts.md) | Add the owner grant script, Cloud Scheduler jobs, max-instances guard and alerting | wiring | Тарас Щадило | S | T09, T24 | todo |
 | [T27](./t27-ui-admin-entry-csp.md) | Create the admin.html entry with strict CSP, admin shell, sign-in and not-found for non-admins | ui | Тарас Щадило | M | — | done |
-| [T28](./t28-ui-admin-api-client.md) | Build the admin API client with re-auth flow, error-code i18n and the no-polling refresh policy | ui | Тарас Щадило | M | T27 | todo |
+| [T28](./t28-ui-admin-api-client.md) | Build the admin API client with re-auth flow, error-code i18n and the no-polling refresh policy | ui | Тарас Щадило | M | T27 | done |
 | [T29](./t29-ui-overview-screen.md) | Build the Overview screen | ui | Тарас Щадило | S | T28 | todo |
 | [T30](./t30-ui-users-search-card.md) | Build user search, the user card and paged songs (metadata only) | ui | Тарас Щадило | M | T28 | todo |
 | [T31](./t31-ui-jobs-stats-screens.md) | Build the job-history and statistics screens | ui | Тарас Щадило | M | T28 | todo |
@@ -41,7 +41,7 @@
 | [T34](./t34-ui-card-restriction-deletion-actions.md) | Add restriction and scheduled-deletion actions to the user card | ui | Тарас Щадило | M | T33 | todo |
 | [T35](./t35-ui-settings-screen.md) | Build the service-settings screen: default limits, switches and maintenance banner | ui | Тарас Щадило | M | T28 | todo |
 | [T36](./t36-ui-site-service-status-banner.md) | Read the public service status on the site: maintenance banner and YouTube-off fallback | ui | Тарас Щадило | M | — | done |
-| [T37](./t37-ui-site-admission-refusals.md) | Show admission refusals on the site and send the origin hint | ui | Тарас Щадило | S | T36 | todo |
+| [T37](./t37-ui-site-admission-refusals.md) | Show admission refusals on the site and send the origin hint | ui | Тарас Щадило | S | T36 | done |
 | [T38](./t38-nfr-security-verification.md) | Add the NFR and security verification suite | tests | Тарас Щадило | M | T02, T15, T17, T18, T19, T23, T29, T30, T36 | todo |
 | [T39](./t39-docs-admin-runbook.md) | Document the admin: CLOUD.md section, grant/revoke runbook, migration order and alerts | docs | Тарас Щадило | S | T26 | todo |
 
