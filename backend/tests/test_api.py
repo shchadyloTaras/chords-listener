@@ -141,7 +141,8 @@ class FakeFetcher:
             thumbnail=youtube_thumbnail(vid) if vid else "https://example.com/t.jpg", video_id=vid,
         )
 
-    def download(self, media: RemoteMedia, dest_dir: Path, progress: Callable[[float], None], cancel: threading.Event) -> Path:
+    def download(self, media: RemoteMedia, dest_dir: Path, progress: Callable[[float], None], cancel: threading.Event,
+                 max_bytes: Optional[int] = None) -> Path:
         self.downloads += 1
         progress(0.5)
         dest = dest_dir / "source.mp3"

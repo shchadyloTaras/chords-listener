@@ -687,6 +687,7 @@ class JobManager:
                 work,
                 lambda f: self._update(rec, progress=self._scaled((0.02, DOWNLOAD_RANGE[1]), f)),
                 rec.cancel,
+                max_bytes=self.effective_limits().upload_bytes,   # the admin-set size, read for this job (AC-25)
             )
             self._check_cancel(rec)
             meta = {
@@ -715,6 +716,7 @@ class JobManager:
                 work,
                 lambda f: self._update(rec, progress=self._scaled((0.01, DOWNLOAD_RANGE[1]), f)),
                 rec.cancel,
+                max_bytes=self.effective_limits().upload_bytes,   # the admin-set size, read for this job (AC-25)
             )
             self._check_cancel(rec)
             span = {"start": clip.start, "end": clip.end}

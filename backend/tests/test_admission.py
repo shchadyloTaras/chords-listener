@@ -29,6 +29,7 @@ from cloud_fixtures import (  # noqa: F401  (make_cloud, media: fixtures of the 
     ENGINE_INFO,
     VIDEO_ID,
     FakeEngine,
+    FakeFragmentFetcher,
     H,
     assert_error,
     make_cloud,
@@ -706,3 +707,34 @@ def test_storage_job_longer_than_the_admin_set_duration_fails_too_long(make_clou
     assert res.status_code == 201, res.text
     job = wait_job(env.client, res.json()["id"], H("alice"))
     assert job["status"] == "error" and job["errorCode"] == "too_long", job
+
+
+def test_a_link_longer_than_the_admin_set_duration_fails_too_long(make_cloud) -> None:
+    env = make_env(make_cloud)  # deploy-time limit: 30 min
+    set_config(env, limits={"maxDurationMin": 1})
+    env.fetcher.duration = 90.0
+    res = env.client.post("/api/jobs", json={"url": VIDEO_ID}, headers=H("alice"))
+    assert res.status_code == 201, res.text
+    job = wait_job(env.client, res.json()["id"], H("alice"))
+    assert job["status"] == "error" and job["errorCode"] == "too_long", job
+    assert env.fetcher.max_bytes is None                     # refused on the probe: nothing was downloaded
+
+
+def test_a_link_download_is_capped_by_the_admin_set_size(make_cloud) -> None:
+    env = make_env(make_cloud)  # deploy-time limit: 500 MB
+    set_config(env, limits={"maxUploadMb": 1})
+    res = env.client.post("/api/jobs", json={"url": VIDEO_ID}, headers=H("alice"))
+    assert res.status_code == 201, res.text
+    wait_job(env.client, res.json()["id"], H("alice"))
+    assert env.fetcher.max_bytes == 1024 * 1024              # yt-dlp's max_filesize, not the deploy-time 500 MB
+
+
+def test_a_fragment_download_is_capped_by_the_admin_set_size(make_cloud, media) -> None:
+    fragments = FakeFragmentFetcher(media.a)
+    env = make_env(make_cloud, clip_fetcher=fragments)
+    set_config(env, limits={"maxUploadMb": 2})
+    res = env.client.post("/api/jobs", json={"url": VIDEO_ID, "clip": {"start": 30}}, headers=H("alice"))
+    assert res.status_code == 201, res.text
+    wait_job(env.client, res.json()["id"], H("alice"))
+    assert fragments.max_bytes == 2 * 1024 * 1024            # chords-fetch's file is read back under the admin's cap
+

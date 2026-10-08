@@ -8,7 +8,7 @@ files_hint: ["backend/app/sources.py", "backend/app/fetch_client.py", "backend/a
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 10 — re-review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T53 — Pass the admin-set upload limit to the link and fragment downloads on every job
@@ -19,4 +19,4 @@ status: "todo"
 
 **Re-review fix 4 (review S1-1). Tests show a link download and a fragment download get the admin-set byte cap, not the deploy-time one, and a link longer than the admin-set duration fails too_long.**
 
-- [ ] lint + type-check clean (ruff / oxlint + tsc)
+- [x] lint + type-check clean (ruff / oxlint + tsc)

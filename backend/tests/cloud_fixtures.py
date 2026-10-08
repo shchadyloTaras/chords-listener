@@ -23,7 +23,7 @@ from app.firestore import IndexError_
 from app.main import create_app
 from app.models import Settings
 from app.publish import Publisher
-from app.sources import NormalizedUrl, RemoteMedia, find_executable, youtube_thumbnail
+from app.sources import FetchedClip, NormalizedUrl, RemoteMedia, find_executable, youtube_thumbnail
 
 FFMPEG = find_executable("ffmpeg")
 needs_ffmpeg = pytest.mark.skipif(not FFMPEG or not find_executable("ffprobe"), reason="ffmpeg/ffprobe not installed")
@@ -94,9 +94,14 @@ class FakeEngine:
 
 
 class FakeFetcher:
+    """yt-dlp for links: ``probe`` says the media is ``duration`` seconds long; ``download`` copies ``audio`` and
+    records the byte cap it was given (``max_bytes``)."""
+
     def __init__(self, audio: Path) -> None:
         self.audio = audio
         self.error: Optional[Exception] = None
+        self.duration = 4.0
+        self.max_bytes: Optional[int] = None
 
     def offline_key(self, url: NormalizedUrl) -> Optional[str]:
         return f"youtube:{url.youtube_id}" if url.youtube_id else None
@@ -105,12 +110,31 @@ class FakeFetcher:
         if self.error:
             raise self.error
         return RemoteMedia(url=url.url, extractor="youtube", media_id=url.youtube_id or "x", title="Fake Song",
-                           duration=4.0, thumbnail=youtube_thumbnail(url.youtube_id or "x"), video_id=url.youtube_id)
+                           duration=self.duration, thumbnail=youtube_thumbnail(url.youtube_id or "x"),
+                           video_id=url.youtube_id)
 
-    def download(self, media: RemoteMedia, dest_dir: Path, progress: Callable[[float], None], cancel: threading.Event) -> Path:
+    def download(self, media: RemoteMedia, dest_dir: Path, progress: Callable[[float], None], cancel: threading.Event,
+                 max_bytes: Optional[int] = None) -> Path:
+        self.max_bytes = max_bytes
         dest = dest_dir / "source.mp3"
         shutil.copy(self.audio, dest)
         return dest
+
+
+class FakeFragmentFetcher:
+    """chords-fetch for YouTube fragments: copies ``audio`` as the fragment and records the byte cap it was given."""
+
+    def __init__(self, audio: Path) -> None:
+        self.audio = audio
+        self.max_bytes: Optional[int] = None
+
+    def fetch(self, video_id: str, start: int, length: int, dest_dir: Path, progress: Callable[[float], None],
+              cancel: threading.Event, max_bytes: Optional[int] = None) -> FetchedClip:
+        self.max_bytes = max_bytes
+        dest = dest_dir / "source.mp3"
+        shutil.copy(self.audio, dest)
+        return FetchedClip(path=dest, title="Fake Song", artist=None, duration=213.0,
+                           thumbnail=youtube_thumbnail(video_id), start=float(start), end=float(start + length))
 
 
 class FakeVerifier:

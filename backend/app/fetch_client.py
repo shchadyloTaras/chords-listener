@@ -70,8 +70,10 @@ class RemoteClipFetcher:
         self._sleep, self._clock = sleep, clock
 
     def fetch(
-        self, video_id: str, start: int, length: int, dest_dir: Path, progress: ProgressCb, cancel: threading.Event
+        self, video_id: str, start: int, length: int, dest_dir: Path, progress: ProgressCb, cancel: threading.Event,
+        max_bytes: Optional[int] = None,
     ) -> FetchedClip:
+        """The fragment, read back from the bucket at most ``max_bytes`` (None: ``self.max_bytes``)."""
         raw = self._call({"videoId": video_id, "start": int(start), "length": int(length)}, cancel)
         try:
             answer = _ClipAnswer.model_validate(raw)
@@ -88,7 +90,8 @@ class RemoteClipFetcher:
             if cancel.is_set():
                 raise Cancelled()
             self.bucket.download(
-                answer.path, dest, size=answer.size, progress=progress, cancel=cancel, max_bytes=self.max_bytes
+                answer.path, dest, size=answer.size, progress=progress, cancel=cancel,
+                max_bytes=self.max_bytes if max_bytes is None else max_bytes,
             )
         finally:
             self.bucket.delete(answer.path)  # the fragment is consumed whatever happens next

@@ -172,6 +172,22 @@ def test_download_clip_asks_ytdlp_for_the_range_only(tmp_path: Path, monkeypatch
     assert FakeYDL.made[-1].opts["force_keyframes_at_cuts"] is True
 
 
+def test_a_download_is_capped_by_the_size_it_is_given(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The jobs pass the admin-set upload size with every download (AC-25): yt-dlp's max_filesize follows it; with
+    none given, the fetcher's own (deploy-time) cap applies."""
+    import yt_dlp
+
+    FakeYDL.made.clear()
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", FakeYDL)
+    media = RemoteMedia(url=f"https://www.youtube.com/watch?v={VIDEO_ID}", extractor="youtube", media_id=VIDEO_ID,
+                        title="Song", video_id=VIDEO_ID, info={"id": VIDEO_ID})
+    fetcher = YtDlpFetcher(10_000)
+    fetcher.download(media, tmp_path, lambda f: None, threading.Event(), max_bytes=2_000)
+    fetcher.download_clip(media, 72.0, 102.0, tmp_path, lambda f: None, threading.Event(), max_bytes=3_000)
+    fetcher.download(media, tmp_path, lambda f: None, threading.Event())
+    assert [y.opts["max_filesize"] for y in FakeYDL.made] == [2_000, 3_000, 10_000]
+
+
 class FakeYtDlp:
     """YtDlpFetcher stand-in for LocalClipFetcher: a video of ``duration`` seconds."""
 
@@ -183,7 +199,8 @@ class FakeYtDlp:
         return RemoteMedia(url=url.url, extractor="youtube", media_id=url.youtube_id or "", title="Song",
                            artist="Artist", duration=self.duration, thumbnail=None, video_id=url.youtube_id)
 
-    def download_clip(self, media: RemoteMedia, start: float, end: float, dest_dir: Path, progress, cancel) -> Path:
+    def download_clip(self, media: RemoteMedia, start: float, end: float, dest_dir: Path, progress, cancel,
+                      max_bytes: Optional[int] = None) -> Path:
         self.clips.append((start, end))
         path = dest_dir / "source.webm"
         path.write_bytes(b"x")
@@ -266,7 +283,8 @@ class FakeClipFetcher:
         self.error: Optional[Exception] = None
         self.gate: Optional[threading.Event] = None  # when set, fetch() waits for it
 
-    def fetch(self, video_id: str, start: int, length: int, dest_dir: Path, progress, cancel) -> FetchedClip:
+    def fetch(self, video_id: str, start: int, length: int, dest_dir: Path, progress, cancel,
+              max_bytes: Optional[int] = None) -> FetchedClip:
         self.calls.append((video_id, start, length))
         if self.gate is not None:
             self.gate.wait(10)

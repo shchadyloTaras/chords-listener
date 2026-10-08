@@ -325,6 +325,8 @@ def create_app(
         if settings.cloud and settings.upload_bucket
         else None
     )
+    # the fetchers' deploy-time byte cap is a fallback only: every job passes the size limit in force (the admin-set
+    # one on the cloud, AC-25) with its download, so a change applies without a restart
     jobs = JobManager(
         settings,
         store,

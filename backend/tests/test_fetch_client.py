@@ -44,8 +44,10 @@ class FakeBucket:
     def __init__(self, objects: dict[str, bytes]) -> None:
         self.objects = dict(objects)
         self.deleted: list[str] = []
+        self.caps: list[int] = []
 
     def download(self, path: str, dest: Path, *, size: int, progress, cancel, max_bytes: int) -> int:
+        self.caps.append(max_bytes)
         if path not in self.objects:
             raise SourceError("not_found", "gone", 404)
         dest.write_bytes(self.objects[path])
@@ -101,6 +103,16 @@ def test_a_fragment_is_asked_for_with_an_id_token_and_taken_out_of_the_bucket(tm
     assert clip.path == tmp_path / "source.webm" and clip.path.read_bytes() == b"audio"
     assert (clip.title, clip.artist, clip.duration, clip.start, clip.end) == ("Song", "Artist", 213.4, 72.0, 102.0)
     assert bucket.deleted == [OBJECT] and bucket.objects == {}
+
+
+def test_the_fragment_is_read_back_under_the_cap_it_is_given(tmp_path: Path) -> None:
+    """A job passes the admin-set upload size (AC-25); without one the fetcher's own cap (1000 here) applies."""
+    bucket = FakeBucket({OBJECT: b"a"})
+    fetcher, _, _ = make(FakeSession(ok(), ok()), bucket)
+    fetcher.fetch(VIDEO_ID, 72, 30, tmp_path, lambda f: None, threading.Event(), max_bytes=200)
+    bucket.objects[OBJECT] = b"b"
+    fetch(fetcher, tmp_path)
+    assert bucket.caps == [200, 1000]
 
 
 def test_the_id_token_is_reused(tmp_path: Path) -> None:
