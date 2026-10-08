@@ -19,7 +19,7 @@ export {
 } from './play'
 export { ringElement, type RingStyle } from './feedback'
 export { useSoundingTargets } from './sounding'
-export { renderOffline, soundEngine, volumeGain, type PlayRequest, type SoundStats } from './engine'
+export { alongVolumeGain, PLAY_ALONG_MAX_VOLUME, renderOffline, soundEngine, volumeGain, type PlayRequest, type SoundStats } from './engine'
 export type { NoteEvent } from './chordNotes'
 export { droneMidi } from './drone'
 
