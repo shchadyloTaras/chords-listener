@@ -1,0 +1,1696 @@
+# Derived contract — admin. DO NOT hand-edit field shapes: they come from
+#   fields + constraints  <- docs/features/admin/data-model.md
+#   error responses       <- docs/features/admin/sad.md §6 alt-branches
+#   endpoint list         <- docs/features/admin/spec.md §4 / §5
+# Traceability: contracts/api-sync-report.md (field origins + drift checklist).
+#
+# Conventions (deviation from the sdd/api template defaults, by SAD §8 «Error handling» + ADR-0003,
+# chosen 2026-10-08):
+#   - paths under /api/admin/* (ADR-0003); no /v1 segment, like every other /api/* route of this service
+#   - error body {detail, code, details?}: the repo's ApiError ({detail, code}) + one additive optional
+#     `details` (per-field validation messages, AC-14/25/30); `code` is a flat snake_case ErrorCode
+#     registered in backend/app/models.py ErrorCode + backend/app/main.py STATUS_BY_CODE
+#   - JSON is camelCase (backend/app/models.py CamelModel), so the page wrapper is
+#     {items, hasNext, hasPrev, nextCursor}
+openapi: 3.1.0
+
+info:
+  title: Chords Listener admin API
+  version: 0.1.0
+  contact:
+    name: Backend Lead (docs/features/admin)
+  description: |
+    The admin of Chords Listener sees the state of the cloud (today's totals, account users and their
+    cards, job history with failure reasons, daily stats, the admin action journal) and acts on it
+    (reset a daily quota, personal limit, cloud restriction, scheduled deletion, default limits,
+    service switches, maintenance banner) without a server redeploy. Goals: costs under control,
+    fast support, product understanding, readiness for plans (spec §1–§2).
+
+    Every /api/admin/* route is checked on the server on every request against the admin allowlist
+    (ADR-0006, cache ≤ 60 s). A signed-in caller who is not an admin gets exactly the response of an
+    unknown route (404 `not_found`), with no hint which routes exist (AC-31, AC-32, AC-36). A missing
+    or invalid token gets 401 `unauthorized` from the existing AuthMiddleware, same as any /api/* route.
+
+    Audit rule (ADR-0007, AC-33/33b): a change, a rejected change attempt and a view of personal data
+    (search, user card) are written to the admin journal; if that write fails the change is not applied
+    (503 `not_applied`) and the data is not returned (503 `audit_unavailable`). Form validation errors
+    (422 `invalid_value`) are never journaled (AC-10b).
+
+    The site's maintenance banner and service-switch state are NOT served over HTTP: the site reads the
+    Firestore document `publicStatus/current` directly (ADR-0005, 0 server requests). Its shape is the
+    `PublicStatus` schema below, for the consumer's types only.
+
+    No background polling: the admin UI calls these routes only on screen open, on tab return
+    (≥ 60 s since the last load) or on «Оновити» (AC-02).
+
+servers:
+  - url: https://chords-api-84488579848.europe-west1.run.app
+    description: Production (Cloud Run chords-api, europe-west1)
+  - url: http://localhost:8765
+    description: Local (./start.sh)
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: admin-view
+    description: Stage 1 — read-only screens (US-01…US-06)
+  - name: admin-users
+    description: Stage 2 — actions on account users (US-07…US-11)
+  - name: admin-settings
+    description: Stage 3 — service settings (US-12…US-14)
+  - name: internal
+    description: Background work woken by Cloud Scheduler (OIDC), not callable by users
+  - name: jobs-delta
+    description: >-
+      EXISTING job-submission routes. Only the admission-gate refusals and the `origin` hint are new
+      (ADR-0008, AC-13/18/26/27/28); request and success shapes are otherwise unchanged and documented by
+      the server's own /api/openapi.json.
+
+paths:
+  # ===================================================================== Stage 1 — view
+
+  /api/admin/overview:
+    get:
+      tags: [admin-view]
+      summary: Today's totals, running jobs and the service switches
+      description: |
+        US-01, AC-01/AC-02. Reads `adminStats/{today}` (1 doc) + a `count()` for new users + the cached
+        settings; running jobs come from the server's in-memory JobManager. Not journaled (no personal
+        data beyond uids/emails of running jobs).
+      operationId: getOverview
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Overview" }
+              example:
+                day: "2026-10-08"
+                analyses: { link: 12, file: 5, mic: 1, tab: 3 }
+                vocals: 4
+                failed: 2
+                failedByReason: { youtube_blocked: 1, other: 1 }
+                active: 7
+                newUsers: 2
+                runningJobs:
+                  - id: "a1b2c3d4e5f60718"
+                    uid: "u-0000000001"
+                    email: "user-1@example.test"
+                    service: false
+                    kind: analysis
+                    origin: link
+                    acceptedAt: "2026-10-08T09:41:00Z"
+                switches: { analysesPaused: false, youtubeEnabled: true, vocalsEnabled: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/users:
+    get:
+      tags: [admin-view]
+      summary: Search account users by part of the email
+      description: |
+        US-02, AC-03/AC-04/AC-10b/AC-33b. Case-insensitive substring match anywhere in the email, over the
+        in-memory email index (ADR-0009), after a catch-up of new registrations. Returns at most 50
+        matches (data-model `adminAudit.matchedUids` ≤ 50). The search is journaled (`action=search`,
+        with the query) BEFORE the response; journal failure → 503 `audit_unavailable`, no results.
+        A query shorter than 3 characters is refused by the UI and again here (not journaled).
+      operationId: searchUsers
+      parameters:
+        - in: query
+          name: q
+          required: true
+          description: part of an email, matched case-insensitively anywhere in the address
+          schema: { type: string, minLength: 3, maxLength: 254 }
+          example: "ivan"
+      responses:
+        "200":
+          description: OK — `items` empty means «Нікого не знайдено»
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserSearchResult" }
+              example:
+                query: "ivan"
+                items:
+                  - { uid: "u-0000000001", email: "ivan.p@example.test", service: false }
+                  - { uid: "u-0000000002", email: "john.ivanov@example.test", service: false }
+                truncated: false
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422":
+          description: query shorter than 3 characters (AC-04) — not journaled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { detail: "Type at least 3 characters", code: query_too_short }
+        "503": { $ref: "#/components/responses/AuditUnavailable" }
+
+  /api/admin/users/{uid}:
+    parameters:
+      - $ref: "#/components/parameters/Uid"
+    get:
+      tags: [admin-view]
+      summary: User card — profile, quota today, limit, state, recent jobs, first page of tracks
+      description: |
+        US-02/US-03, AC-03/AC-05/AC-06/AC-15/AC-16/AC-33b. Metadata only: no audio, chords, edits or
+        notes are ever returned (AC-06). User text (titles, error texts, emails) is plain data — the UI
+        renders it as text only (AC-05). The view is journaled (`action=view_card`, targetUid) BEFORE the
+        response; journal failure → 503 `audit_unavailable`, no card.
+      operationId: getUserCard
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserCard" }
+              example:
+                profile:
+                  uid: "u-0000000001"
+                  email: "user-1@example.test"
+                  createdAt: "2026-09-01T10:00:00Z"
+                  lastLoginAt: "2026-10-07T18:20:00Z"
+                  service: false
+                  trackCount: 132
+                  storageBytes: 1048576000
+                account:
+                  uid: "u-0000000001"
+                  status: normal
+                  restriction: null
+                  deletion: null
+                  personalLimit: null
+                  quota:
+                    day: "2026-10-08"
+                    analyses: { used: 40, limit: 40 }
+                    vocals: { used: 5, limit: 15 }
+                    jobs: { used: 1, limit: 2 }
+                recentJobs:
+                  - id: "a1b2c3d4e5f60718"
+                    uid: "u-0000000001"
+                    email: "user-1@example.test"
+                    userDeleted: false
+                    service: false
+                    kind: analysis
+                    origin: link
+                    status: error
+                    reason: youtube_blocked
+                    errorText: "Sign in to confirm you're not a bot"
+                    title: "\"><img src=x onerror=alert(1)>"
+                    acceptedAt: "2026-10-08T09:00:00Z"
+                    finishedAt: "2026-10-08T09:00:20Z"
+                tracks:
+                  items:
+                    - id: "t-0001"
+                      title: "Test Song"
+                      sourceType: youtube
+                      createdAt: "2026-10-07T12:00:00Z"
+                      duration: 215.4
+                      edited: false
+                      vocals: true
+                      sizeBytes: 7340032
+                  hasNext: true
+                  hasPrev: false
+                  nextCursor: "eyJjIjoiMjAyNi0xMC0wN1QxMjowMDowMFoiLCJpIjoidC0wMDAxIn0"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFoundOrUnknownUser" }
+        "503": { $ref: "#/components/responses/AuditUnavailable" }
+
+  /api/admin/users/{uid}/tracks:
+    parameters:
+      - $ref: "#/components/parameters/Uid"
+    get:
+      tags: [admin-view]
+      summary: Next pages of the user's tracks (metadata only, newest first, 50 per page)
+      description: |
+        US-03, AC-03/AC-06. Ordered by `createdAt` desc. Further pages are not journaled again — the
+        card view that precedes them is (sad.md §6 «Пошук і картка», `opt наступна сторінка`).
+      operationId: listUserTracks
+      parameters:
+        - $ref: "#/components/parameters/After"
+        - $ref: "#/components/parameters/Before"
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 50, default: 50 }
+          example: 50
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TrackMetaPage" }
+              example:
+                items:
+                  - id: "t-0051"
+                    title: "Test Song 51"
+                    sourceType: file
+                    createdAt: "2026-08-01T08:00:00Z"
+                    duration: 180.0
+                    edited: true
+                    vocals: false
+                    sizeBytes: null
+                hasNext: false
+                hasPrev: true
+                nextCursor: null
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFoundOrUnknownUser" }
+
+  /api/admin/jobs:
+    get:
+      tags: [admin-view]
+      summary: Job history of all users, filtered, with per-reason counts
+      description: |
+        US-04, AC-07. Newest first (`acceptedAt` desc). Filters combine (zig-zag merge over the
+        `adminJobs_{status,reason,origin}_acceptedAt` indexes). `countsByReason` = `count()` per failure
+        reason under the same filters. A purged user's jobs show `email: null`, `userDeleted: true`,
+        `title: null`. History is kept 90 days (TTL), so a period is at most 90 days.
+      operationId: listJobHistory
+      parameters:
+        - in: query
+          name: status
+          schema: { $ref: "#/components/schemas/HistoryStatus" }
+          example: error
+        - in: query
+          name: reason
+          schema: { $ref: "#/components/schemas/FailureReason" }
+          example: youtube_blocked
+        - in: query
+          name: origin
+          schema: { $ref: "#/components/schemas/Origin" }
+          example: link
+        - in: query
+          name: from
+          description: first UTC day included
+          schema: { $ref: "#/components/schemas/UtcDay" }
+          example: "2026-10-01"
+        - in: query
+          name: to
+          description: last UTC day included; `to − from` ≤ 89 days
+          schema: { $ref: "#/components/schemas/UtcDay" }
+          example: "2026-10-08"
+        - $ref: "#/components/parameters/After"
+        - $ref: "#/components/parameters/Before"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: OK — empty `items` and zero counts when nothing matches
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JobHistoryPage" }
+              example:
+                items:
+                  - id: "a1b2c3d4e5f60718"
+                    uid: "u-0000000001"
+                    email: "user-1@example.test"
+                    userDeleted: false
+                    service: false
+                    kind: analysis
+                    origin: link
+                    status: error
+                    reason: youtube_blocked
+                    errorText: "Sign in to confirm you're not a bot"
+                    title: "Test Song"
+                    acceptedAt: "2026-10-08T09:00:00Z"
+                    finishedAt: "2026-10-08T09:00:20Z"
+                hasNext: false
+                hasPrev: false
+                nextCursor: null
+                countsByReason: { youtube_blocked: 1 }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/InvalidPeriod" }
+
+  /api/admin/stats:
+    get:
+      tags: [admin-view]
+      summary: Daily stats for a period of up to 90 days
+      description: |
+        US-05, AC-08/AC-09. Reads `adminStats/{day}` by id for each day (≤ 90 docs). Days without a
+        document (no activity) are omitted from `days`; the UI shows them as zero. Days before the
+        launch have `state: restored` and only `restoredTracks` (counters are 0). Frozen days never change.
+      operationId: getStats
+      parameters:
+        - in: query
+          name: from
+          required: true
+          schema: { $ref: "#/components/schemas/UtcDay" }
+          example: "2026-09-09"
+        - in: query
+          name: to
+          required: true
+          description: last day included; `to` ≥ `from` and `to − from` ≤ 89 days
+          schema: { $ref: "#/components/schemas/UtcDay" }
+          example: "2026-10-08"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatsRange" }
+              example:
+                from: "2026-09-09"
+                to: "2026-10-08"
+                days:
+                  - day: "2026-09-09"
+                    state: restored
+                    analyses: { link: 0, file: 0, mic: 0, tab: 0 }
+                    vocals: 0
+                    failed: 0
+                    failedByReason: {}
+                    active: 0
+                    newUsers: null
+                    restoredTracks: { youtube: 3, url: 0, file: 1 }
+                    frozenAt: null
+                  - day: "2026-10-08"
+                    state: live
+                    analyses: { link: 12, file: 5, mic: 1, tab: 3 }
+                    vocals: 4
+                    failed: 2
+                    failedByReason: { youtube_blocked: 1, other: 1 }
+                    active: 7
+                    newUsers: 2
+                    restoredTracks: null
+                    frozenAt: null
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/InvalidPeriod" }
+
+  /api/admin/audit:
+    get:
+      tags: [admin-view]
+      summary: Admin action journal (read-only), filtered
+      description: |
+        US-06, AC-10/AC-10b/AC-11. Newest first (`at` desc). There is no route that changes or deletes a
+        journal record (AC-11). A purged target shows `targetEmail: null`, `targetDeleted: true`.
+      operationId: listAudit
+      parameters:
+        - in: query
+          name: adminUid
+          schema: { $ref: "#/components/schemas/Uid" }
+          example: "admin-1"
+        - in: query
+          name: targetUid
+          schema: { $ref: "#/components/schemas/Uid" }
+          example: "u-0000000001"
+        - in: query
+          name: action
+          schema: { $ref: "#/components/schemas/AuditAction" }
+          example: quota_reset
+        - $ref: "#/components/parameters/After"
+        - $ref: "#/components/parameters/Before"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: OK — empty `items` when nothing matches
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditPage" }
+              example:
+                items:
+                  - id: "Xk2fP0aQ9rT1"
+                    at: "2026-10-08T10:00:00Z"
+                    adminUid: "admin-1"
+                    adminEmail: "admin@example.test"
+                    action: quota_reset
+                    outcome: applied
+                    targetUid: "u-0000000001"
+                    targetEmail: "user-1@example.test"
+                    targetDeleted: false
+                    setting: null
+                    before: { analyses: 40, vocals: 5 }
+                    after: { analyses: 0, vocals: 0 }
+                    rejectReason: null
+                    query: null
+                    refId: null
+                    redactedAt: null
+                hasNext: false
+                hasPrev: false
+                nextCursor: null
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ===================================================================== Stage 2 — user actions
+
+  /api/admin/users/{uid}/quota/reset:
+    parameters:
+      - $ref: "#/components/parameters/Uid"
+    post:
+      tags: [admin-users]
+      summary: Reset today's analyses and vocals counters to 0
+      description: |
+        US-07, AC-12/AC-12b/AC-33. Under the same in-process quota lock as job admission, so a
+        concurrent admission is ordered before or after the reset, never lost. Concurrent-jobs usage is
+        untouched. «Journal first» (ADR-0007): the record with the old counters is written before
+        `quota.json`; a failed journal write → nothing changes; a failed quota write → a follow-up
+        `not_applied` record. Both → 503 `not_applied`.
+        No Idempotency-Key: a retried reset re-zeroes counters (harmless) and adds a second journal record.
+      operationId: resetQuota
+      responses:
+        "200":
+          description: OK — the account state with zeroed counters
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountState" }
+              example:
+                uid: "u-0000000001"
+                status: normal
+                restriction: null
+                deletion: null
+                personalLimit: null
+                quota:
+                  day: "2026-10-08"
+                  analyses: { used: 0, limit: 40 }
+                  vocals: { used: 0, limit: 15 }
+                  jobs: { used: 1, limit: 2 }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFoundOrUnknownUser" }
+        "503": { $ref: "#/components/responses/NotApplied" }
+
+  /api/admin/users/{uid}/limit:
+    parameters:
+      - $ref: "#/components/parameters/Uid"
+    put:
+      tags: [admin-users]
+      summary: Set or change the personal limit
+      description: |
+        US-08, AC-13/AC-13b/AC-14/AC-15. Replaces the whole personal limit. At least one of `analyses`,
+        `vocals`, `jobs`; an absent number follows the default limit (and its later changes). `until` is
+        the last UTC day included and not before today. Limit + journal record in one batched write.
+        Effective within 60 s (admission cache).
+      operationId: setPersonalLimit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PersonalLimitInput" }
+            example: { analyses: 100, until: "2026-10-31" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountState" }
+              example:
+                uid: "u-0000000001"
+                status: normal
+                restriction: null
+                deletion: null
+                personalLimit:
+                  analyses: 100
+                  vocals: null
+                  jobs: null
+                  until: "2026-10-31"
+                  setAt: "2026-10-08T10:05:00Z"
+                  byAdminUid: "admin-1"
+                  expired: false
+                quota:
+                  day: "2026-10-08"
+                  analyses: { used: 40, limit: 100 }
+                  vocals: { used: 5, limit: 15 }
+                  jobs: { used: 1, limit: 2 }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFoundOrUnknownUser" }
+        "422":
+          $ref: "#/components/responses/InvalidValue"
+        "503": { $ref: "#/components/responses/NotApplied" }
+    delete:
+      tags: [admin-users]
+      summary: Remove the personal limit
+      description: |
+        US-08. Removes the limit (journal `limit_removed`, one batched write). No limit set → 409
+        `not_set`, not journaled (nothing changed).
+      operationId: removePersonalLimit
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountState" }
+              example:
+                uid: "u-0000000001"
+                status: normal
+                restriction: null
+                deletion: null
+                personalLimit: null
+                quota:
+                  day: "2026-10-08"
+                  analyses: { used: 40, limit: 40 }
+                  vocals: { used: 5, limit: 15 }
+                  jobs: { used: 1, limit: 2 }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFoundOrUnknownUser" }
+        "409":
+          description: no personal limit to remove
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { detail: "This user has no personal limit", code: not_set }
+        "503": { $ref: "#/components/responses/NotApplied" }
+
+  /api/admin/users/{uid}/restriction:
+    parameters:
+      - $ref: "#/components/parameters/Uid"
+    put:
+      tags: [admin-users]
+      summary: Put a cloud restriction on the user (or change its reason)
+      description: |
+        US-09, AC-16/AC-17/AC-23b. One Firestore transaction on `adminAccounts/{uid}` with the journal
+        record. Own account → 409 `self_target`; deletion scheduled → 409 `deletion_pending`; both are
+        journaled as rejected attempts. Rejected by admission within 60 s. The reason is visible to
+        admins only, never to the user (AC-18).
+      operationId: restrictUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RestrictionInput" }
+            example: { reason: "автоматичні масові запити" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountState" }
+              example:
+                uid: "u-0000000001"
+                status: restricted
+                restriction: { reason: "автоматичні масові запити", since: "2026-10-08T10:10:00Z", byAdminUid: "admin-1" }
+                deletion: null
+                personalLimit: null
+                quota:
+                  day: "2026-10-08"
+                  analyses: { used: 40, limit: 40 }
+                  vocals: { used: 5, limit: 15 }
+                  jobs: { used: 1, limit: 2 }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFoundOrUnknownUser" }
+        "409":
+          description: own account (AC-17) or deletion scheduled (AC-23b) — journaled as rejected
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                selfTarget:
+                  value: { detail: "An admin can't restrict or delete their own account", code: self_target }
+                deletionPending:
+                  value: { detail: "Cancel the scheduled deletion first", code: deletion_pending }
+        "422": { $ref: "#/components/responses/InvalidValue" }
+        "503": { $ref: "#/components/responses/NotApplied" }
+    delete:
+      tags: [admin-users]
+      summary: Lift the cloud restriction
+      description: |
+        US-09/US-10, AC-19/AC-23b. Transaction + journal. Deletion scheduled → 409 `deletion_pending`
+        (journaled as rejected; the only state action is «cancel deletion»). Not restricted → 409
+        `not_set`, not journaled. Jobs accepted before were never stopped; nothing is lost.
+      operationId: unrestrictUser
+      responses:
+        "200":
+          description: OK — status back to normal
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountState" }
+              example:
+                uid: "u-0000000001"
+                status: normal
+                restriction: null
+                deletion: null
+                personalLimit: null
+                quota:
+                  day: "2026-10-08"
+                  analyses: { used: 40, limit: 40 }
+                  vocals: { used: 5, limit: 15 }
+                  jobs: { used: 0, limit: 2 }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFoundOrUnknownUser" }
+        "409":
+          description: deletion scheduled (journaled) or not restricted (not journaled)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                deletionPending:
+                  value: { detail: "Cancel the scheduled deletion first", code: deletion_pending }
+                notSet:
+                  value: { detail: "This user is not restricted", code: not_set }
+        "503": { $ref: "#/components/responses/NotApplied" }
+
+  /api/admin/users/{uid}/deletion:
+    parameters:
+      - $ref: "#/components/parameters/Uid"
+    post:
+      tags: [admin-users]
+      summary: Schedule the deletion of the account (7-day window)
+      description: |
+        US-11, AC-17/AC-20/AC-21/AC-34/AC-35. Order of checks: fresh login (`auth_time` ≤ 15 min, else
+        401 `reauth_required` — the UI re-authenticates and retries) → own account (409 `self_target`,
+        journaled) → already scheduled (409 `deletion_pending`, journaled) → typed email must equal the
+        user's email (422 `confirm_email_mismatch`, an input error, not journaled) → ≤ 10 scheduled
+        deletions by all admins in any 60 min (429 `deletion_rate_limit`, journaled) → one transaction:
+        `deletion` {purgeAfter = now + 7 d, priorRestriction} + restriction + journal. The cloud
+        restriction applies within 60 s; the purge runs from the background sweep (ADR-0011).
+      operationId: scheduleDeletion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeletionRequest" }
+            example: { confirmEmail: "user-1@example.test" }
+      responses:
+        "200":
+          description: OK — deletion scheduled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountState" }
+              example:
+                uid: "u-0000000001"
+                status: deletion_scheduled
+                restriction: { reason: "deletion scheduled", since: "2026-10-08T10:20:00Z", byAdminUid: "admin-1" }
+                deletion: { scheduledAt: "2026-10-08T10:20:00Z", purgeAfter: "2026-10-15T10:20:00Z", byAdminUid: "admin-1" }
+                personalLimit: null
+                quota:
+                  day: "2026-10-08"
+                  analyses: { used: 40, limit: 40 }
+                  vocals: { used: 5, limit: 15 }
+                  jobs: { used: 0, limit: 2 }
+        "401":
+          description: missing/invalid token (`unauthorized`) or login older than 15 min (`reauth_required`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                reauthRequired:
+                  value: { detail: "Sign in again to confirm this action", code: reauth_required }
+                unauthorized:
+                  value: { detail: "Use an Authorization: Bearer <Firebase ID token> header", code: unauthorized }
+        "404": { $ref: "#/components/responses/NotFoundOrUnknownUser" }
+        "409":
+          description: own account (AC-17) or deletion already scheduled — journaled as rejected
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                selfTarget:
+                  value: { detail: "An admin can't restrict or delete their own account", code: self_target }
+                deletionPending:
+                  value: { detail: "A deletion is already scheduled for this user", code: deletion_pending }
+        "422":
+          description: typed email differs from the user's email (AC-21) — not journaled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { detail: "Type this user's email exactly to confirm", code: confirm_email_mismatch }
+        "429":
+          description: 10 deletions already scheduled by all admins in the last 60 min (AC-35) — journaled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { detail: "At most 10 deletions can be scheduled in any 60 minutes", code: deletion_rate_limit }
+        "503": { $ref: "#/components/responses/NotApplied" }
+    delete:
+      tags: [admin-users]
+      summary: Cancel the scheduled deletion (within the 7-day window)
+      description: |
+        US-11, AC-23. Transaction: restores the restriction state from before the deletion (same reason,
+        or none) + journal. Not scheduled, or the window has passed and the purge started → 409
+        `not_scheduled` (journaled as rejected, data-model `rejectReason`).
+      operationId: cancelDeletion
+      responses:
+        "200":
+          description: OK — the state from before the deletion
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountState" }
+              example:
+                uid: "u-0000000001"
+                status: normal
+                restriction: null
+                deletion: null
+                personalLimit: null
+                quota:
+                  day: "2026-10-08"
+                  analyses: { used: 40, limit: 40 }
+                  vocals: { used: 5, limit: 15 }
+                  jobs: { used: 0, limit: 2 }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFoundOrUnknownUser" }
+        "409":
+          description: nothing to cancel, or the window has passed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { detail: "No deletion to cancel, or the final deletion has already started", code: not_scheduled }
+        "503": { $ref: "#/components/responses/NotApplied" }
+
+  # ===================================================================== Stage 3 — settings
+
+  /api/admin/settings:
+    get:
+      tags: [admin-settings]
+      summary: Default limits, service switches and the maintenance banner
+      description: US-12/US-13/US-14 — the settings screen. `adminConfig/settings` + `publicStatus/current`.
+      operationId: getSettings
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Settings" }
+              example:
+                limits: { analyses: 40, vocals: 15, jobs: 2, maxDurationMin: 20, maxUploadMb: 500 }
+                switches: { analysesPaused: false, youtubeEnabled: true, vocalsEnabled: true }
+                banner: { enabled: false, uk: "Технічні роботи", en: "Maintenance" }
+                updatedAt: "2026-10-08T08:00:00Z"
+                updatedBy: "admin-1"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/settings/limits:
+    put:
+      tags: [admin-settings]
+      summary: Change the default limits
+      description: |
+        US-12, AC-24/AC-25/AC-13b. All five values, each in range. Config + journal (old and new value) in
+        one batched write; the server refreshes its own cache at once, other reads within 30 s — effective
+        ≤ 60 s, no redeploy. To stop analyses for everyone use the `analysesPaused` switch, not 0.
+      operationId: setDefaultLimits
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DefaultLimits" }
+            example: { analyses: 30, vocals: 15, jobs: 2, maxDurationMin: 20, maxUploadMb: 500 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Settings" }
+              example:
+                limits: { analyses: 30, vocals: 15, jobs: 2, maxDurationMin: 20, maxUploadMb: 500 }
+                switches: { analysesPaused: false, youtubeEnabled: true, vocalsEnabled: true }
+                banner: { enabled: false, uk: "Технічні роботи", en: "Maintenance" }
+                updatedAt: "2026-10-08T10:30:00Z"
+                updatedBy: "admin-1"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/InvalidValue" }
+        "503": { $ref: "#/components/responses/NotApplied" }
+
+  /api/admin/settings/switches/{name}:
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema: { $ref: "#/components/schemas/SwitchName" }
+        example: analysesPaused
+    put:
+      tags: [admin-settings]
+      summary: Turn one service switch on or off
+      description: |
+        US-13, AC-26/AC-27/AC-28/AC-34. Writes `adminConfig.switches.<name>`, the mirror
+        `publicStatus.switches.<name>` (updateMask limited to `switches.*`) and the journal in one batched
+        write. Turning `analysesPaused` ON needs a login ≤ 15 min old (401 `reauth_required`). Jobs already
+        accepted are never stopped.
+      operationId: setSwitch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SwitchChange" }
+            example: { value: true }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Settings" }
+              example:
+                limits: { analyses: 40, vocals: 15, jobs: 2, maxDurationMin: 20, maxUploadMb: 500 }
+                switches: { analysesPaused: true, youtubeEnabled: true, vocalsEnabled: true }
+                banner: { enabled: false, uk: "Технічні роботи", en: "Maintenance" }
+                updatedAt: "2026-10-08T10:40:00Z"
+                updatedBy: "admin-1"
+        "401":
+          description: missing/invalid token (`unauthorized`) or pausing with a login older than 15 min (`reauth_required`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { detail: "Sign in again to confirm this action", code: reauth_required }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotApplied" }
+
+  /api/admin/settings/banner:
+    put:
+      tags: [admin-settings]
+      summary: Publish, change or turn off the maintenance banner
+      description: |
+        US-14, AC-29/AC-30. Both texts 1–250 characters, plain text. Writes `publicStatus.banner`
+        (updateMask limited to `banner.*`) + journal in one batched write. The site picks it up from
+        Firestore within 5 min, without calling this server.
+      operationId: setBanner
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Banner" }
+            example: { enabled: true, uk: "Хмарний аналіз тимчасово на паузі", en: "Cloud analysis is paused for now" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Settings" }
+              example:
+                limits: { analyses: 40, vocals: 15, jobs: 2, maxDurationMin: 20, maxUploadMb: 500 }
+                switches: { analysesPaused: true, youtubeEnabled: true, vocalsEnabled: true }
+                banner: { enabled: true, uk: "Хмарний аналіз тимчасово на паузі", en: "Cloud analysis is paused for now" }
+                updatedAt: "2026-10-08T10:45:00Z"
+                updatedBy: "admin-1"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/InvalidValue" }
+        "503": { $ref: "#/components/responses/NotApplied" }
+
+  # ===================================================================== internal
+
+  /api/internal/sweep:
+    post:
+      tags: [internal]
+      summary: Run the background work for the current schedule slot
+      description: |
+        sad.md §6 «Cross-cutting: фонові роботи», Critical flow 3; AC-08/AC-22. Called by Cloud Scheduler
+        at 00:15 and 12:15 UTC with an OIDC token of `chords-scheduler@…` (signature, audience and email
+        checked); any other caller gets the unknown-route 404. Idempotent by slot: the server derives the
+        slot from the current time and claims `adminSweeps/{slot}` with `exists=false`; a slot already
+        done or running returns its state without redoing work (no Idempotency-Key header — the key is
+        the slot). Steps (each idempotent, resumable): replay the projections buffer → close stale
+        `running` jobs as `other` → reconcile and freeze yesterday → full email-index sync → due purges.
+        A 5xx makes Cloud Scheduler retry with exponential backoff; what is left is picked up by the next
+        slot 12 h later; a purge overdue > 24 h raises `deletion_overdue` (alert to the owner).
+      operationId: runSweep
+      security:
+        - SchedulerOIDC: []
+      responses:
+        "200":
+          description: slot finished now, or already done / running
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SweepRun" }
+              example:
+                slot: "2026-10-08T00:15Z"
+                state: done
+                steps: { replay: done, staleJobs: done, freeze: done, emailIndex: done, purges: done }
+                startedAt: "2026-10-08T00:15:02Z"
+                finishedAt: "2026-10-08T00:16:40Z"
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500":
+          description: a step failed — the slot is marked `failed`, Cloud Scheduler retries
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { detail: "Internal server error", code: internal }
+
+  # ===================================================================== jobs delta (existing routes)
+
+  /api/jobs:
+    post:
+      tags: [jobs-delta]
+      summary: "(existing) Analyze a link — new: admission refusals"
+      description: |
+        Existing operation (`CreateJobRequest` → `Job`, 201). New: the admission gate (ADR-0008) runs
+        before `Quotas.consume`; a refusal counts nothing against the daily quota. Origin = `link`.
+      operationId: createJob
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, description: "unchanged — CreateJobRequest" }
+            example: { url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" }
+      responses:
+        "201": { $ref: "#/components/responses/JobAccepted" }
+        "403": { $ref: "#/components/responses/CloudRestricted" }
+        "429": { $ref: "#/components/responses/QuotaExceeded" }
+        "503": { $ref: "#/components/responses/AdmissionClosed" }
+
+  /api/jobs/upload:
+    post:
+      tags: [jobs-delta]
+      summary: "(existing) Analyze an uploaded file — new: admission refusals + origin hint"
+      description: |
+        Existing multipart operation. New: optional form field `origin` (`file` | `mic`; absent → `file`)
+        so a microphone recording is counted as «мікрофон» (data-model `adminJobs.origin`), and the
+        admission refusals.
+      operationId: uploadJob
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                options: { type: string, description: 'JSON, e.g. {"separate": true} (unchanged)' }
+                origin: { $ref: "#/components/schemas/UploadOrigin" }
+            example: { file: "<binary audio>", origin: mic }
+      responses:
+        "201": { $ref: "#/components/responses/JobAccepted" }
+        "403": { $ref: "#/components/responses/CloudRestricted" }
+        "429": { $ref: "#/components/responses/QuotaExceeded" }
+        "503": { $ref: "#/components/responses/AdmissionClosed" }
+
+  /api/jobs/storage:
+    post:
+      tags: [jobs-delta]
+      summary: "(existing) Analyze a file from cloud storage — new: admission refusals + origin hint"
+      description: |
+        Existing operation (`StorageJobRequest` → `Job`). New optional field `origin` (`file` | `mic`;
+        absent → `file`). `source.type: youtube` (tab capture) is always origin `tab` and ignores the hint.
+      operationId: storageJob
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StorageJobRequestDelta" }
+            example:
+              path: "users/u-0000000001/uploads/up-1/recording.webm"
+              title: "Test Recording"
+              source: { type: file, filename: "recording.webm" }
+              origin: mic
+      responses:
+        "201": { $ref: "#/components/responses/JobAccepted" }
+        "403": { $ref: "#/components/responses/CloudRestricted" }
+        "429": { $ref: "#/components/responses/QuotaExceeded" }
+        "503": { $ref: "#/components/responses/AdmissionClosed" }
+
+  /api/tracks/{track_id}/reanalyze:
+    parameters:
+      - in: path
+        name: track_id
+        required: true
+        schema: { type: string }
+        example: "t-0001"
+    post:
+      tags: [jobs-delta]
+      summary: "(existing) Re-analyze a track — new: admission refusals"
+      description: Existing operation. Origin is inherited from the track. New admission refusals only.
+      operationId: reanalyzeTrack
+      responses:
+        "201": { $ref: "#/components/responses/JobAccepted" }
+        "403": { $ref: "#/components/responses/CloudRestricted" }
+        "429": { $ref: "#/components/responses/QuotaExceeded" }
+        "503": { $ref: "#/components/responses/AdmissionClosed" }
+
+  /api/tracks/{track_id}/vocals:
+    parameters:
+      - in: path
+        name: track_id
+        required: true
+        schema: { type: string }
+        example: "t-0001"
+    post:
+      tags: [jobs-delta]
+      summary: "(existing) Transcribe vocals — new: admission refusals"
+      description: "Existing operation (`kind: vocals`). New admission refusals only (incl. `vocals_disabled`)."
+      operationId: transcribeVocals
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, description: "unchanged — VocalsRequest" }
+            example: { force: false }
+      responses:
+        "201": { $ref: "#/components/responses/JobAccepted" }
+        "403": { $ref: "#/components/responses/CloudRestricted" }
+        "429": { $ref: "#/components/responses/QuotaExceeded" }
+        "503": { $ref: "#/components/responses/AdmissionClosed" }
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Firebase ID token (project build-chords-listener), verified by AuthMiddleware; `auth_time` drives the fresh-login check.
+    SchedulerOIDC:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Google OIDC token of the `chords-scheduler@…` service account (Cloud Scheduler); audience = the service URL.
+
+  parameters:
+    Uid:
+      in: path
+      name: uid
+      required: true
+      description: Firebase uid of the account user
+      schema: { $ref: "#/components/schemas/Uid" }
+      example: "u-0000000001"
+    After:
+      in: query
+      name: after
+      description: opaque cursor — `nextCursor` of the previous page; the page starts after it
+      schema: { $ref: "#/components/schemas/Cursor" }
+    Before:
+      in: query
+      name: before
+      description: opaque cursor — the page ends before it (going back)
+      schema: { $ref: "#/components/schemas/Cursor" }
+    Limit:
+      in: query
+      name: limit
+      schema: { type: integer, minimum: 1, maximum: 50, default: 50 }
+      example: 50
+
+  responses:
+    Unauthorized:
+      description: missing or invalid Firebase ID token (existing AuthMiddleware, every /api/* route)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { detail: "Use an Authorization: Bearer <Firebase ID token> header", code: unauthorized }
+    NotFound:
+      description: |
+        Not an admin (AC-31, AC-32 after the allowlist cache expires ≤ 60 s), a non-admin over 30 admin
+        requests in 60 s (AC-36, not processed), or a non-scheduler caller of /api/internal/*. Byte-for-byte
+        the response FastAPI gives for an unknown route.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { detail: "Not Found", code: not_found }
+    NotFoundOrUnknownUser:
+      description: |
+        As `NotFound` for non-admins. For an admin: the uid is not an account user, or the account was
+        already purged (tombstone).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          examples:
+            notAdmin:
+              value: { detail: "Not Found", code: not_found }
+            unknownUser:
+              value: { detail: "User not found", code: not_found }
+    InvalidValue:
+      description: form validation failed — per-field messages in `details.fields`; never journaled (AC-10b)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example:
+            detail: "Some values are out of range"
+            code: invalid_value
+            details:
+              fields:
+                analyses: "an integer from 1 to 1000"
+                until: "not before today (UTC)"
+    InvalidPeriod:
+      description: the period ends before it starts or is longer than 90 days (AC-09) — not journaled
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { detail: "The period must be at most 90 days and end no earlier than it starts", code: invalid_period }
+    AuditUnavailable:
+      description: the view could not be journaled, so no data is returned — retry (AC-33b)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { detail: "Data is unavailable right now, try again", code: audit_unavailable }
+    NotApplied:
+      description: the change (or its journal record) could not be written — nothing changed, retry (AC-33)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { detail: "The change was not applied, try again", code: not_applied }
+    JobAccepted:
+      description: (unchanged) the job was accepted — `Job`
+      content:
+        application/json:
+          schema: { type: object, description: "unchanged — Job" }
+          example: { id: "a1b2c3d4e5f60718", kind: analysis, status: queued, progress: 0, message: "Queued", createdAt: "2026-10-08T09:00:00Z" }
+    CloudRestricted:
+      description: |
+        The account is under a cloud restriction or a scheduled deletion (or already purged) — AC-18. The
+        response never contains the admin's reason. Not counted against the quota.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { detail: "Cloud analysis is restricted for your account", code: cloud_restricted }
+    AdmissionClosed:
+      description: |
+        A service switch refuses the job (AC-26/27/28) — not counted against the quota; jobs accepted
+        before keep running. The site offers in-browser recognition («Слухати у вкладці» for YouTube).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          examples:
+            paused:
+              value: { detail: "Cloud analysis is paused for now", code: analyses_paused }
+            youtube:
+              value: { detail: "YouTube downloads on the server are turned off", code: youtube_disabled }
+            vocals:
+              value: { detail: "Vocal transcription is unavailable for now", code: vocals_disabled }
+    QuotaExceeded:
+      description: (existing code) the effective limit — personal > default (AC-13/13b/15) — is used up
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { detail: "Daily limit of 40 analyses reached", code: quota_exceeded }
+
+  schemas:
+    # ------------------------------------------------------------------ envelope
+    Error:
+      type: object
+      description: |
+        The repo's ApiError ({detail, code}) + optional `details`. `detail` is English; the site and the
+        admin map `code` to uk/en text.
+      required: [detail, code]
+      additionalProperties: false
+      properties:
+        detail: { type: string }
+        code: { $ref: "#/components/schemas/ErrorCode" }
+        details:
+          type: object
+          additionalProperties: false
+          properties:
+            fields:
+              type: object
+              description: field name (camelCase, as in the request) → what is allowed
+              additionalProperties: { type: string }
+    ErrorCode:
+      type: string
+      description: |
+        backend/app/models.py ErrorCode. Existing codes first; the rest are NEW in this feature and must be
+        added to ErrorCode + STATUS_BY_CODE (status in parentheses).
+      enum:
+        # existing
+        - invalid_url
+        - download_failed
+        - unsupported_format
+        - too_long
+        - too_large
+        - analysis_failed
+        - not_found
+        - internal
+        - unauthorized
+        - quota_exceeded
+        - download_blocked
+        - unavailable
+        # new — admission gate (jobs-delta)
+        - cloud_restricted       # 403
+        - analyses_paused        # 503
+        - youtube_disabled       # 503
+        - vocals_disabled        # 503
+        # new — admin
+        - query_too_short        # 422
+        - invalid_period         # 422
+        - invalid_value          # 422
+        - confirm_email_mismatch # 422
+        - reauth_required        # 401
+        - self_target            # 409
+        - deletion_pending       # 409
+        - not_scheduled          # 409
+        - not_set                # 409
+        - deletion_rate_limit    # 429
+        - not_applied            # 503
+        - audit_unavailable      # 503
+
+    # ------------------------------------------------------------------ scalars
+    Uid:
+      type: string
+      pattern: "^[A-Za-z0-9_-]{1,128}$"
+    UtcDay:
+      type: string
+      format: date
+      pattern: "^\\d{4}-\\d{2}-\\d{2}$"
+      description: a UTC day, `utc_day()` form
+    Cursor:
+      type: string
+      maxLength: 512
+      description: opaque page cursor (server-encoded sort key + id); never parsed by the client
+    Origin:
+      type: string
+      enum: [link, file, mic, tab]
+      description: «джерело» (CONTEXT) — link = URL/YouTube on the server, tab = tab recording
+    UploadOrigin:
+      type: string
+      enum: [file, mic]
+      default: file
+      description: client hint for an uploaded file; absent → file
+    JobKind:
+      type: string
+      enum: [analysis, vocals]
+    HistoryStatus:
+      type: string
+      enum: [running, done, error]
+    FailureReason:
+      type: string
+      enum: [youtube_blocked, download_failed, unsupported_format, too_long, too_large, analysis_failed, other]
+      description: «причина збою» — fixed list; uk/en labels live in the UI
+    ReasonCounts:
+      type: object
+      description: failure reason → count; absent reason = 0
+      propertyNames: { $ref: "#/components/schemas/FailureReason" }
+      additionalProperties: { type: integer, minimum: 0 }
+    AuditAction:
+      type: string
+      enum:
+        - search
+        - view_card
+        - quota_reset
+        - limit_set
+        - limit_removed
+        - restrict
+        - unrestrict
+        - deletion_scheduled
+        - deletion_cancelled
+        - defaults_changed
+        - switch_changed
+        - banner_changed
+    AuditOutcome:
+      type: string
+      enum: [applied, rejected, not_applied]
+    AccountStatus:
+      type: string
+      enum: [normal, restricted, deletion_scheduled]
+      description: derived — deletion set → deletion_scheduled; else restriction set → restricted; else normal
+    SwitchName:
+      type: string
+      enum: [analysesPaused, youtubeEnabled, vocalsEnabled]
+
+    # ------------------------------------------------------------------ shared shapes
+    OriginCounts:
+      type: object
+      required: [link, file, mic, tab]
+      additionalProperties: false
+      properties:
+        link: { type: integer, minimum: 0 }
+        file: { type: integer, minimum: 0 }
+        mic: { type: integer, minimum: 0 }
+        tab: { type: integer, minimum: 0 }
+    QuotaUsage:
+      type: object
+      required: [used, limit]
+      additionalProperties: false
+      properties:
+        used: { type: integer, minimum: 0 }
+        limit: { type: integer, minimum: 1 }
+    UserQuotas:
+      type: object
+      description: same shape as `quotas` in GET /api/me; `limit` = the effective limit (personal > default)
+      required: [day, analyses, vocals, jobs]
+      additionalProperties: false
+      properties:
+        day: { $ref: "#/components/schemas/UtcDay" }
+        analyses: { $ref: "#/components/schemas/QuotaUsage" }
+        vocals: { $ref: "#/components/schemas/QuotaUsage" }
+        jobs: { $ref: "#/components/schemas/QuotaUsage" }
+    Switches:
+      type: object
+      required: [analysesPaused, youtubeEnabled, vocalsEnabled]
+      additionalProperties: false
+      properties:
+        analysesPaused: { type: boolean }
+        youtubeEnabled: { type: boolean }
+        vocalsEnabled: { type: boolean }
+    DefaultLimits:
+      type: object
+      required: [analyses, vocals, jobs, maxDurationMin, maxUploadMb]
+      additionalProperties: false
+      properties:
+        analyses: { type: integer, minimum: 1, maximum: 1000 }
+        vocals: { type: integer, minimum: 1, maximum: 150 }
+        jobs: { type: integer, minimum: 1, maximum: 4 }
+        maxDurationMin: { type: integer, minimum: 1, maximum: 120 }
+        maxUploadMb: { type: integer, minimum: 1, maximum: 512 }
+    Banner:
+      type: object
+      required: [enabled, uk, en]
+      additionalProperties: false
+      properties:
+        enabled: { type: boolean }
+        uk: { type: string, minLength: 1, maxLength: 250 }
+        en: { type: string, minLength: 1, maxLength: 250 }
+    PublicStatus:
+      type: object
+      description: |
+        NOT an HTTP response. Firestore `publicStatus/current`, public `get`, read by the site directly.
+        Field allowlist: only these three fields, ever (SAD §11).
+      required: [banner, switches, updatedAt]
+      additionalProperties: false
+      properties:
+        banner: { $ref: "#/components/schemas/Banner" }
+        switches: { $ref: "#/components/schemas/Switches" }
+        updatedAt: { type: string, format: date-time }
+
+    # ------------------------------------------------------------------ overview
+    RunningJob:
+      type: object
+      required: [id, uid, email, service, kind, origin, acceptedAt]
+      additionalProperties: false
+      properties:
+        id: { type: string, description: "JobRecord.id (secrets.token_hex(8))" }
+        uid: { $ref: "#/components/schemas/Uid" }
+        email: { type: [string, "null"], maxLength: 254 }
+        service: { type: boolean, description: the smoke-test account («службовий») }
+        kind: { $ref: "#/components/schemas/JobKind" }
+        origin: { $ref: "#/components/schemas/Origin" }
+        acceptedAt: { type: string, format: date-time }
+    Overview:
+      type: object
+      required: [day, analyses, vocals, failed, failedByReason, active, newUsers, runningJobs, switches]
+      additionalProperties: false
+      properties:
+        day: { $ref: "#/components/schemas/UtcDay" }
+        analyses: { $ref: "#/components/schemas/OriginCounts" }
+        vocals: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+        failedByReason: { $ref: "#/components/schemas/ReasonCounts" }
+        active: { type: integer, minimum: 0 }
+        newUsers: { type: integer, minimum: 0 }
+        runningJobs:
+          type: array
+          items: { $ref: "#/components/schemas/RunningJob" }
+        switches: { $ref: "#/components/schemas/Switches" }
+
+    # ------------------------------------------------------------------ users
+    UserSearchItem:
+      type: object
+      required: [uid, email, service]
+      additionalProperties: false
+      properties:
+        uid: { $ref: "#/components/schemas/Uid" }
+        email: { type: string, maxLength: 254 }
+        service: { type: boolean }
+    UserSearchResult:
+      type: object
+      required: [query, items, truncated]
+      additionalProperties: false
+      properties:
+        query: { type: string, minLength: 3, maxLength: 254 }
+        items:
+          type: array
+          maxItems: 50
+          items: { $ref: "#/components/schemas/UserSearchItem" }
+        truncated: { type: boolean, description: more than 50 matches — refine the query }
+    Restriction:
+      type: object
+      required: [reason, since, byAdminUid]
+      additionalProperties: false
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 500, description: admin-only, never sent to the user }
+        since: { type: string, format: date-time }
+        byAdminUid: { $ref: "#/components/schemas/Uid" }
+    Deletion:
+      type: object
+      required: [scheduledAt, purgeAfter, byAdminUid]
+      additionalProperties: false
+      properties:
+        scheduledAt: { type: string, format: date-time }
+        purgeAfter: { type: string, format: date-time, description: scheduledAt + 7 days }
+        byAdminUid: { $ref: "#/components/schemas/Uid" }
+    PersonalLimit:
+      type: object
+      required: [analyses, vocals, jobs, until, setAt, byAdminUid, expired]
+      additionalProperties: false
+      properties:
+        analyses: { type: [integer, "null"], minimum: 1, maximum: 1000, description: null → follows the default }
+        vocals: { type: [integer, "null"], minimum: 1, maximum: 150 }
+        jobs: { type: [integer, "null"], minimum: 1, maximum: 4 }
+        until:
+          type: [string, "null"]
+          format: date
+          description: last UTC day included; null = no end date
+        setAt: { type: string, format: date-time }
+        byAdminUid: { $ref: "#/components/schemas/Uid" }
+        expired: { type: boolean, description: "`until` < today (UTC) — card shows «завершився» (AC-15)" }
+    PersonalLimitInput:
+      type: object
+      additionalProperties: false
+      description: at least one of analyses / vocals / jobs (AC-14)
+      anyOf:
+        - required: [analyses]
+        - required: [vocals]
+        - required: [jobs]
+      properties:
+        analyses: { type: integer, minimum: 1, maximum: 1000 }
+        vocals: { type: integer, minimum: 1, maximum: 150 }
+        jobs: { type: integer, minimum: 1, maximum: 4 }
+        until:
+          type: [string, "null"]
+          format: date
+          description: last UTC day included, not before today (UTC); omitted/null = no end date
+    AccountState:
+      type: object
+      description: the admin state of one account — returned by every user action
+      required: [uid, status, restriction, deletion, personalLimit, quota]
+      additionalProperties: false
+      properties:
+        uid: { $ref: "#/components/schemas/Uid" }
+        status: { $ref: "#/components/schemas/AccountStatus" }
+        restriction:
+          oneOf:
+            - { $ref: "#/components/schemas/Restriction" }
+            - { type: "null" }
+        deletion:
+          oneOf:
+            - { $ref: "#/components/schemas/Deletion" }
+            - { type: "null" }
+        personalLimit:
+          oneOf:
+            - { $ref: "#/components/schemas/PersonalLimit" }
+            - { type: "null" }
+        quota: { $ref: "#/components/schemas/UserQuotas" }
+    UserProfile:
+      type: object
+      required: [uid, email, createdAt, lastLoginAt, service, trackCount, storageBytes]
+      additionalProperties: false
+      properties:
+        uid: { $ref: "#/components/schemas/Uid" }
+        email: { type: string, maxLength: 254 }
+        createdAt: { type: string, format: date-time }
+        lastLoginAt: { type: [string, "null"], format: date-time, description: live from Firebase Auth, not stored }
+        service: { type: boolean }
+        trackCount: { type: integer, minimum: 0, description: "count() over users/{uid}/tracks" }
+        storageBytes: { type: integer, minimum: 0, description: "sum(sizeBytes) over users/{uid}/tracks" }
+    UserCard:
+      type: object
+      required: [profile, account, recentJobs, tracks]
+      additionalProperties: false
+      properties:
+        profile: { $ref: "#/components/schemas/UserProfile" }
+        account: { $ref: "#/components/schemas/AccountState" }
+        recentJobs:
+          type: array
+          maxItems: 20
+          items: { $ref: "#/components/schemas/JobHistoryItem" }
+        tracks: { $ref: "#/components/schemas/TrackMetaPage" }
+    RestrictionInput:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 500, description: trimmed; admin-only }
+    DeletionRequest:
+      type: object
+      required: [confirmEmail]
+      additionalProperties: false
+      properties:
+        confirmEmail: { type: string, minLength: 1, maxLength: 254, description: compared case-insensitively with the user's email }
+
+    # ------------------------------------------------------------------ tracks (metadata only)
+    TrackMeta:
+      type: object
+      description: metadata only — never audio, chords, edits, notes or media URLs (AC-06)
+      required: [id, title, sourceType, createdAt, duration, edited, vocals, sizeBytes]
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        title: { type: string, maxLength: 300, description: user text — render as plain text (AC-05) }
+        sourceType: { type: string, enum: [youtube, url, file] }
+        createdAt: { type: string, format: date-time }
+        duration: { type: number, minimum: 0, description: seconds }
+        edited: { type: boolean }
+        vocals: { type: boolean, description: vocal melody transcribed }
+        sizeBytes: { type: [integer, "null"], minimum: 0, description: null until the backfill reaches the track }
+    TrackMetaPage:
+      type: object
+      required: [items, hasNext, hasPrev, nextCursor]
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items: { $ref: "#/components/schemas/TrackMeta" }
+        hasNext: { type: boolean }
+        hasPrev: { type: boolean }
+        nextCursor:
+          oneOf:
+            - { $ref: "#/components/schemas/Cursor" }
+            - { type: "null" }
+
+    # ------------------------------------------------------------------ job history
+    JobHistoryItem:
+      type: object
+      required: [id, uid, email, userDeleted, service, kind, origin, status, reason, errorText, title, acceptedAt, finishedAt]
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        uid: { $ref: "#/components/schemas/Uid" }
+        email: { type: [string, "null"], maxLength: 254, description: null when the user was purged }
+        userDeleted: { type: boolean, description: tombstone exists — UI shows «видалений» }
+        service: { type: boolean }
+        kind: { $ref: "#/components/schemas/JobKind" }
+        origin: { $ref: "#/components/schemas/Origin" }
+        status: { $ref: "#/components/schemas/HistoryStatus" }
+        reason:
+          oneOf:
+            - { $ref: "#/components/schemas/FailureReason" }
+            - { type: "null" }
+          description: set iff status = error
+        errorText: { type: [string, "null"], maxLength: 200, description: user-facing text — render as plain text }
+        title: { type: [string, "null"], maxLength: 300, description: null after purge; render as plain text }
+        acceptedAt: { type: string, format: date-time }
+        finishedAt: { type: [string, "null"], format: date-time }
+    JobHistoryPage:
+      type: object
+      required: [items, hasNext, hasPrev, nextCursor, countsByReason]
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items: { $ref: "#/components/schemas/JobHistoryItem" }
+        hasNext: { type: boolean }
+        hasPrev: { type: boolean }
+        nextCursor:
+          oneOf:
+            - { $ref: "#/components/schemas/Cursor" }
+            - { type: "null" }
+        countsByReason: { $ref: "#/components/schemas/ReasonCounts" }
+
+    # ------------------------------------------------------------------ stats
+    RestoredTracks:
+      type: object
+      required: [youtube, url, file]
+      additionalProperties: false
+      description: tracks added that day by raw `source.type` (restored days only)
+      properties:
+        youtube: { type: integer, minimum: 0 }
+        url: { type: integer, minimum: 0 }
+        file: { type: integer, minimum: 0 }
+    StatsDay:
+      type: object
+      required: [day, state, analyses, vocals, failed, failedByReason, active, newUsers, restoredTracks, frozenAt]
+      additionalProperties: false
+      properties:
+        day: { $ref: "#/components/schemas/UtcDay" }
+        state: { type: string, enum: [live, frozen, restored] }
+        analyses: { $ref: "#/components/schemas/OriginCounts" }
+        vocals: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+        failedByReason: { $ref: "#/components/schemas/ReasonCounts" }
+        active: { type: integer, minimum: 0 }
+        newUsers: { type: [integer, "null"], minimum: 0, description: computed live for today; null on restored days }
+        restoredTracks:
+          oneOf:
+            - { $ref: "#/components/schemas/RestoredTracks" }
+            - { type: "null" }
+        frozenAt: { type: [string, "null"], format: date-time }
+    StatsRange:
+      type: object
+      required: [from, to, days]
+      additionalProperties: false
+      properties:
+        from: { $ref: "#/components/schemas/UtcDay" }
+        to: { $ref: "#/components/schemas/UtcDay" }
+        days:
+          type: array
+          maxItems: 90
+          items: { $ref: "#/components/schemas/StatsDay" }
+
+    # ------------------------------------------------------------------ audit
+    AuditEntry:
+      type: object
+      required: [id, at, adminUid, adminEmail, action, outcome, targetUid, targetEmail, targetDeleted, setting, before, after, rejectReason, query, refId, redactedAt]
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        at: { type: string, format: date-time }
+        adminUid: { $ref: "#/components/schemas/Uid" }
+        adminEmail: { type: string, maxLength: 254 }
+        action: { $ref: "#/components/schemas/AuditAction" }
+        outcome: { $ref: "#/components/schemas/AuditOutcome" }
+        targetUid:
+          oneOf:
+            - { $ref: "#/components/schemas/Uid" }
+            - { type: "null" }
+        targetEmail: { type: [string, "null"], maxLength: 254, description: resolved from the email index; null when purged }
+        targetDeleted: { type: boolean }
+        setting: { type: [string, "null"], description: "limits | switches.<name> | banner" }
+        before: { type: [object, "null"], description: what was (free shape, never indexed) }
+        after: { type: [object, "null"], description: what became }
+        rejectReason: { type: [string, "null"], description: "set iff outcome = rejected — the refusal ErrorCode (self_target, deletion_pending, deletion_rate_limit, not_scheduled)" }
+        query: { type: [string, "null"], maxLength: 254, description: search string (action = search); null after purge redaction }
+        refId: { type: [string, "null"], description: "for not_applied: id of the record it completes" }
+        redactedAt: { type: [string, "null"], format: date-time }
+    AuditPage:
+      type: object
+      required: [items, hasNext, hasPrev, nextCursor]
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items: { $ref: "#/components/schemas/AuditEntry" }
+        hasNext: { type: boolean }
+        hasPrev: { type: boolean }
+        nextCursor:
+          oneOf:
+            - { $ref: "#/components/schemas/Cursor" }
+            - { type: "null" }
+
+    # ------------------------------------------------------------------ settings
+    Settings:
+      type: object
+      required: [limits, switches, banner, updatedAt, updatedBy]
+      additionalProperties: false
+      properties:
+        limits: { $ref: "#/components/schemas/DefaultLimits" }
+        switches: { $ref: "#/components/schemas/Switches" }
+        banner: { $ref: "#/components/schemas/Banner" }
+        updatedAt: { type: string, format: date-time }
+        updatedBy:
+          oneOf:
+            - { $ref: "#/components/schemas/Uid" }
+            - { type: "null" }
+    SwitchChange:
+      type: object
+      required: [value]
+      additionalProperties: false
+      properties:
+        value: { type: boolean, description: "new value of the switch (analysesPaused: true = paused)" }
+
+    # ------------------------------------------------------------------ internal
+    SweepRun:
+      type: object
+      required: [slot, state, steps, startedAt, finishedAt]
+      additionalProperties: false
+      properties:
+        slot: { type: string, pattern: "^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}Z|-wake)$" }
+        state: { type: string, enum: [running, done, failed] }
+        steps:
+          type: object
+          additionalProperties: { type: string, enum: [done] }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: [string, "null"], format: date-time }
+
+    # ------------------------------------------------------------------ jobs delta
+    StorageJobRequestDelta:
+      type: object
+      description: existing StorageJobRequest + the new optional `origin`
+      required: [path]
+      properties:
+        path: { type: string, minLength: 1, maxLength: 1024 }
+        title: { type: [string, "null"], maxLength: 300 }
+        source: { type: [object, "null"], description: "unchanged — StorageSource {type: youtube | file, ...}" }
+        startOffset: { type: [number, "null"], minimum: 0, maximum: 86400 }
+        options: { type: [object, "null"], description: unchanged — AnalysisOptions }
+        origin: { $ref: "#/components/schemas/UploadOrigin" }

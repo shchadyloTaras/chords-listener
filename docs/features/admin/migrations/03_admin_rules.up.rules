@@ -1,0 +1,194 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// This security rules file assumes the following data structures:
+//
+// Collection: users
+// Document ID: Firebase Auth uid of the owner
+// Fields:
+//   - email: string (required, <= 254 chars, must equal request.auth.token.email;
+//       the format check is loose on purpose: Firebase Auth already validated it)
+//       - the owner's sign-in email; re-written on every update to stay in sync
+//   - createdAt: timestamp (required, == request.time on create, immutable)
+//   - updatedAt: timestamp (required, == request.time on every create/update)
+//   - settings: map (required, exactly these 11 keys) - synced UI preferences
+//       - simplify: bool
+//       - accidentals: string, one of 'auto' | 'sharp' | 'flat'
+//       - instrument: string, one of 'guitar' | 'bass' | 'ukulele' | 'piano' | 'harmonium' | 'handpan'
+//       - view: string, one of 'sheet' | 'timeline' | 'score'
+//       - barsPerLine: int, one of 2 | 4 | 8
+//       - follow: bool
+//       - showDiagrams: bool
+//       - copyFormat: string, one of 'bars' | 'timestamps' | 'chordpro' | 'unique'
+//       - theme: string, one of 'dark' | 'light' | 'system'
+//       - lang: string, one of 'uk' | 'en'
+//       - showVideo: bool
+//
+// Collection: users/{uid}/tracks - the published library index (docs/CLOUD.md → Library in Firestore)
+// Document ID: the track id (6-64 lowercase hex characters)
+// Fields (written only by the API's service account, which bypasses these rules; clients never write):
+//   - the TrackSummary fields of GET /api/tracks: id, title, artist, duration, thumbnail, source, key,
+//       tempo, chordCount, edited, vocals, stems, createdAt (ISO string)
+//   - version: int - grows with every change of the track; a copy kept on a device is valid while it and
+//       createdAt are equal (a track deleted and added again starts at version 1 again)
+//   - publishedAt: timestamp
+//   - sizeBytes: int - bytes of the track on the server (admin card: storage used); clients ignore it
+//   The fields are not validated here: nobody but the service account can write them.
+//
+// Collection: publicStatus, document: current - the public service status (docs/features/admin/data-model.md)
+// Fields (written only by the API's service account):
+//   - banner: map { enabled: bool, uk: string, en: string } - the maintenance banner
+//   - switches: map { analysesPaused: bool, youtubeEnabled: bool, vocalsEnabled: bool }
+//   - updatedAt: timestamp
+//   Nothing else ever goes here (no limits, no uids, no emails): everyone, guests included, can read it.
+//
+// Admin collections (docs/features/admin/data-model.md): adminAccounts, adminTombstones, adminJobs,
+// adminStats (+ activeUsers), adminAudit, adminEmailIndex, adminConfig, adminAllowlist, adminSweeps.
+// They hold other users' emails, restriction reasons and the audit log: the admin UI reads them only
+// through the server (service account), and adminAllowlist is written only by the owner's script with
+// the owner's own credentials. No client may read or write any of them.
+//
+// Access patterns:
+//   - frontend/src/lib/settingsSync.ts: onSnapshot on users/{own uid} only; no collection queries;
+//       setDoc on first sign-in, updateDoc({ email, settings, updatedAt }) afterwards
+//   - frontend/src/lib/cloud/library.ts: onSnapshot on the query collection(users/{own uid}/tracks)
+//       ordered by createdAt, newest first; read-only
+//   - frontend/src/lib/serviceStatus.ts: getDoc(publicStatus/current) at most once per 5 minutes; read-only
+//
+// users/{uid} contains PII (email), so only its owner may read it; users/{uid}/tracks is the owner's
+// library, so only the owner may read it, and nobody can write it from a client.
+// Any other path (including collection-group queries over every user's tracks) is denied.
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    function isValidEmail(email) {
+      return email is string &&
+        email.size() <= 254 &&
+        email.matches("^[^@\\s]+@[^@\\s]+$");
+    }
+
+    // ===============================================================
+    // Domain Validators (used by both create and update)
+    // ===============================================================
+
+    function isValidSettings(s) {
+      let keys = ['simplify', 'accidentals', 'instrument', 'view', 'barsPerLine', 'follow',
+                  'showDiagrams', 'copyFormat', 'theme', 'lang', 'showVideo'];
+      return s is map &&
+        s.keys().hasAll(keys) &&
+        s.keys().hasOnly(keys) &&
+        s.simplify is bool &&
+        s.accidentals in ['auto', 'sharp', 'flat'] &&
+        s.instrument in ['guitar', 'bass', 'ukulele', 'piano', 'harmonium', 'handpan'] &&
+        s.view in ['sheet', 'timeline', 'score'] &&
+        s.barsPerLine is int && s.barsPerLine in [2, 4, 8] &&
+        s.follow is bool &&
+        s.showDiagrams is bool &&
+        s.copyFormat in ['bars', 'timestamps', 'chordpro', 'unique'] &&
+        s.theme in ['dark', 'light', 'system'] &&
+        s.lang in ['uk', 'en'] &&
+        s.showVideo is bool;
+    }
+
+    // Shape + identity checks that must hold after every create and update.
+    function isValidUser(data) {
+      let fields = ['email', 'createdAt', 'updatedAt', 'settings'];
+      return hasRequiredFields(fields) &&
+        hasOnlyAllowedFields(fields) &&
+        isValidEmail(data.email) &&
+        data.email == request.auth.token.email &&
+        data.createdAt is timestamp &&
+        data.updatedAt == request.time &&
+        isValidSettings(data.settings);
+    }
+
+    // ===============================================================
+    // users/{userId} - private profile + synced preferences
+    // ===============================================================
+
+    match /users/{userId} {
+      // Owner-only; collection queries can never be proven to match, so they are denied.
+      allow read: if isOwner(userId);
+
+      allow create: if isOwner(userId) &&
+        isValidUser(request.resource.data) &&
+        request.resource.data.createdAt == request.time;
+
+      allow update: if isOwner(userId) &&
+        isValidUser(request.resource.data) &&
+        areImmutableFieldsUnchanged(['createdAt']);
+
+      allow delete: if isOwner(userId);
+    }
+
+    // ===============================================================
+    // users/{userId}/tracks/{trackId} - the published library index
+    // ===============================================================
+
+    match /users/{userId}/tracks/{trackId} {
+      // Written by the API's service account (it bypasses rules). The owner may get one document and
+      // list their own collection; the same isOwner(userId) holds for every document such a query can
+      // match, so it is allowed. Collection-group queries have no rule and stay denied.
+      allow read: if isOwner(userId);
+      allow write: if false;
+    }
+
+    // ===============================================================
+    // publicStatus/current - maintenance banner + service switches
+    // ===============================================================
+
+    match /publicStatus/{docId} {
+      // One public document; a single get, never a listing. Written only by the service account.
+      allow get: if docId == 'current';
+      allow list, write: if false;
+    }
+
+    // ===============================================================
+    // Admin collections - server only
+    // ===============================================================
+
+    // Spelled out (default deny would also cover them) so that a later broad rule can't open them by
+    // accident; firestore.rules.test.mjs asserts every one of them is denied to owners and strangers.
+    match /adminAccounts/{doc=**}   { allow read, write: if false; }
+    match /adminTombstones/{doc=**} { allow read, write: if false; }
+    match /adminJobs/{doc=**}       { allow read, write: if false; }
+    match /adminStats/{doc=**}      { allow read, write: if false; }
+    match /adminAudit/{doc=**}      { allow read, write: if false; }
+    match /adminEmailIndex/{doc=**} { allow read, write: if false; }
+    match /adminConfig/{doc=**}     { allow read, write: if false; }
+    match /adminAllowlist/{doc=**}  { allow read, write: if false; }
+    match /adminSweeps/{doc=**}     { allow read, write: if false; }
+
+    // Everything else stays locked (default deny).
+  }
+}
