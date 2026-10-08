@@ -25,55 +25,65 @@ export function windRegister(spec: WindSpec, midi: number): number {
   return 1 + spec.registers.filter((r) => midi >= r).length
 }
 
-/**
- * Pitch classes in the order they are played, rising: root, third (or the sus note), fifth, then
- * the seventh / sixth / ninth; a triad closes on the root an octave up, a chord with five notes
- * leaves out its fifth (as players do). A slash bass starts the line: a chord tone in the bass turns
- * it into an inversion (C/E: E G C E), any other bass note goes under the root (Am/G: G A C E).
- */
-export function arpeggioClasses(label: string): { pcs: number[]; bassFirst: boolean } | null {
-  const p = parseChord(label)
-  if (!p) return null
-  let intervals = [...QUALITY_INTERVALS[p.quality]]
-  if (intervals.length > MAX_ARPEGGIO) intervals = intervals.filter((i) => i !== 7)
-  const chord = intervals.map((i) => mod12(p.rootPc + i))
-  if (p.bassPc == null || p.bassPc === p.rootPc) {
-    if (chord.length < MAX_ARPEGGIO) chord.push(chord[0])
-    return { pcs: chord.slice(0, MAX_ARPEGGIO), bassFirst: false }
-  }
-  const at = chord.indexOf(p.bassPc)
-  if (at >= 0) {
-    const inversion = [...chord.slice(at), ...chord.slice(0, at)]
-    if (inversion.length < MAX_ARPEGGIO) inversion.push(inversion[0])
-    return { pcs: inversion.slice(0, MAX_ARPEGGIO), bassFirst: true }
-  }
-  return { pcs: [p.bassPc, ...chord].slice(0, MAX_ARPEGGIO), bassFirst: true }
+/** How much a chord tone matters when one has to go: root, third / sus note, 7th / 6th, 9th, fifth. */
+function rank(interval: number): number {
+  if (interval === 0) return 0
+  if (interval <= 5) return 1
+  if (interval >= 9 && interval <= 11) return 2
+  if (interval >= 12) return 3
+  return 4
 }
 
 /**
- * The chord's arpeggio on the instrument: the first note at or above the spec's startLow, each next
- * one the nearest above it — moved down an octave when it would run past the top of the range,
- * notes the instrument still cannot reach left out. Empty for "N" / unknown labels.
+ * The line a chord is played as: its first pitch class and each note's distance above the first
+ * (semitones), rising. Root, third (or the sus note), fifth, then the seventh / sixth / ninth; a
+ * triad closes on the root an octave up, a chord with five notes leaves out its fifth (as players
+ * do). A slash bass starts the line and the chord's other notes follow in close position above it,
+ * the least important left out past four (C/E: E G C E, Am/G: G A C E, Cadd9/E: E G C D).
+ */
+export function arpeggioLine(label: string): { first: number; steps: number[]; bassFirst: boolean } | null {
+  const p = parseChord(label)
+  if (!p) return null
+  const all = QUALITY_INTERVALS[p.quality]
+  if (p.bassPc == null || p.bassPc === p.rootPc) {
+    const steps = all.length > MAX_ARPEGGIO ? all.filter((i) => rank(i) < 4) : [...all]
+    if (steps.length < MAX_ARPEGGIO) steps.push(12)
+    return { first: p.rootPc, steps: steps.slice(0, MAX_ARPEGGIO), bassFirst: false }
+  }
+  const bass = p.bassPc
+  const others = [...all]
+    .sort((a, b) => rank(a) - rank(b))
+    .map((i) => mod12(p.rootPc + i))
+    .filter((pc, i, pcs) => pc !== bass && pcs.indexOf(pc) === i)
+    .slice(0, MAX_ARPEGGIO - 1)
+  const steps = [0, ...others.map((pc) => mod12(pc - bass)).sort((a, b) => a - b)]
+  if (steps.length < MAX_ARPEGGIO) steps.push(12)
+  return { first: bass, steps, bassFirst: true }
+}
+
+/**
+ * The chord's arpeggio on the instrument: the first note the lowest of its pitch class at or above
+ * the spec's startLow, the line rising from it — moved down an octave when it would run past the top
+ * of the range, else its highest notes folded down an octave into the line. Empty for "N" / unknown
+ * labels.
  */
 export function windArpeggio(spec: WindSpec, label: string): WindNote[] {
   const p = parseChord(label)
-  const order = arpeggioClasses(label)
-  if (!p || !order) return []
+  const line = arpeggioLine(label)
+  if (!p || !line) return []
   const { low, high } = windRange(spec)
-  const midis: number[] = []
-  for (const pc of order.pcs) {
-    const prev = midis[midis.length - 1]
-    const from = prev == null ? spec.startLow : prev + 1
-    midis.push(from + mod12(pc - from))
-  }
-  if (midis[midis.length - 1] > high && midis[0] - 12 >= low) for (let i = 0; i < midis.length; i++) midis[i] -= 12
-  const playable = midis.filter((m) => m >= low && m <= high && spec.fingerings[m] != null)
-  const spelled = spellNotes(p, playable)
-  return playable.map((midi, i) => ({
+  const start = spec.startLow + mod12(line.first - spec.startLow)
+  let midis = line.steps.map((s) => start + s)
+  if (midis[midis.length - 1] > high && midis[0] - 12 >= low) midis = midis.map((m) => m - 12)
+  midis = [...new Set(midis.map((m) => (m > high ? m - 12 * Math.ceil((m - high) / 12) : m)))]
+    .filter((m) => m >= low && spec.fingerings[m] != null)
+    .sort((a, b) => a - b)
+  const spelled = spellNotes(p, midis)
+  return midis.map((midi, i) => ({
     midi,
     name: spelled[i].name,
     octave: spelled[i].octave,
-    role: i === 0 && order.bassFirst ? 'bass' : mod12(midi) === p.rootPc ? 'root' : 'tone',
+    role: i === 0 && line.bassFirst ? 'bass' : mod12(midi) === p.rootPc ? 'root' : 'tone',
     register: windRegister(spec, midi),
     cover: parseCover(spec.fingerings[midi]),
   }))

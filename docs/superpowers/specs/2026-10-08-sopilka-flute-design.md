@@ -19,9 +19,12 @@ with the fingering of every note.
 ## Arpeggio rules (`src/lib/wind/arpeggio.ts`)
 
 Root, third / sus note, fifth, then 7th / 6th / 9th; a triad closes on the octave (1-3-5-8); five-note
-chords drop the fifth; a slash bass starts the line (inversion, or the bass under the root). First note at
-or above the instrument's `startLow`, each next one the nearest above; past the top → down an octave, or
-drop what is still out of reach. Spelled by chord degree.
+chords drop the fifth; a slash bass starts the line with the chord in close position above it (the fifth,
+then the 9th, left out past four notes). First note at or above the instrument's `startLow`; past the top
+→ the line down an octave, else its top notes folded down an octave. Spelled by chord degree. (The first
+version rotated the chord for inversions and dropped what ran past the top: some sopilka slash chords
+kept two notes, `Cadd9/E` lost its root — found in review, fixed, and every root × quality × bass is now
+tested.)
 
 ## Research (subagents, 2026-10-08)
 

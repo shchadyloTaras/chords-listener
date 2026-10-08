@@ -5,7 +5,7 @@ import { SOPILKA } from './sopilka'
 import type { WindInstrument, WindNote, WindSpec } from './types'
 
 export * from './types'
-export { arpeggioClasses, MAX_ARPEGGIO, parseCover, windArpeggio, windRange, windRegister } from './arpeggio'
+export { arpeggioLine, MAX_ARPEGGIO, parseCover, windArpeggio, windRange, windRegister } from './arpeggio'
 export { FLUTE } from './flute'
 export { SOPILKA } from './sopilka'
 

@@ -1,23 +1,27 @@
 import { describe, expect, it } from 'vitest'
+import { parseChord } from '../music/chord'
 import { accompanySteps, WIND_BREATH } from '../sound/accompany'
 import { WIND_LAST_HOLD, WIND_STEP, windChordNotes, windNote } from '../sound/chordNotes'
-import { arpeggioClasses, FLUTE, parseCover, SOPILKA, windArpeggio, windChord, windRange, WIND_SPECS, type WindSpec } from '.'
+import { arpeggioLine, FLUTE, parseCover, SOPILKA, windArpeggio, windChord, windRange, WIND_SPECS, type WindSpec } from '.'
 
 const names = (spec: WindSpec, label: string) => windArpeggio(spec, label).map((n) => `${n.name}${n.octave}`)
 
 describe('wind arpeggio', () => {
   it('rises root, third, fifth and closes a triad on the root an octave up', () => {
-    expect(arpeggioClasses('C')!.pcs).toEqual([0, 4, 7, 0])
-    expect(arpeggioClasses('Am')!.pcs).toEqual([9, 0, 4, 9])
-    expect(arpeggioClasses('G7')!.pcs).toEqual([7, 11, 2, 5])
+    expect(arpeggioLine('C')).toEqual({ first: 0, steps: [0, 4, 7, 12], bassFirst: false })
+    expect(arpeggioLine('Am')!.steps).toEqual([0, 3, 7, 12])
+    expect(arpeggioLine('G7')).toEqual({ first: 7, steps: [0, 4, 7, 10], bassFirst: false })
     // five notes: the fifth is left out
-    expect(arpeggioClasses('C9')!.pcs).toEqual([0, 4, 10, 2])
+    expect(arpeggioLine('C9')!.steps).toEqual([0, 4, 10, 14])
   })
 
-  it('starts a slash chord on its bass: an inversion, or a bass note under the root', () => {
-    expect(arpeggioClasses('C/E')).toEqual({ pcs: [4, 7, 0, 4], bassFirst: true })
-    expect(arpeggioClasses('Am/G')).toEqual({ pcs: [7, 9, 0, 4], bassFirst: true })
-    expect(arpeggioClasses('N')).toBeNull()
+  it('starts a slash chord on its bass, the chord in close position above it', () => {
+    expect(arpeggioLine('C/E')).toEqual({ first: 4, steps: [0, 3, 8, 12], bassFirst: true })
+    expect(arpeggioLine('Am/G')).toEqual({ first: 7, steps: [0, 2, 5, 9], bassFirst: true })
+    // the root stays; the fifth goes first, then the 9th
+    expect(arpeggioLine('Cadd9/E')).toEqual({ first: 4, steps: [0, 3, 8, 10], bassFirst: true })
+    expect(arpeggioLine('C9/G')).toEqual({ first: 7, steps: [0, 3, 5, 9], bassFirst: true })
+    expect(arpeggioLine('N')).toBeNull()
   })
 
   it('spells the notes like the chord and gives every note its fingering', () => {
@@ -28,25 +32,33 @@ describe('wind arpeggio', () => {
     expect(notes.map((n) => n.role)).toEqual(['root', 'tone', 'tone', 'root'])
     for (const n of notes) expect(n.cover).toHaveLength(FLUTE.keys.length)
     expect(windArpeggio(FLUTE, 'C/E')[0].role).toBe('bass')
+    expect(names(SOPILKA, 'A/B')).toEqual(['B5', 'C#6', 'E6', 'A6'])
+    expect(names(SOPILKA, 'Cadd9/E')).toEqual(['E5', 'G5', 'C6', 'D6'])
+    // past the top of the sopilka: the highest note folds down an octave
+    expect(names(SOPILKA, 'B9')).toEqual(['B5', 'C#6', 'D#6', 'A6'])
     expect(windArpeggio(FLUTE, 'N')).toEqual([])
   })
 
-  it('keeps every arpeggio of every chord on both instruments inside the range', () => {
+  it('keeps every arpeggio of every chord and slash chord on both instruments in range, with its root', () => {
     const roots = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B']
     const suffixes = ['', 'm', '7', 'maj7', 'm7', 'dim', 'aug', 'sus2', 'sus4', 'dim7', 'm7b5', '6', 'm6', '9', 'add9']
     for (const spec of [FLUTE, SOPILKA]) {
       const { low, high } = windRange(spec)
       for (const r of roots)
-        for (const s of suffixes) {
-          const notes = windArpeggio(spec, r + s)
-          expect(notes.length, `${spec.instrument} ${r}${s}`).toBeGreaterThanOrEqual(3)
-          for (const n of notes) {
-            expect(n.midi).toBeGreaterThanOrEqual(low)
-            expect(n.midi).toBeLessThanOrEqual(high)
+        for (const s of suffixes)
+          for (const bass of ['', ...roots.map((b) => `/${b}`)]) {
+            const label = r + s + bass
+            const notes = windArpeggio(spec, label)
+            const at = `${spec.instrument} ${label}`
+            expect(notes.length, at).toBeGreaterThanOrEqual(3)
+            expect(notes.some((n) => n.midi % 12 === parseChord(label)!.rootPc), at).toBe(true)
+            for (const n of notes) {
+              expect(n.midi, at).toBeGreaterThanOrEqual(low)
+              expect(n.midi, at).toBeLessThanOrEqual(spec === FLUTE ? 87 : high)
+            }
+            // rising
+            for (let i = 1; i < notes.length; i++) expect(notes[i].midi, at).toBeGreaterThan(notes[i - 1].midi)
           }
-          // rising
-          for (let i = 1; i < notes.length; i++) expect(notes[i].midi).toBeGreaterThan(notes[i - 1].midi)
-        }
     }
   })
 
