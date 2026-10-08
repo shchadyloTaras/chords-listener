@@ -527,6 +527,42 @@ def test_the_limit_parameter_shortens_the_page_and_the_cursor_continues_it(world
     assert w.get("/api/admin/users/u1/tracks", params={"limit": 0}).status_code == 422
 
 
+def _first_cursor(page: dict) -> str:
+    item = page["items"][0]
+    return encode_cursor(item["createdAt"].replace("+00:00", "Z"), item["id"])
+
+
+def test_the_before_cursor_goes_back_to_the_newer_songs(world) -> None:
+    w = world()
+    seeded_card(w, n_tracks=7)
+    first = w.get("/api/admin/users/u1/tracks", params={"limit": 3}).json()
+    second = w.get("/api/admin/users/u1/tracks", params={"limit": 3, "after": first["nextCursor"]}).json()
+    back = w.get("/api/admin/users/u1/tracks", params={"limit": 2, "before": _first_cursor(second)})
+    assert back.status_code == 200
+    back = back.json()
+    assert [t["id"] for t in back["items"]] == [f"{i:012x}" for i in (5, 4)]
+    assert back["hasPrev"] is True and back["hasNext"] is True
+    assert back["nextCursor"] is not None
+    last = w.get("/api/admin/users/u1/tracks", params={"limit": 3, "before": _first_cursor(second)}).json()
+    assert [t["id"] for t in last["items"]] == [t["id"] for t in first["items"]]
+    assert last["hasPrev"] is False and last["hasNext"] is True
+
+
+def test_after_and_before_together_are_an_invalid_value(world) -> None:
+    w = world()
+    seeded_card(w, n_tracks=3)
+    cur = encode_cursor("2026-10-01T00:00:00Z", "t1")
+    res = w.get("/api/admin/users/u1/tracks", params={"after": cur, "before": cur})
+    assert res.status_code == 422 and res.json()["code"] == "invalid_value"
+
+
+def test_search_is_not_truncated_at_exactly_fifty_matches(world) -> None:
+    w = world()
+    w.db.put(*[make_user(f"ex-{i:03d}", f"exact-{i:03d}@example.test") for i in range(50)])
+    body = w.get("/api/admin/users", params={"q": "exact-"}).json()
+    assert len(body["items"]) == 50 and body["truncated"] is False
+
+
 def test_songs_with_the_same_date_are_neither_skipped_nor_repeated_across_pages(world) -> None:
     w = world()
     w.db.put(make_user("u1", "ivan@example.test"))

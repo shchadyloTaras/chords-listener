@@ -138,7 +138,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "422":
-          description: query shorter than 3 characters (AC-04) — not journaled
+          description: query shorter than 3 characters (AC-04, `query_too_short`) or longer than 254 (`invalid_value`) — not journaled
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -252,6 +252,7 @@ paths:
                 nextCursor: null
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFoundOrUnknownUser" }
+        "422": { $ref: "#/components/responses/InvalidValue" }   # a cursor the server did not make; `after` with `before`
 
   /api/admin/jobs:
     get:
@@ -431,6 +432,7 @@ paths:
                 nextCursor: null
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/InvalidValue" }   # a cursor the server did not make; `after` with `before`
 
   # ===================================================================== Stage 2 — user actions
 

@@ -101,8 +101,8 @@ class Directory:
 
     # ----------------------------------------------------------------------- public
 
-    def search(self, query: str) -> list[Match]:
-        """Users whose email contains ``query`` (trimmed, case-insensitive), ordered by email, at most 50.
+    def search(self, query: str, limit: int = MAX_RESULTS) -> list[Match]:
+        """Users whose email contains ``query`` (trimmed, case-insensitive), ordered by email, at most ``limit`` (50).
         A query shorter than 3 characters raises ``ValueError`` before anything is read."""
         needle = query.strip().lower()
         if len(needle) < MIN_QUERY_LENGTH:
@@ -113,7 +113,7 @@ class Directory:
             assert self._shards is not None
             hits = [Match(uid, email) for s in self._shards.values() for uid, email in s.entries.items() if needle in email]
         hits.sort(key=lambda m: (m.email, m.uid))
-        return hits[:MAX_RESULTS]
+        return hits[:limit]
 
     def catch_up(self) -> int:
         """Fold in the users registered since the index's cursor; returns how many were added or updated.

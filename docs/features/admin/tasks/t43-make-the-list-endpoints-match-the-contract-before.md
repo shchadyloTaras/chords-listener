@@ -8,7 +8,7 @@ files_hint: ["backend/app/admin/router.py", "backend/app/admin/directory.py", "c
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 9 — review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T43 — Make the list endpoints match the contract: before cursor, truncated, 422 cases
@@ -19,4 +19,4 @@ status: "todo"
 
 **Review S1-10, S1-11, S1-12. Tests show listUserTracks honours `before`, truncated is true only when more than 50 match, and invalid track/audit cursors and q > 254 return the contract's error (or the contract lists the 422).**
 
-- [ ] lint + type-check clean (ruff / oxlint + tsc)
+- [x] lint + type-check clean (ruff / oxlint + tsc)

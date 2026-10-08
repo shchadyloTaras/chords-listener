@@ -388,14 +388,25 @@ def _track_meta(doc: Document) -> TrackMeta:
     )
 
 
-def _track_page(svc: AdminServices, uid: str, after: Optional[str], limit: int) -> TrackMetaPage:
-    """``limit`` songs newest first, after the song the cursor names. One extra song is read to know whether another
-    page follows."""
-    start: Optional[Document] = None
-    if after:
-        created, track_id = _track_position(after)
-        start = Document(f"{USERS}/{uid}/tracks/{track_id}", {"createdAt": created})
-    docs = svc.db.run_query(f"{USERS}/{uid}/tracks", order_by=["-createdAt"], limit=limit + 1, start_after=start)
+def _track_page(svc: AdminServices, uid: str, after: Optional[str], limit: int, before: Optional[str] = None) -> TrackMetaPage:
+    """``limit`` songs newest first, after the song ``after`` names, or (going back) the ones just newer than the song
+    ``before`` names. One extra song is read to know whether another page follows."""
+    collection = f"{USERS}/{uid}/tracks"
+
+    def position(cursor: str) -> Document:
+        created, track_id = _track_position(cursor)
+        return Document(f"{collection}/{track_id}", {"createdAt": created})
+
+    if before:
+        docs = svc.db.run_query(collection, order_by=["createdAt"], limit=limit + 1, start_after=position(before))
+        has_prev = len(docs) > limit
+        docs = docs[:limit][::-1]
+        return TrackMetaPage(
+            items=[_track_meta(d) for d in docs], has_next=True, has_prev=has_prev,
+            next_cursor=_track_cursor(docs[-1]) if docs else None,
+        )
+    docs = svc.db.run_query(collection, order_by=["-createdAt"], limit=limit + 1,
+                            start_after=position(after) if after else None)
     has_next = len(docs) > limit
     docs = docs[:limit]
     return TrackMetaPage(
@@ -486,15 +497,15 @@ def search_users(request: Request, q: str = Query("", max_length=MAX_EMAIL_CHARS
         raise _invalid("q", f"Must be at most {MAX_EMAIL_CHARS} characters")
     svc = get_services(request.app)
     admin_uid = current_admin_uid(request)
-    hits = svc.directory.search(needle)
+    hits = svc.directory.search(needle, limit=MAX_RESULTS + 1)
     svc.audit.record_view(AuditEntry(
         action="search", admin_uid=admin_uid, admin_email=_admin_email(svc, admin_uid),
-        query=needle, matched_uids=[m.uid for m in hits],
+        query=needle, matched_uids=[m.uid for m in hits[:MAX_RESULTS]],
     ))
     return UserSearchResult(
         query=needle,
-        items=[UserSearchItem(uid=m.uid, email=m.email, service=stats.is_service(m.uid)) for m in hits],
-        truncated=len(hits) >= MAX_RESULTS,       # the directory stops at 50: a full list may have more behind it
+        items=[UserSearchItem(uid=m.uid, email=m.email, service=stats.is_service(m.uid)) for m in hits[:MAX_RESULTS]],
+        truncated=len(hits) > MAX_RESULTS,        # the directory hands back 51 at most: a 51st match means more behind
     )
 
 
@@ -532,14 +543,17 @@ def list_user_tracks(
     uid: str,
     request: Request,
     after: Optional[str] = Query(None, max_length=512),
+    before: Optional[str] = Query(None, max_length=512),
     limit: int = Query(PAGE_SIZE, ge=1, le=PAGE_SIZE),
 ) -> Any:
     """The next pages of a user's songs, 50 at a time, newest first. Not journaled again: the card view that leads to
     them is (api-sync-report notes)."""
+    if after is not None and before is not None:
+        raise _invalid("before", "use either after or before, not both")
     svc = get_services(request.app)
     if _live_user(svc, uid) is None:
         _refuse("not_found", "User not found")
-    return _track_page(svc, uid, after, limit)
+    return _track_page(svc, uid, after, limit, before)
 
 
 # --------------------------------------------------------------------------- the period rule (T04, AC-09)
