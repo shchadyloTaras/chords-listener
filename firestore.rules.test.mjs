@@ -10,6 +10,7 @@
 // emulator's admin bearer token ("owner") bypasses the rules.
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { after, before, describe, test } from 'node:test'
 
 const PROJECT = 'build-chords-listener'
@@ -381,5 +382,196 @@ describe('users/{uid}/tracks/{trackId} (the published library index)', () => {
   test('other subcollections under the user stay denied', async () => {
     const res = await fetch(`${DOCS}/users/${alice.uid}/publish-pending/x`, { headers: authHeader(alice) })
     assert.equal(res.status, DENIED)
+  })
+})
+
+// ---- public service status + admin collections (docs/features/admin, migrations 02 and 03) ----
+
+const STATUS_FIELDS = {
+  banner: { enabled: true, uk: 'Технічні роботи', en: 'Maintenance' },
+  switches: { analysesPaused: false, youtubeEnabled: true, vocalsEnabled: true },
+  updatedAt: new Date('2026-10-05T10:00:00Z'),
+}
+
+/** Seeds any document the way the API's service account does (admin token, rules bypassed). */
+async function seedDoc(path, fields) {
+  const res = await fetch(`${DOCS}/${path}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer owner' },
+    body: JSON.stringify({ fields: encodeFields(fields) }),
+  })
+  assert.equal(res.status, 200, `seed ${path}`)
+}
+
+async function getDoc(user, path) {
+  const res = await fetch(`${DOCS}/${path}`, { headers: authHeader(user) })
+  return res.status
+}
+
+async function queryDocs(user, from) {
+  const res = await fetch(`${DOCS}:runQuery`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader(user) },
+    body: JSON.stringify({ structuredQuery: { from: [from] } }),
+  })
+  return res.status
+}
+
+async function putDoc(user, path, fields, exists) {
+  const w = { update: { name: `projects/${PROJECT}/databases/(default)/documents/${path}`, fields: encodeFields(fields) } }
+  if (exists !== undefined) w.currentDocument = { exists }
+  const res = await fetch(`${DOCS}:commit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader(user) },
+    body: JSON.stringify({ writes: [w] }),
+  })
+  return res.status
+}
+
+async function deleteDoc(user, path) {
+  const res = await fetch(`${DOCS}/${path}`, { method: 'DELETE', headers: authHeader(user) })
+  return res.status
+}
+
+describe('publicStatus/current (the public service status, AC-29)', () => {
+  let alice
+
+  before(async () => {
+    await clearEmulators()
+    alice = await createUser()
+    await seedDoc('publicStatus/current', STATUS_FIELDS)
+  })
+
+  after(clearEmulators)
+
+  test('a signed-out visitor reads it', async () => {
+    assert.equal(await getDoc(null, 'publicStatus/current'), OK)
+  })
+
+  test('a signed-in user reads it', async () => {
+    assert.equal(await getDoc(alice, 'publicStatus/current'), OK)
+  })
+
+  test('the collection cannot be listed and no other document in it can be read', async () => {
+    assert.equal(await queryDocs(null, { collectionId: 'publicStatus' }), DENIED)
+    assert.equal(await queryDocs(alice, { collectionId: 'publicStatus' }), DENIED)
+    await seedDoc('publicStatus/other', { x: 1 })
+    assert.equal(await getDoc(null, 'publicStatus/other'), DENIED)
+  })
+
+  test('nobody writes it from a client: not a guest, not a signed-in user', async () => {
+    assert.equal(await putDoc(null, 'publicStatus/current', STATUS_FIELDS), DENIED)
+    assert.equal(await putDoc(alice, 'publicStatus/current', STATUS_FIELDS), DENIED)
+    assert.equal(await putDoc(alice, 'publicStatus/current', { banner: { enabled: false } }, true), DENIED)
+    assert.equal(await deleteDoc(null, 'publicStatus/current'), DENIED)
+    assert.equal(await deleteDoc(alice, 'publicStatus/current'), DENIED)
+  })
+})
+
+describe('admin collections are server-only (AC-11, AC-31)', () => {
+  const COLLECTIONS = [
+    'adminAccounts',
+    'adminAudit',
+    'adminJobs',
+    'adminStats',
+    'adminConfig',
+    'adminAllowlist',
+    'adminEmailIndex',
+    'adminTombstones',
+    'adminSweeps',
+  ]
+  let alice
+  let stranger
+
+  before(async () => {
+    await clearEmulators()
+    alice = await createUser()
+    stranger = await createUser()
+    for (const name of COLLECTIONS) {
+      await seedDoc(`${name}/${alice.uid}`, { uid: alice.uid, note: 'seeded by the service account' })
+    }
+    await seedDoc('adminStats/daily/days/2026-10-05', { jobs: 1 })
+  })
+
+  after(clearEmulators)
+
+  for (const name of COLLECTIONS) {
+    test(`${name}: denied to the owner of the uid, to a stranger and to a guest`, async () => {
+      const path = `${name}/${alice.uid}`
+      for (const who of [alice, stranger, null]) {
+        assert.equal(await getDoc(who, path), DENIED, `get ${path}`)
+        assert.equal(await queryDocs(who, { collectionId: name }), DENIED, `list ${name}`)
+        assert.equal(await putDoc(who, path, { uid: alice.uid, note: 'client write' }), DENIED, `set ${path}`)
+        assert.equal(await putDoc(who, `${name}/new-doc`, { note: 'client create' }, false), DENIED, `create ${name}`)
+        assert.equal(await deleteDoc(who, path), DENIED, `delete ${path}`)
+      }
+    })
+  }
+
+  test('adminAudit is append-only for clients: no create, update or delete (AC-11)', async () => {
+    assert.equal(await putDoc(alice, 'adminAudit/entry-1', { action: 'quota.reset' }, false), DENIED)
+    assert.equal(await putDoc(alice, `adminAudit/${alice.uid}`, { action: 'edited' }, true), DENIED)
+    assert.equal(await deleteDoc(alice, `adminAudit/${alice.uid}`), DENIED)
+  })
+
+  test('nested documents under admin collections are denied too', async () => {
+    assert.equal(await getDoc(alice, 'adminStats/daily/days/2026-10-05'), DENIED)
+    assert.equal(await putDoc(alice, 'adminStats/daily/days/2026-10-06', { jobs: 1 }, false), DENIED)
+  })
+
+  test('collection-group queries over admin collections and activeUsers are denied', async () => {
+    for (const collectionId of ['activeUsers', 'adminAudit', 'adminJobs']) {
+      assert.equal(await queryDocs(alice, { collectionId, allDescendants: true }), DENIED, collectionId)
+    }
+  })
+})
+
+describe('promoted migrations 02 and 03 (firestore.indexes.json, firestore.rules)', () => {
+  const MIGRATIONS = new URL('./docs/features/admin/migrations/', import.meta.url)
+  const staged = (name) => readFileSync(new URL(name, MIGRATIONS), 'utf8')
+  const indexesText = readFileSync(new URL('./firestore.indexes.json', import.meta.url), 'utf8')
+  const indexes = JSON.parse(indexesText)
+
+  test('firestore.indexes.json is the staged migration 02 (up)', () => {
+    assert.deepEqual(indexes, JSON.parse(staged('02_admin_indexes_and_ttl.up.json')))
+  })
+
+  test('firestore.rules is the staged migration 03 (up)', () => {
+    assert.equal(readFileSync(new URL('./firestore.rules', import.meta.url), 'utf8'), staged('03_admin_rules.up.rules'))
+  })
+
+  test('there are 8 composite indexes: 4 on adminJobs, 4 on adminAudit, newest first', () => {
+    assert.equal(indexes.indexes.length, 8)
+    const by = (group) => indexes.indexes.filter((i) => i.collectionGroup === group)
+    assert.equal(by('adminJobs').length, 4)
+    assert.equal(by('adminAudit').length, 4)
+    for (const index of indexes.indexes) {
+      const last = index.fields.at(-1)
+      assert.equal(last.order, 'DESCENDING', `${index.collectionGroup} sorts by ${last.fieldPath} newest first`)
+      assert.equal(last.fieldPath, index.collectionGroup === 'adminJobs' ? 'acceptedAt' : 'at')
+    }
+  })
+
+  test('4 TTL policies on expireAt keep history 90 d and audit 365 d (retention behind AC-10, AC-11)', () => {
+    const ttl = indexes.fieldOverrides.filter((o) => o.ttl === true)
+    assert.deepEqual(
+      ttl.map((o) => `${o.collectionGroup}.${o.fieldPath}`).sort(),
+      ['activeUsers.expireAt', 'adminAudit.expireAt', 'adminJobs.expireAt', 'adminSweeps.expireAt'],
+    )
+    for (const o of ttl) assert.deepEqual(o.indexes, [], 'TTL fields are not indexed')
+  })
+
+  test('big or free-text fields are exempt from indexing', () => {
+    const exempt = indexes.fieldOverrides.filter((o) => !o.ttl).map((o) => `${o.collectionGroup}.${o.fieldPath}`)
+    for (const f of ['adminEmailIndex.entries', 'adminAudit.before', 'adminAudit.after', 'adminJobs.errorText', 'adminJobs.title']) {
+      assert.ok(exempt.includes(f), `${f} is exempt`)
+    }
+  })
+
+  test('the down files restore the previous state: empty indexes, and the rules before this feature', () => {
+    assert.deepEqual(JSON.parse(staged('02_admin_indexes_and_ttl.down.json')), { indexes: [], fieldOverrides: [] })
+    const down = staged('03_admin_rules.down.rules')
+    assert.ok(!down.includes('publicStatus') && !down.includes('adminAudit'), 'down has no admin or status rules')
+    assert.ok(down.includes('match /users/{userId}/tracks/{trackId}'), 'down keeps the existing rules')
   })
 })

@@ -35,13 +35,28 @@ rules_version = '2';
 //   - version: int - grows with every change of the track; a copy kept on a device is valid while it and
 //       createdAt are equal (a track deleted and added again starts at version 1 again)
 //   - publishedAt: timestamp
+//   - sizeBytes: int - bytes of the track on the server (admin card: storage used); clients ignore it
 //   The fields are not validated here: nobody but the service account can write them.
+//
+// Collection: publicStatus, document: current - the public service status (docs/features/admin/data-model.md)
+// Fields (written only by the API's service account):
+//   - banner: map { enabled: bool, uk: string, en: string } - the maintenance banner
+//   - switches: map { analysesPaused: bool, youtubeEnabled: bool, vocalsEnabled: bool }
+//   - updatedAt: timestamp
+//   Nothing else ever goes here (no limits, no uids, no emails): everyone, guests included, can read it.
+//
+// Admin collections (docs/features/admin/data-model.md): adminAccounts, adminTombstones, adminJobs,
+// adminStats (+ activeUsers), adminAudit, adminEmailIndex, adminConfig, adminAllowlist, adminSweeps.
+// They hold other users' emails, restriction reasons and the audit log: the admin UI reads them only
+// through the server (service account), and adminAllowlist is written only by the owner's script with
+// the owner's own credentials. No client may read or write any of them.
 //
 // Access patterns:
 //   - frontend/src/lib/settingsSync.ts: onSnapshot on users/{own uid} only; no collection queries;
 //       setDoc on first sign-in, updateDoc({ email, settings, updatedAt }) afterwards
 //   - frontend/src/lib/cloud/library.ts: onSnapshot on the query collection(users/{own uid}/tracks)
 //       ordered by createdAt, newest first; read-only
+//   - frontend/src/lib/serviceStatus.ts: getDoc(publicStatus/current) at most once per 5 minutes; read-only
 //
 // users/{uid} contains PII (email), so only its owner may read it; users/{uid}/tracks is the owner's
 // library, so only the owner may read it, and nobody can write it from a client.
@@ -147,6 +162,32 @@ service cloud.firestore {
       allow read: if isOwner(userId);
       allow write: if false;
     }
+
+    // ===============================================================
+    // publicStatus/current - maintenance banner + service switches
+    // ===============================================================
+
+    match /publicStatus/{docId} {
+      // One public document; a single get, never a listing. Written only by the service account.
+      allow get: if docId == 'current';
+      allow list, write: if false;
+    }
+
+    // ===============================================================
+    // Admin collections - server only
+    // ===============================================================
+
+    // Spelled out (default deny would also cover them) so that a later broad rule can't open them by
+    // accident; firestore.rules.test.mjs asserts every one of them is denied to owners and strangers.
+    match /adminAccounts/{doc=**}   { allow read, write: if false; }
+    match /adminTombstones/{doc=**} { allow read, write: if false; }
+    match /adminJobs/{doc=**}       { allow read, write: if false; }
+    match /adminStats/{doc=**}      { allow read, write: if false; }
+    match /adminAudit/{doc=**}      { allow read, write: if false; }
+    match /adminEmailIndex/{doc=**} { allow read, write: if false; }
+    match /adminConfig/{doc=**}     { allow read, write: if false; }
+    match /adminAllowlist/{doc=**}  { allow read, write: if false; }
+    match /adminSweeps/{doc=**}     { allow read, write: if false; }
 
     // Everything else stays locked (default deny).
   }

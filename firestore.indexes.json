@@ -1,4 +1,80 @@
 {
-  "indexes": [],
-  "fieldOverrides": []
+  "indexes": [
+    {
+      "collectionGroup": "adminJobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "acceptedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "adminJobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "reason", "order": "ASCENDING" },
+        { "fieldPath": "acceptedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "adminJobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "origin", "order": "ASCENDING" },
+        { "fieldPath": "acceptedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "adminJobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uid", "order": "ASCENDING" },
+        { "fieldPath": "acceptedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "adminAudit",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "adminUid", "order": "ASCENDING" },
+        { "fieldPath": "at", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "adminAudit",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "targetUid", "order": "ASCENDING" },
+        { "fieldPath": "at", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "adminAudit",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "action", "order": "ASCENDING" },
+        { "fieldPath": "at", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "adminAudit",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "action", "order": "ASCENDING" },
+        { "fieldPath": "outcome", "order": "ASCENDING" },
+        { "fieldPath": "at", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": [
+    { "collectionGroup": "adminJobs", "fieldPath": "expireAt", "ttl": true, "indexes": [] },
+    { "collectionGroup": "adminAudit", "fieldPath": "expireAt", "ttl": true, "indexes": [] },
+    { "collectionGroup": "adminSweeps", "fieldPath": "expireAt", "ttl": true, "indexes": [] },
+    { "collectionGroup": "activeUsers", "fieldPath": "expireAt", "ttl": true, "indexes": [] },
+    { "collectionGroup": "adminEmailIndex", "fieldPath": "entries", "indexes": [] },
+    { "collectionGroup": "adminAudit", "fieldPath": "before", "indexes": [] },
+    { "collectionGroup": "adminAudit", "fieldPath": "after", "indexes": [] },
+    { "collectionGroup": "adminJobs", "fieldPath": "errorText", "indexes": [] },
+    { "collectionGroup": "adminJobs", "fieldPath": "title", "indexes": [] }
+  ]
 }
