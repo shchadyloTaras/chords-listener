@@ -6,8 +6,9 @@
 //   guitar / ukulele  strum: down on every beat, up on the "and" of every beat but the first
 //                     (D DU DU DU), the downbeat strongest, an upstroke only the top strings
 //   bass              the root on the downbeat and wherever the chord changes, the fifth on beat 3
-//   piano             the whole chord (left-hand bass + right hand) on the downbeat, on beat 3 and
-//                     at every change; the right hand alone on the other beats
+//   piano             as pianists comp from a chord chart: the whole chord (left-hand bass + right
+//                     hand) on beats 1 and 3 and at every change, the right hand alone on 2 and 4;
+//                     in 3/4 a waltz — the bass alone on 1, the right hand on 2 and 3
 //   harmonium         the chord's shape pressed when the chord comes and held until it changes
 //   handpan           the bass field on the downbeat and at every change, the chord's other fields
 //                     in turn on the other beats and on every "and"
@@ -144,14 +145,16 @@ function bass(beats: Beat[], chords: readonly AccompChord[], notesFor: ChordNote
 
 function piano(beats: Beat[], chords: readonly AccompChord[], notesFor: ChordNotesFn, meter: number): AccompStep[] {
   const steps: AccompStep[] = []
+  const waltz = meter === 3
   for (const b of beats) {
     if (b.chord < 0) continue
     const label = chords[b.chord].label
     const all = notesFor(label).map((n) => ({ ...n, hold: PIANO_STEP_HOLD }))
-    if (!all.length) continue
-    const whole = b.change || b.pos === 0 || (meter >= 4 && b.pos === 2)
+    if (all.length < 2) continue
     // the first note is the left hand's bass, a hair before the right hand
-    const notes = whole ? all : all.slice(1).map((n) => ({ ...n, offset: Math.max(0, n.offset - all[1].offset) }))
+    const bass = [{ ...all[0], offset: 0 }]
+    const right = all.slice(1).map((n) => ({ ...n, offset: Math.max(0, n.offset - all[1].offset) }))
+    const notes = waltz ? (b.pos === 0 ? bass : b.change ? all : right) : b.change || b.pos === 0 || (meter >= 4 && b.pos === 2) ? all : right
     steps.push({ time: b.time, label, cut: b.change ? 'all' : 'same', notes })
   }
   return steps

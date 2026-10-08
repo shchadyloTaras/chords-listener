@@ -14,31 +14,33 @@ function staff(label: string) {
 }
 
 describe('staffChord', () => {
-  it('puts a root-position triad from middle C with the root in the bass clef', () => {
+  it('writes the right hand around middle C in the treble clef, the left hand\'s bass at its pitch in the bass clef', () => {
     expect(staff('C')).toEqual({ treble: ['C4', 'E4', 'G4'], bass: 'C3' })
+    expect(staff('G')).toEqual({ treble: ['B3', 'D4', 'G4'], bass: 'G2' })
   })
 
   it('spells chords by thirds from the written root', () => {
-    expect(staff('Gm').treble).toEqual(['G4', 'Bb4', 'D5'])
-    expect(staff('F#m').treble).toEqual(['F#4', 'A4', 'C#5'])
-    expect(staff('Bb7').treble).toEqual(['Bb4', 'D5', 'F5', 'Ab5'])
-    expect(staff('Ebmaj7').treble).toEqual(['Eb4', 'G4', 'Bb4', 'D5'])
+    expect(staff('Gm').treble).toEqual(['Bb3', 'D4', 'G4'])
+    expect(staff('F#m').treble).toEqual(['C#4', 'F#4', 'A4'])
+    expect(staff('Bb7').treble).toEqual(['D4', 'F4', 'Ab4']) // the root is the left hand's
+    expect(staff('Ebmaj7').treble).toEqual(['Bb3', 'D4', 'G4'])
     expect(staff('Caug').treble).toEqual(['C4', 'E4', 'G#4'])
-    expect(staff('Bdim').treble).toEqual(['B4', 'D5', 'F5'])
+    expect(staff('Bdim').treble).toEqual(['B3', 'D4', 'F4'])
   })
 
   it('uses a double flat for the diminished seventh', () => {
-    expect(staff('Cdim7').treble).toEqual(['C4', 'Eb4', 'Gb4', 'Bbb4'])
+    expect(staff('Cdim7')).toEqual({ treble: ['Eb4', 'Gb4', 'Bbb4'], bass: 'C3' })
   })
 
-  it('moves a slash bass to the left hand', () => {
-    expect(staff('C/E')).toEqual({ treble: ['C5', 'E5', 'G5'], bass: 'E3' })
-    expect(staff('G/B')).toEqual({ treble: ['D5', 'G5', 'B5'], bass: 'B3' })
+  it('gives a slash bass to the left hand, as written', () => {
+    expect(staff('C/E')).toEqual({ treble: ['C4', 'E4', 'G4'], bass: 'E2' })
+    expect(staff('G/B')).toEqual({ treble: ['B3', 'D4', 'G4'], bass: 'B2' })
+    expect(staff('D/F#').bass).toBe('F#2')
   })
 
   it('keeps staff steps consistent with the written octave', () => {
     const p = parseChord('Cdim7')!
-    const bbb = staffChord(p, pianoVoicing(p)).treble[3]
+    const bbb = staffChord(p, pianoVoicing(p)).treble[2]
     expect(bbb.midi).toBe(69)
     expect(bbb.step).toBe(4 * 7 + 6)
   })

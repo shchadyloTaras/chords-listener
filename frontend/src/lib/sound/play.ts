@@ -127,7 +127,7 @@ export function clickChordSound(label: string, opts: SoundOptions & { unlessPlay
   return true
 }
 
-/** One key of a chord's piano diagram (key 0 = C4). */
+/** One key of a chord's piano diagram (key 0 = C2). */
 export function playPianoKey(label: string, key: number, opts: SoundOptions = {}): void {
   if (!soundEngine.unlock()) return unavailable()
   feedback(opts)

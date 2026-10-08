@@ -2,9 +2,9 @@ import { memo } from 'react'
 import { BLACK_PCS, PIANO_KEYS, type PianoVoicing } from '../../../lib/diagrams/piano'
 
 const WW = 14 // white key width
-const WH = 58
+const WH = 64
 const BW = 9
-const BH = 35
+const BH = 39
 /** white-key index within an octave for each pitch class (black keys: index of the white key to their left) */
 const WHITE_INDEX = [0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6]
 
@@ -12,10 +12,14 @@ const WHITE_INDEX = [0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6]
 const press = (k: number, on: boolean) =>
   on ? { transform: `translateY(${BLACK_PCS.has(k % 12) ? 0.6 : 0.9}px)`, transition: 'none' } : { transition: 'transform 160ms ease-out' }
 
+/** Height / width of the drawing (C2–C5: 22 white keys). */
+export const PIANO_ASPECT = (WH + 4) / (22 * WW + 2)
+
 /**
- * Two-octave keyboard with chord tones lit in the chord color; the bass gets a marker. With
- * `onKey` every key is clickable; `sounding` keys (the chord sound playing them) are drawn pressed
- * under a light (dark theme) / deep (light theme) sheen that fades as they are released.
+ * The keys both hands use, C2–C5 (key 0 = C2), with the chord lit in the chord color: the left
+ * hand's bass, marked with a dot, low; the right hand's chord around middle C. With `onKey` every key
+ * is clickable; `sounding` keys (the chord sound playing them) are drawn pressed under a light (dark
+ * theme) / deep (light theme) sheen that fades as they are released.
  */
 export const PianoChart = memo(function PianoChart({
   voicing,

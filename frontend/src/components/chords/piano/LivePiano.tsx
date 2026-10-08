@@ -1,13 +1,15 @@
-// "Живе фортепіано" ("Жива фісгармонія" on the harmonium): the song's notes falling onto a piano
-// keyboard whose keys go down in sync with the audio (notes transcribed once per track, see
-// lib/transcription — from the instruments stem when the server separated the vocals), plus
-// chord-preview notes and, when the vocals were transcribed, the sung melody as an outlined overlay with
-// its own toggle. Under the title: what the panel is doing, then (notes ready) a legend for the two
-// kinds of bars, or an offer to separate the voice when the notes still come from the full mix.
+// "Живе фортепіано" ("Жива фісгармонія" on the harmonium): notes falling onto a keyboard whose keys go
+// down in sync with the audio. By default it plays the song's chords the way a player accompanies it
+// (./chordShapes, nothing to transcribe): on the piano the left hand's bass and the right hand's chord
+// of the diagram on the beats, on the harmonium each chord's shape held until the next chord. The
+// piano can instead show the recording's own notes (settings.liveKeysSource = 'song': transcribed once
+// per track, see lib/transcription — from the instruments stem when the server separated the vocals).
+// Chord-preview notes (clicks, the play-along) light keys too, and when the vocals were transcribed the
+// sung melody shows as an outlined overlay with its own toggle. Under the title: in chord mode a hint;
+// with the song's notes what the panel is doing, then (notes ready) a legend for the two kinds of bars,
+// or an offer to separate the voice when the notes still come from the full mix.
 // Lazy-loaded by LivePianoSlot; rendered under the now-playing hero when the instrument is a keyboard:
-// the piano's keys fitted to the song, the harmonium's own 37 keys (C3–C6). The harmonium is played
-// like a harmonium player accompanies a song: the chords' shapes, each held until the next chord
-// (./chordShapes), instead of the transcribed notes — nothing to transcribe.
+// the piano's keys fitted to the notes, the harmonium's own 37 keys (C3–C6).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
@@ -20,7 +22,7 @@ import { keysNotesReady } from '../../../lib/tour/trigger'
 import { useConnection } from '../../../lib/serverMode'
 import { requestNotes, type NotesState } from '../../../lib/transcription'
 import { fetchStem, startVocals, useVocals, vocalsSupport, type VocalsState } from '../../../lib/vocals'
-import { useApp } from '../../../store'
+import { useApp, type LiveKeysSource } from '../../../store'
 import { useTourFlags, useTourTrigger } from '../../tour/hooks'
 import { useChordModel } from '../model'
 import { usePianoNotes } from '../score/pianoNotes'
@@ -29,7 +31,9 @@ import { IconButton } from '../ui/controls'
 import { useCancelVocals } from '../useCancelVocals'
 import { noteName } from './keyboard'
 import { readPalette } from './palette'
-import { harmoniumShapeNotes } from './chordShapes'
+import { usePulseGrid } from '../tempo/usePulseGrid'
+import { Segmented } from '../ui/controls'
+import { harmoniumShapeNotes, pianoShapeNotes } from './chordShapes'
 import { PianoRenderer, type RollChord } from './renderer'
 import { SyncControl } from './SyncControl'
 
@@ -44,12 +48,18 @@ export default function LivePiano() {
   const harmonium = keyboard === 'harmonium'
   /** the panel is named after the instrument: "Live harmonium" on the harmonium */
   const nameSuffix = harmonium ? '.harmonium' : ''
-  // the harmonium holds the chords' shapes: no transcription
-  const { notes, source } = usePianoNotes(harmonium ? null : track)
-  const shapes = useMemo(() => (harmonium ? harmoniumShapeNotes(chords, transpose) : null), [harmonium, chords, transpose])
+  // the chords as a player takes them (the harmonium always): no transcription
+  const liveSource = useApp((s) => s.liveKeysSource)
+  const chordMode = harmonium || liveSource !== 'song'
+  const grid = usePulseGrid()
+  const { notes, source } = usePianoNotes(chordMode ? null : track)
+  const shapes = useMemo(
+    () => (!chordMode ? null : harmonium ? harmoniumShapeNotes(chords, transpose) : pianoShapeNotes(chords, grid, transpose)),
+    [chordMode, harmonium, chords, grid, transpose],
+  )
   const songNotes = shapes ?? (notes.status === 'ready' ? notes.index : null)
   // the Live keys tour: the panel is shown with its notes ready (never the demo: it has no audio)
-  const notesReady = shapes ? shapes.count > 0 : keysNotesReady(notes)
+  const notesReady = shapes ? shapes.count > 0 && !!track.audioUrl : keysNotesReady(notes)
   useTourFlags({ keysPanel: true, keysReady: notesReady })
   useTourTrigger('keys', notesReady)
   // a track that says it has no vocals is "missing" without asking the server (the offer below); one that
@@ -166,20 +176,20 @@ export default function LivePiano() {
     useApp.getState().toast(t(`keys.hidden${nameSuffix}`), 'info', { label: t('keys.show'), run: () => useApp.getState().setSetting('liveKeys', true) })
   }, [setSetting, t, nameSuffix])
 
-  const progress = !harmonium && notes.status === 'computing' ? notes.progress : null
-  const canRecompute = !harmonium && (notes.status === 'ready' || notes.status === 'error')
+  const progress = !chordMode && notes.status === 'computing' ? notes.progress : null
+  const canRecompute = !chordMode && (notes.status === 'ready' || notes.status === 'error')
 
   return (
     <section aria-label={t(`keys.title${nameSuffix}`)} className="mt-3 overflow-hidden rounded-[22px] border border-border bg-surface">
       <div className="relative flex items-center gap-2 px-4 py-2 sm:px-5">
         <div className="min-w-0 flex-1">
           <h2 className="font-display text-[15px] leading-tight font-semibold tracking-tight">{t(`keys.title${nameSuffix}`)}</h2>
-          {harmonium ? (
-            <p className="truncate text-xs text-muted">{t('keys.harmonium.hint')}</p>
+          {chordMode ? (
+            <p className="truncate text-xs text-muted">{t(harmonium ? 'keys.harmonium.hint' : 'keys.piano.hint')}</p>
           ) : (
             <Status state={notes} onRetry={() => request()} />
           )}
-          <VocalsLine ready={!!songNotes?.count} offer={!harmonium && source === 'mix'} harmonium={harmonium} vocals={vocals} showVocals={showVocals} />
+          <VocalsLine ready={!!songNotes?.count} offer={!chordMode && source === 'mix'} chords={chordMode} vocals={vocals} showVocals={showVocals} />
         </div>
         {vocals.status === 'ready' && (
           <IconButton
@@ -192,6 +202,18 @@ export default function LivePiano() {
           >
             <Mic size={15} />
           </IconButton>
+        )}
+        {!harmonium && (
+          <Segmented<LiveKeysSource>
+            size="sm"
+            label={t('keys.source.title')}
+            value={liveSource}
+            onChange={(v) => setSetting('liveKeysSource', v)}
+            options={[
+              { value: 'chords', label: t('keys.source.chords'), title: t('keys.source.chords.title') },
+              { value: 'song', label: t('keys.source.song'), title: t('keys.source.song.title') },
+            ]}
+          />
         )}
         <SyncControl />
         {canRecompute && (
@@ -209,8 +231,8 @@ export default function LivePiano() {
         )}
       </div>
       <div ref={wrap} className="relative border-t border-border" data-tour="keys.canvas">
-        <canvas ref={canvas} role="img" aria-label={t(keyboard === 'harmonium' ? 'keys.canvas.harmonium' : 'keys.canvas')} className="block w-full" style={{ height: layout.height || undefined }} />
-        {layout.roll > 0 && !harmonium && <RollMessage state={notes} height={layout.roll} />}
+        <canvas ref={canvas} role="img" aria-label={t(harmonium ? 'keys.canvas.harmonium' : chordMode ? 'keys.canvas.chords' : 'keys.canvas')} className="block w-full" style={{ height: layout.height || undefined }} />
+        {layout.roll > 0 && !chordMode && <RollMessage state={notes} height={layout.roll} />}
         <p className="sr-only" aria-live="polite">
           {announce}
         </p>
@@ -269,18 +291,18 @@ function Status({ state, onRetry }: { state: NotesState; onRetry(): void }) {
 /**
  * Once the notes are there: what the outlined bars are (the voice, when shown), or — notes from the
  * full mix, voice and instruments together (`offer`) — a one-line offer to separate the voice on the
- * server. On the harmonium the coloured bars are the chords.
+ * server. In chord mode the coloured bars are the chords.
  */
 function VocalsLine({
   ready,
   offer,
-  harmonium,
+  chords,
   vocals,
   showVocals,
 }: {
   ready: boolean
   offer: boolean
-  harmonium: boolean
+  chords: boolean
   vocals: VocalsState
   showVocals: boolean
 }) {
@@ -297,10 +319,10 @@ function VocalsLine({
     case 'ready':
       if (!showVocals) return null
       return (
-        <div className={clsx(line, 'gap-3')} role="note" aria-label={t(harmonium ? 'keys.legend.aria.harmonium' : 'keys.legend.aria')}>
+        <div className={clsx(line, 'gap-3')} role="note" aria-label={t(chords ? 'keys.legend.aria.harmonium' : 'keys.legend.aria')}>
           <span className="inline-flex items-center gap-1.5" aria-hidden>
             <span className="h-2 w-4 rounded-[3px]" style={{ background: 'linear-gradient(90deg, var(--chord-0), var(--chord-4), var(--chord-8))' }} />
-            {t(harmonium ? 'keys.legend.chords' : 'keys.legend.instruments')}
+            {t(chords ? 'keys.legend.chords' : 'keys.legend.instruments')}
           </span>
           <span className="inline-flex items-center gap-1.5" aria-hidden>
             <span className="h-2 w-4 rounded-[3px] border-[1.5px] border-text bg-text/15" />
