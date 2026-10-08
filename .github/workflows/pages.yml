@@ -39,6 +39,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # includes the admin page's rules: no HTML rendering under src/admin (react/no-danger, innerHTML ...)
+      - name: Lint
+        run: npx oxlint
+
       - name: Unit tests
         run: npx vitest run
 
@@ -48,6 +52,11 @@ jobs:
           VITE_BASE: /${{ github.event.repository.name }}/
           # empty when the variable is not set: frontend/src/config.ts falls back to the deployed URL
           VITE_CLOUD_API_URL: ${{ vars.CLOUD_API_URL }}
+
+      # admin.html (the admin page, ADR-0002) is built next to index.html and published with it. It must carry a strict
+      # CSP (no inline scripts, no eval) and its bundle must not reach TF.js, models or wasm.
+      - name: Check the admin page (CSP, bundle contents)
+        run: node scripts/check-admin-bundle.mjs dist-pages
 
       - uses: actions/configure-pages@v6
 

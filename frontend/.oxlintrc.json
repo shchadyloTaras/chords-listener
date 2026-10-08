@@ -4,5 +4,21 @@
   "rules": {
     "react/rules-of-hooks": "error",
     "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
+  },
+  "overrides": [
+    {
+      // The admin page (ADR-0002) renders text from users (song titles, sources, errors, emails) as text only:
+      // no way to turn a string into markup, on top of the page's strict CSP.
+      "files": ["src/admin/**"],
+      "rules": {
+        "react/no-danger": "error",
+        "no-restricted-properties": [
+          "error",
+          { "property": "innerHTML", "message": "Admin pages render text only (ADR-0002): use textContent or JSX." },
+          { "property": "outerHTML", "message": "Admin pages render text only (ADR-0002): use textContent or JSX." },
+          { "property": "insertAdjacentHTML", "message": "Admin pages render text only (ADR-0002): use textContent or JSX." }
+        ]
+      }
+    }
+  ]
 }
