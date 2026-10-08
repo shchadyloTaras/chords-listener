@@ -7,6 +7,7 @@ import { t } from '../../i18n'
 import { useApp, type Instrument } from '../../store'
 import { getLoadedDb, loadChordDb, type ChordDb, type FretInstrument } from '../diagrams/chordsDb'
 import { fretVoicings } from '../diagrams/fretted'
+import { HARMONIUM_LOW } from '../diagrams/harmonium'
 import { resolveScale } from '../handpan'
 import { parseChord, type ParsedChord } from '../music/chord'
 import {
@@ -138,6 +139,12 @@ export function playHarmoniumKey(label: string, key: number, opts: SoundOptions 
   if (!soundEngine.unlock()) return unavailable()
   feedback(opts)
   void soundEngine.play({ instrument: 'harmonium', kind: 'note', label, notes: [harmoniumKeyNote(key)] })
+}
+
+/** A moment of the harmonium's drone (switched on while the song is paused): its key, held once. */
+export function playDronePreview(midi: number): void {
+  if (!soundEngine.unlock()) return unavailable()
+  void soundEngine.play({ instrument: 'harmonium', kind: 'note', label: '', notes: [harmoniumKeyNote(midi - HARMONIUM_LOW)] })
 }
 
 /** One field (0 = ding) of the selected handpan, in a chord's handpan diagram. */

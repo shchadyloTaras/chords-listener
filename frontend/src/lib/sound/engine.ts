@@ -14,6 +14,7 @@ import { emitLiveNotes, type LiveNote } from '../liveNotes'
 import type { NoteEvent } from './chordNotes'
 import { clamp } from './dsp'
 import { handpanParams, handpanRelease, renderHandpan } from './handpanTone'
+import { DRONE_HOLD, DRONE_LOOP_START, droneLoop } from './drone'
 import { harmoniumParams, renderHarmonium } from './harmonium'
 import { pianoParams, renderPiano } from './piano'
 import { pluckParams, pluckRelease, renderPluck, type PluckInstrument } from './pluck'
@@ -68,6 +69,10 @@ const HARMONIUM_LEVEL = 0.44
 const PIANO_LEVEL = 0.75
 /** Per-note level of the cached handpan notes (rendered at HANDPAN_RMS; the strike's force scales it). */
 const HANDPAN_LEVEL = 0.77
+/** The harmonium's drone: as loud as one key of a chord, and how fast it swells in / dies away (s). */
+const DRONE_LEVEL = HARMONIUM_LEVEL
+const DRONE_SWELL = 0.25
+const DRONE_FADE = 0.2
 /** Piano notes are rendered at touches this far apart (≤ 0.1 dB off; the cache stays small). */
 const PIANO_TOUCH_STEP = 0.02
 const BUFFER_CACHE_MAX = 48
@@ -290,6 +295,8 @@ export interface SoundStats {
   /** AudioContext start time of each of those notes (s) */
   lastContextTimes: number[]
   state: AudioContextState | 'none'
+  /** MIDI note of the harmonium's drone while it sounds */
+  drone: number | null
 }
 
 class SoundEngine {
@@ -308,6 +315,9 @@ class SoundEngine {
   private runningSince = 0
   /** the browser's output timestamp proved usable (false: it never went live, ignore it) */
   private stampOk: boolean | null = null
+  /** the harmonium's drone, looping while the song plays (not a voice: chords never cut it) */
+  private drone: { midi: number; src: AudioBufferSourceNode; out: GainNode } | null = null
+  private droneTicket = 0
 
   /** Web Audio exists in this browser (no context is created). */
   get supported(): boolean {
@@ -323,6 +333,7 @@ class SoundEngine {
       last: this.last,
       lastContextTimes: this.lastTimes,
       state: this.graph ? (this.graph.ctx as AudioContext).state : 'none',
+      drone: this.drone?.midi ?? null,
     }
   }
 
@@ -369,6 +380,66 @@ class SoundEngine {
     if (req.kind === 'chord' && ticket !== this.chordTicket) return false
     this.schedule(g, req)
     return true
+  }
+
+  /**
+   * Holds the harmonium's drone on `midi` (looped, swelling in) until called with another key or
+   * null (it fades out). Separate from the chords: a new chord never cuts it.
+   */
+  async setDrone(midi: number | null): Promise<void> {
+    const ticket = ++this.droneTicket
+    if (midi == null) {
+      this.stopDrone()
+      return
+    }
+    if (this.drone?.midi === midi) return
+    const g = this.unlock()
+    if (!g) return
+    const ctx = g.ctx as AudioContext
+    if (ctx.state !== 'running' && !(await this.whenRunning(ctx))) return
+    if (ticket !== this.droneTicket) return
+    this.stopDrone()
+    try {
+      const sr = ctx.sampleRate
+      const buffer = cachedBuffer(ctx, `harmonium-drone:${midi}:${sr}`, () => droneLoop(renderHarmonium(harmoniumParams(midi, DRONE_HOLD, sr)), sr))
+      const src = ctx.createBufferSource()
+      src.buffer = buffer
+      src.loop = true
+      src.loopStart = Math.round(DRONE_LOOP_START * sr) / sr
+      src.loopEnd = buffer.length / sr
+      const out = ctx.createGain()
+      const at = ctx.currentTime + LEAD
+      out.gain.setValueAtTime(0, at)
+      out.gain.linearRampToValueAtTime(DRONE_LEVEL, at + DRONE_SWELL)
+      src.connect(out)
+      out.connect(busFor(g, 'harmonium'))
+      src.start(at)
+      this.drone = { midi, src, out }
+      window.clearTimeout(this.idleTimer)
+    } catch {
+      // no drone, nothing else affected
+    }
+  }
+
+  private stopDrone(): void {
+    const d = this.drone
+    const g = this.graph
+    this.drone = null
+    if (!d || !g) return
+    const at = g.ctx.currentTime
+    try {
+      d.out.gain.cancelScheduledValues(at)
+      d.out.gain.setValueAtTime(d.out.gain.value, at)
+      d.out.gain.linearRampToValueAtTime(0, at + DRONE_FADE)
+      d.src.stop(at + DRONE_FADE + 0.01)
+    } catch {
+      // already stopped
+    }
+    d.src.onended = () => {
+      d.src.disconnect()
+      d.out.disconnect()
+    }
+    if (!this.voices.length) this.scheduleIdle()
   }
 
   /** Fades out everything (e.g. the track was closed). */
@@ -600,7 +671,7 @@ class SoundEngine {
     window.clearTimeout(this.idleTimer)
     this.idleTimer = window.setTimeout(() => {
       const ctx = this.graph?.ctx as AudioContext | undefined
-      if (!ctx || this.voices.length || ctx.state !== 'running') return
+      if (!ctx || this.voices.length || this.drone || ctx.state !== 'running') return
       void ctx.suspend().catch(() => undefined)
     }, IDLE_MS)
   }
