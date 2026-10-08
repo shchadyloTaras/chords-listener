@@ -6,7 +6,7 @@ import { NotFoundPage } from '../components/layout/NotFoundPage'
 import { Button } from '../components/ui/IconButton'
 import { LogoMark, Wordmark } from '../components/ui/Logo'
 import { Toaster } from '../components/ui/Toaster'
-import { useT } from '../i18n'
+import { ADMIN_LANG, useAdminT } from './ui'
 import { getIdToken, openAuthDialog, useAuth } from '../lib/auth'
 import { cloudPrefix } from '../lib/serverMode'
 import { useDocumentTheme } from '../hooks/useTheme'
@@ -61,7 +61,7 @@ function Brand() {
 }
 
 function SignInPrompt() {
-  const t = useT()
+  const t = useAdminT()
   return (
     <div className="mx-auto max-w-md px-4 pt-24 text-center">
       <Brand />
@@ -124,7 +124,7 @@ function Shell() {
  * check (replaceable in tests).
  */
 export function AdminApp({ probe = probeAdminAccess }: { probe?: () => Promise<boolean> }) {
-  useDocumentTheme()
+  useDocumentTheme(ADMIN_LANG)
   const ready = useAuth((s) => s.ready)
   const uid = useAuth((s) => s.user?.uid ?? null)
   const access = useAdminAccess(uid, probe)

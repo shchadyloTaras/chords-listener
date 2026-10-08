@@ -8,7 +8,7 @@ files_hint: ["frontend/src/admin/screens/UserCard.tsx", "frontend/admin.html", "
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 9 — review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T46 — Fix the admin UI: song flags, CSP hosts, frame guard, one language, shared classes

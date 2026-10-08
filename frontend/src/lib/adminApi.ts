@@ -9,7 +9,7 @@
 // Errors are AdminApiError: the ErrorCode, the HTTP status and, for form validation (422 `invalid_value`),
 // the per-field messages in `fields`. `adminErrorMessage` turns one into text for the interface language.
 import type { AdminAccountState, AdminAuditEntry, AdminAuditFilters, AdminBanner, AdminDefaultLimits, AdminJobFilters, AdminJobHistoryPage, AdminOverview, AdminPage, AdminPaging, AdminPersonalLimitInput, AdminSettings, AdminStatsRange, AdminSwitchName, AdminTrackMeta, AdminUserCard, AdminUserSearchResult, ErrorCode } from '../types'
-import { t as translateNow } from '../i18n'
+import { translate } from '../i18n'
 import { getIdToken, requestSignIn } from './auth'
 import { cloudPrefix } from './serverMode'
 
@@ -78,9 +78,11 @@ export function adminErrorKey(code: AdminErrorCode): string {
 
 type Translate = (key: string, vars?: Record<string, string | number>) => string
 
-/** The text for any thrown value in the interface language (`translate` defaults to the current one). */
-export function adminErrorMessage(err: unknown, translate: Translate = translateNow): string {
-  return translate(err instanceof AdminApiError ? adminErrorKey(err.code) : 'admin.error.internal')
+const translateUk: Translate = (key, vars) => translate('uk', key, vars)
+
+/** The text for any thrown value; the admin page is Ukrainian (ADR-0002), so `translate` defaults to Ukrainian. */
+export function adminErrorMessage(err: unknown, translate_: Translate = translateUk): string {
+  return translate_(err instanceof AdminApiError ? adminErrorKey(err.code) : 'admin.error.internal')
 }
 
 function fieldsOf(body: unknown): Record<string, string> {

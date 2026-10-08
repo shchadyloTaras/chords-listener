@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Button } from '../../components/ui/IconButton'
-import { useT } from '../../i18n'
+import { useAdminT } from '../ui'
 import { adminErrorMessage, getStats } from '../../lib/adminApi'
 import type { AdminStatsDay, AdminStatsRange } from '../../types'
 import { useAdminData } from '../useAdminData'
@@ -52,7 +52,7 @@ function RestoredRow({ day }: { day: AdminStatsDay }) {
 }
 
 function LiveRow({ day }: { day: AdminStatsDay }) {
-  const t = useT()
+  const t = useAdminT()
   const reasons = REASONS.filter((r) => (day.failedByReason[r] ?? 0) > 0)
   return (
     <tr className="align-top">
@@ -76,7 +76,7 @@ function LiveRow({ day }: { day: AdminStatsDay }) {
 }
 
 function Days({ from, to, load }: { from: string; to: string; load: Load }) {
-  const t = useT()
+  const t = useAdminT()
   const { data, error, loading, refresh } = useAdminData((signal) => load(from, to, signal), `${from}|${to}`)
   // one row per day of the period, newest first
   const rows = useMemo(() => {

@@ -337,6 +337,26 @@ describe('UserCard — songs', () => {
     expect(rows()[1].textContent).toContain('Файл')
   })
 
+  it('flags a song that was edited and one that has vocals (S1-6)', async () => {
+    api.getUserCard.mockResolvedValue(
+      card({
+        tracks: page([
+          track(1, { title: 'Plain' }),
+          track(2, { title: 'Edited', edited: true }),
+          track(3, { title: 'Vocal', vocals: true }),
+        ]),
+      }),
+    )
+    await mount(<UserCard uid="u1" />)
+    await flush()
+    const text = rows().map((r) => r.textContent ?? '')
+    expect(text[0]).not.toMatch(/Змінено|Вокал/)
+    expect(text[1]).toContain('Змінено')
+    expect(text[1]).not.toContain('Вокал')
+    expect(text[2]).toContain('Вокал')
+    expect(text[2]).not.toContain('Змінено')
+  })
+
   it('pages by 50: next loads after the cursor, previous goes back to the page before', async () => {
     const first = Array.from({ length: 50 }, (_, i) => track(i + 1))
     const second = Array.from({ length: 20 }, (_, i) => track(i + 51))

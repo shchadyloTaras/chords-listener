@@ -1,17 +1,16 @@
 import { useState } from 'react'
 import { Button } from '../../components/ui/IconButton'
-import { useT } from '../../i18n'
+import { useAdminT } from '../ui'
 import { adminErrorMessage, listJobHistory } from '../../lib/adminApi'
 import type { AdminFailureReason, AdminHistoryStatus, AdminJobFilters, AdminJobHistoryItem, AdminJobHistoryPage, AdminOrigin, AdminPaging, AdminSourceType } from '../../types'
 import { useAdminData } from '../useAdminData'
 import { Field, fieldClass, PeriodInputs, PeriodRule } from './PeriodInputs'
-import { ORIGIN_LABEL, REASONS, SOURCE_TYPE_LABEL } from './labels'
+import { KIND_LABEL, ORIGIN_LABEL, REASONS, SOURCE_TYPE_LABEL } from './labels'
 import { isValidPeriod, lastDays, PERIOD_RULE } from './period'
 
 type Load = (filters: AdminJobFilters, paging: AdminPaging, signal: AbortSignal) => Promise<AdminJobHistoryPage>
 
 const STATUS_LABEL: Record<AdminHistoryStatus, string> = { running: 'Виконується', done: 'Успішна', error: 'Невдала' }
-const KIND_LABEL = { analysis: 'Аналіз', vocals: 'Вокал' } as const
 
 interface Draft {
   status: '' | AdminHistoryStatus
@@ -49,7 +48,7 @@ function Who({ item }: { item: AdminJobHistoryItem }) {
 }
 
 function Results({ filters, load }: { filters: AdminJobFilters; load: Load }) {
-  const t = useT()
+  const t = useAdminT()
   // cursors of the pages left behind: «Назад» returns to the last one
   const [trail, setTrail] = useState<(string | undefined)[]>([])
   const after = trail.length ? trail[trail.length - 1] : undefined
@@ -133,7 +132,7 @@ function Results({ filters, load }: { filters: AdminJobFilters; load: Load }) {
  * with the number of jobs per failure reason. A period that is reversed or longer than 90 days is not requested.
  */
 export function Jobs({ load = listJobHistory }: { load?: Load }) {
-  const t = useT()
+  const t = useAdminT()
   const [draft, setDraft] = useState<Draft>(() => ({ status: '', reason: '', origin: '', sourceType: '', ...lastDays(7) }))
   const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }))
   const ok = periodOk(draft)

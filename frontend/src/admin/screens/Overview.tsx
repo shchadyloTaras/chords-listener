@@ -1,34 +1,18 @@
 import clsx from 'clsx'
 import type { ReactNode } from 'react'
 import { Button } from '../../components/ui/IconButton'
-import { useT } from '../../i18n'
+import { useAdminT } from '../ui'
 import { adminErrorMessage, getOverview } from '../../lib/adminApi'
-import type { AdminFailureReason, AdminJobKind, AdminOrigin, AdminOverview, AdminSwitchName } from '../../types'
+import type { AdminOrigin, AdminOverview, AdminSwitchName } from '../../types'
 import { useAdminData } from '../useAdminData'
+import { KIND_LABEL, ORIGIN_LABEL, REASONS } from './labels'
 
 // The admin page is Ukrainian-only (like its menu): the admin is the owner. Failure reasons come from the
 // dictionary (admin.reason.*), shared with the other screens.
-const ORIGINS: ReadonlyArray<{ origin: AdminOrigin; label: string }> = [
-  { origin: 'link', label: 'Посилання' },
-  { origin: 'file', label: 'Файл' },
-  { origin: 'mic', label: 'Мікрофон' },
-  { origin: 'tab', label: 'Вкладка' },
-]
-const ORIGIN_LABEL = Object.fromEntries(ORIGINS.map((o) => [o.origin, o.label])) as Record<AdminOrigin, string>
-const KIND_LABEL: Record<AdminJobKind, string> = { analysis: 'Аналіз', vocals: 'Вокал' }
 const SWITCHES: ReadonlyArray<{ name: AdminSwitchName; label: string }> = [
   { name: 'analysesPaused', label: 'Пауза нових аналізів' },
   { name: 'youtubeEnabled', label: 'Завантаження з YouTube на сервері' },
   { name: 'vocalsEnabled', label: 'Транскрипція вокалу' },
-]
-const REASONS: readonly AdminFailureReason[] = [
-  'youtube_blocked',
-  'download_failed',
-  'unsupported_format',
-  'too_long',
-  'too_large',
-  'analysis_failed',
-  'other',
 ]
 
 function Card({ label, value, id, children }: { label: string; value: number | string; id: string; children?: ReactNode }) {
@@ -58,18 +42,19 @@ function time(iso: string): string {
 }
 
 function Totals({ data }: { data: AdminOverview }) {
-  const t = useT()
-  const analysesTotal = ORIGINS.reduce((sum, o) => sum + data.analyses[o.origin], 0)
+  const t = useAdminT()
+  const origins = Object.keys(ORIGIN_LABEL) as AdminOrigin[]
+  const analysesTotal = origins.reduce((sum, o) => sum + data.analyses[o], 0)
   const reasons = REASONS.filter((r) => (data.failedByReason[r] ?? 0) > 0)
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
       <Card label="Аналізи" value={analysesTotal} id="analyses-total">
         <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-          {ORIGINS.map((o) => (
-            <div key={o.origin} className="flex justify-between gap-2">
-              <dt className="text-muted">{o.label}</dt>
-              <dd data-testid={`analyses-${o.origin}`} className="tabular-nums text-text">
-                {data.analyses[o.origin]}
+          {origins.map((o) => (
+            <div key={o} className="flex justify-between gap-2">
+              <dt className="text-muted">{ORIGIN_LABEL[o]}</dt>
+              <dd data-testid={`analyses-${o}`} className="tabular-nums text-text">
+                {data.analyses[o]}
               </dd>
             </div>
           ))}

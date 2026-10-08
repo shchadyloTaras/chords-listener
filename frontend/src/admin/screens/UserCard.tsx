@@ -3,12 +3,12 @@ import { useState } from 'react'
 import { Button } from '../../components/ui/IconButton'
 import { Modal } from '../../components/ui/Modal'
 import { formatBytes, formatTime } from '../../components/ui/format'
-import { useT } from '../../i18n'
+import { useAdminT } from '../ui'
+import { KIND_LABEL, ORIGIN_LABEL } from './labels'
 import { adminErrorMessage, getUserCard, listUserTracks, removePersonalLimit, resetQuota } from '../../lib/adminApi'
 import type {
   AdminAccountState,
   AdminJobHistoryItem,
-  AdminOrigin,
   AdminPage,
   AdminPersonalLimit,
   AdminQuotaUsage,
@@ -35,9 +35,7 @@ function formatWhen(iso: string | null): string {
 }
 
 const SOURCE_LABEL: Record<AdminTrackMeta['sourceType'], string> = { youtube: 'YouTube', url: 'Посилання', file: 'Файл' }
-const ORIGIN_LABEL: Record<AdminOrigin, string> = { link: 'Посилання', file: 'Файл', mic: 'Мікрофон', tab: 'Вкладка' }
 const STATUS_LABEL: Record<AdminJobHistoryItem['status'], string> = { running: 'Виконується', done: 'Готово', error: 'Помилка' }
-const KIND_LABEL: Record<AdminJobHistoryItem['kind'], string> = { analysis: 'Аналіз', vocals: 'Вокал' }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -109,7 +107,7 @@ function State({ account }: { account: AdminAccountState }) {
 }
 
 function RecentJobs({ jobs }: { jobs: AdminJobHistoryItem[] }) {
-  const t = useT()
+  const t = useAdminT()
   return (
     <section className="mt-8">
       <h2 className="text-base font-semibold text-text">Останні задачі</h2>
@@ -198,7 +196,11 @@ function Songs({ uid, total, first }: { uid: string; total: number; first: Admin
             <tbody className="divide-y divide-border">
               {current.items.map((s) => (
                 <tr key={s.id} className="align-top">
-                  <td className={`px-3 py-2 ${USER_TEXT}`}>{s.title}</td>
+                  <td className={`px-3 py-2 ${USER_TEXT}`}>
+                    {s.title}
+                    {s.edited && <span className="ml-2 rounded-md bg-surface-3 px-1.5 py-0.5 text-xs text-muted">Змінено</span>}
+                    {s.vocals && <span className="ml-2 rounded-md bg-surface-3 px-1.5 py-0.5 text-xs text-muted">Вокал</span>}
+                  </td>
                   <td className="px-3 py-2">{SOURCE_LABEL[s.sourceType]}</td>
                   <td className="px-3 py-2 whitespace-nowrap text-muted">{formatWhen(s.createdAt)}</td>
                   <td className="px-3 py-2 whitespace-nowrap">{formatTime(s.duration)}</td>

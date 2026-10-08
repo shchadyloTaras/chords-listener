@@ -2,6 +2,7 @@ import { useId, useState, type FormEvent } from 'react'
 import { Button } from '../../components/ui/IconButton'
 import * as adminApi from '../../lib/adminApi'
 import { adminErrorMessage, AdminApiError } from '../../lib/adminApi'
+import { INPUT_CLASS } from '../ui'
 import type { AdminAccountState, AdminPersonalLimit, AdminPersonalLimitInput } from '../../types'
 
 // The personal-limit form (US-08, AC-13 / AC-14). Every invalid field says what is allowed right beside it: from the
@@ -66,8 +67,6 @@ function serverFieldText(name: FieldName): string {
   const f = NUMBER_FIELDS.find((n) => n.name === name)!
   return `Допустимі значення: ${rangeOf(f)}`
 }
-
-const inputClass = 'h-10 w-full rounded-xl border border-border-strong bg-surface-3 px-3 text-sm text-text aria-[invalid=true]:border-danger'
 
 interface LimitFormProps {
   uid: string
@@ -151,7 +150,7 @@ export function LimitForm({ uid, current, api = adminApi, onSaved, onCancel }: L
               aria-invalid={err ? true : undefined}
               aria-describedby={err ? `${id}-hint ${id}-error` : `${id}-hint`}
               onChange={(e) => edit(f.name, e.target.value)}
-              className={inputClass}
+              className={INPUT_CLASS}
             />
             <p id={`${id}-hint`} className="mt-1 text-xs text-muted">
               {f.hint}

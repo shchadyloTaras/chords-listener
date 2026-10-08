@@ -44,6 +44,23 @@ describe('admin.html', () => {
     expect(csp['connect-src']).toContain('https://identitytoolkit.googleapis.com')
   })
 
+  it('connects to exactly the hosts ADR-0002 lists (no Firestore) (S1-13)', () => {
+    const adr = readFileSync(join(root, '../docs/features/admin/adr/0002-ship-admin-ui-as-separate-strict-csp-entry.md'), 'utf8')
+    const hosts = csp['connect-src'].filter((o) => o.startsWith('https://'))
+    expect(hosts).not.toContain('https://firestore.googleapis.com')
+    expect([...hosts].sort()).toEqual([
+      'https://chords-api-84488579848.europe-west1.run.app',
+      'https://identitytoolkit.googleapis.com',
+      'https://securetoken.googleapis.com',
+      'https://www.googleapis.com',
+    ])
+    for (const h of hosts) expect(adr, `${h} named in the ADR`).toContain(h.replace('https://', ''))
+  })
+
+  it('is pinned to Ukrainian (S2-9)', () => {
+    expect(html).toMatch(/<html\s+lang="uk"/)
+  })
+
   it('has no inline script and loads the admin entry as a module', () => {
     const scripts = [...html.matchAll(/<script\b([^>]*)>/gi)].map((m) => m[1])
     expect(scripts.length).toBeGreaterThan(0)

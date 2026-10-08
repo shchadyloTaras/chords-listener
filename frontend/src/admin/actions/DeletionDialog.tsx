@@ -1,7 +1,7 @@
 import { useId, useState, type FormEvent } from 'react'
 import { Button } from '../../components/ui/IconButton'
 import { Modal } from '../../components/ui/Modal'
-import { useT } from '../../i18n'
+import { INPUT_CLASS, useAdminT } from '../ui'
 import * as adminApi from '../../lib/adminApi'
 import { adminErrorMessage } from '../../lib/adminApi'
 import type { AdminAccountState } from '../../types'
@@ -28,7 +28,7 @@ interface DeletionDialogProps {
 }
 
 export function DeletionDialog({ uid, email, api = adminApi, onScheduled, onClose }: DeletionDialogProps) {
-  const t = useT()
+  const t = useAdminT()
   const [typed, setTyped] = useState('')
   const [fieldError, setFieldError] = useState<string | null>(null)
   const [failure, setFailure] = useState<unknown>(null)
@@ -81,7 +81,7 @@ export function DeletionDialog({ uid, email, api = adminApi, onScheduled, onClos
               setFieldError(null)
               setFailure(null)
             }}
-            className="h-10 w-full rounded-xl border border-border-strong bg-surface-3 px-3 text-sm text-text aria-[invalid=true]:border-danger"
+            className={INPUT_CLASS}
           />
           <p id={`${id}-hint`} className="mt-1 text-xs text-muted">
             Для підтвердження введіть саме email цього користувача: <span className="break-words [unicode-bidi:isolate]">{email}</span>

@@ -3,6 +3,7 @@ import { useId, useState, type FormEvent, type ReactNode } from 'react'
 import { Button } from '../../components/ui/IconButton'
 import * as adminApi from '../../lib/adminApi'
 import { adminErrorMessage, AdminApiError } from '../../lib/adminApi'
+import { INPUT_CLASS } from '../ui'
 import type { AdminBanner, AdminDefaultLimits, AdminSettings, AdminSwitchName } from '../../types'
 import { useAdminData } from '../useAdminData'
 
@@ -145,8 +146,6 @@ function Problems({ items }: { items: string[] }) {
   )
 }
 
-const inputClass = 'h-10 w-full rounded-xl border border-border-strong bg-surface-3 px-3 text-sm text-text aria-[invalid=true]:border-danger'
-
 /** What a failed call says: the text of its code plus the server's per-field messages (labelled). */
 function problemsOf(err: unknown, fieldLabels: Record<string, string>): string[] {
   const out = [adminErrorMessage(err)]
@@ -223,7 +222,7 @@ function LimitsCard({ settings, api, onSaved, idPrefix }: { settings: AdminSetti
               aria-invalid={Boolean(failingNames[f.name])}
               aria-describedby={`${ids}-${f.name}-hint`}
               onChange={(e) => edit(f.name, e.target.value)}
-              className={inputClass}
+              className={INPUT_CLASS}
             />
             <p id={`${ids}-${f.name}-hint`} className="mt-1 text-xs text-muted">
               {f.hint}
@@ -351,7 +350,7 @@ function BannerCard({ settings, api, onSaved }: { settings: AdminSettings; api: 
               value={shown[lang]}
               aria-invalid={!bannerTextOk(shown[lang])}
               onChange={(e) => edit({ [lang]: e.target.value })}
-              className={clsx(inputClass, 'h-auto py-2')}
+              className={clsx(INPUT_CLASS, 'h-auto py-2')}
             />
             <p className="mt-1 text-xs text-muted">
               {charCount(shown[lang])} / {BANNER_MAX}

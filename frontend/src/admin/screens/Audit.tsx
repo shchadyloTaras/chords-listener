@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { Button } from '../../components/ui/IconButton'
-import { useT } from '../../i18n'
+import { useAdminT } from '../ui'
 import { ADMIN_ERROR_CODES, adminErrorKey, adminErrorMessage, listAudit, type AdminErrorCode } from '../../lib/adminApi'
 import type { AdminAuditAction, AdminAuditEntry, AdminAuditFilters, AdminAuditOutcome } from '../../types'
 import { useAdminData } from '../useAdminData'
@@ -88,7 +88,7 @@ function Target({ entry }: { entry: AdminAuditEntry }) {
 }
 
 function Outcome({ entry }: { entry: AdminAuditEntry }) {
-  const t = useT()
+  const t = useAdminT()
   const reason = entry.outcome === 'rejected' ? entry.rejectReason : null
   const known = reason !== null && (ADMIN_ERROR_CODES as readonly string[]).includes(reason)
   return (
@@ -151,7 +151,7 @@ function toFilters(draft: Draft): AdminAuditFilters {
 const FIELD = 'h-9 rounded-lg border border-border-strong bg-surface-2 px-2 text-sm text-text'
 
 export function Audit() {
-  const t = useT()
+  const t = useAdminT()
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT)
   // The server sends a cursor for the next page only, so going back replays the earlier ones: cursors[i] opens page i + 1.
   const [view, setView] = useState<{ filters: AdminAuditFilters; cursors: string[] }>({ filters: {}, cursors: [] })
