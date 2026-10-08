@@ -11,6 +11,7 @@ import { HomePage } from './components/layout/HomePage'
 import { NotFoundPage } from './components/layout/NotFoundPage'
 import { ShortcutsModal } from './components/layout/ShortcutsModal'
 import { TrackPage } from './components/layout/TrackPage'
+import { TunerPage } from './components/tuner/TunerPage'
 import { JobPage } from './components/jobs/JobPage'
 import { Toaster } from './components/ui/Toaster'
 import { useGuideAvailable } from './components/tour/hooks'
@@ -43,6 +44,8 @@ function Page({ route }: { route: Route }) {
       return <CapturePage key={route.videoId} videoId={route.videoId} blocked={route.blocked} start={route.start} />
     case 'clip':
       return <ClipPage key={route.videoId} videoId={route.videoId} start={route.start} />
+    case 'tuner':
+      return <TunerPage />
     default:
       return <NotFoundPage />
   }
