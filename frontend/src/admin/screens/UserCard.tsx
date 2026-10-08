@@ -16,6 +16,7 @@ import type {
   AdminUserCard,
 } from '../../types'
 import { LimitForm } from '../actions/LimitForm'
+import { RestrictionActions } from '../actions/RestrictionActions'
 import { useAdminData } from '../useAdminData'
 
 // The card shows metadata only (AC-06, ADR-0002): no audio, no chords, no edits — and so nothing here opens or
@@ -319,6 +320,7 @@ function CardBody({ card, uid, loadedAt }: { card: AdminUserCard; uid: string; l
           </Button>
         )}
       </div>
+      <RestrictionActions uid={uid} email={profile.email} account={account} onChanged={done} />
       {dialog === 'reset' && (
         <ConfirmDialog
           title="Скинути квоту за сьогодні?"
