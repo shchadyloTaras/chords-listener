@@ -7,10 +7,11 @@
 // The next seconds' notes are rendered ahead, one per tick, so none renders when it is due.
 
 import { useEffect, useMemo, useState } from 'react'
+import clsx from 'clsx'
 import { useT } from '../../i18n'
 import { getLoadedDb, loadChordDb } from '../../lib/diagrams/chordsDb'
 import { accompanySteps, type AccompStep, type ChordNotesFn } from '../../lib/sound/accompany'
-import { chordSoundNotes, soundEngine, type NoteEvent } from '../../lib/sound'
+import { chordSoundNotes, PLAY_ALONG_MAX_VOLUME, soundEngine, type NoteEvent } from '../../lib/sound'
 import { lowerBound, MetronomeScheduler } from '../../lib/tempo'
 import { useApp, type Instrument } from '../../store'
 import { IconButton } from '../ui/IconButton'
@@ -204,7 +205,30 @@ export function PlayAlongRuntimeHost() {
   return null
 }
 
-/** Player-bar toggle: the selected instrument plays along with the song (its icon, its style). */
+/** The play-along's own volume (0..200%), apart from the chord sound's. */
+export function PlayAlongVolume({ className }: { className?: string }) {
+  const t = useT()
+  const volume = useApp((s) => s.playAlongVolume)
+  const pct = Math.round(volume * 100)
+  return (
+    <div className={clsx('items-center gap-1.5', className)} title={t('sound.along.volume')}>
+      <input
+        type="range"
+        min={0}
+        max={PLAY_ALONG_MAX_VOLUME}
+        step={0.05}
+        value={volume}
+        aria-label={t('sound.along.volume')}
+        aria-valuetext={`${pct}%`}
+        onChange={(e) => useApp.getState().setSetting('playAlongVolume', Number(e.target.value))}
+        className="h-1 min-w-0 flex-1 cursor-pointer accent-accent"
+      />
+      <span className={clsx('w-9 shrink-0 text-right font-mono text-[11px] tabular-nums', volume > 1 ? 'text-accent' : 'text-muted')}>{pct}%</span>
+    </div>
+  )
+}
+
+/** Player-bar toggle: the selected instrument plays along with the song (its icon, its style); its volume beside it while on. */
 export function PlayAlongToggle() {
   const t = useT()
   const on = useApp((s) => s.playAlong)
@@ -212,17 +236,20 @@ export function PlayAlongToggle() {
   const Icon = INSTRUMENT_ICON[instrument]
   const label = t('sound.along.title', { instrument: t(`chords.instrument.${instrument}`), style: t(`sound.along.style.${instrument}`) })
   return (
-    <IconButton
-      label={label}
-      active={on}
-      aria-pressed={on}
-      onClick={() => {
-        const next = !on
-        if (next) soundEngine.unlock()
-        useApp.getState().setSetting('playAlong', next)
-      }}
-    >
-      <Icon className="size-[18px]" />
-    </IconButton>
+    <div className="flex items-center gap-1.5">
+      <IconButton
+        label={label}
+        active={on}
+        aria-pressed={on}
+        onClick={() => {
+          const next = !on
+          if (next) soundEngine.unlock()
+          useApp.getState().setSetting('playAlong', next)
+        }}
+      >
+        <Icon className="size-[18px]" />
+      </IconButton>
+      {on && <PlayAlongVolume className="hidden w-[7.5rem] sm:flex" />}
+    </div>
   )
 }

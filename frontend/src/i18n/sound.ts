@@ -5,6 +5,7 @@ export const sound: Dict = {
   uk: {
     'sound.play': 'Прослухати',
     'sound.along.title': '{instrument} грає разом із піснею: {style}',
+    'sound.along.volume': 'Гучність гри разом',
     'sound.along.style.guitar': 'бій вниз на кожну долю й угору між долями',
     'sound.along.style.ukulele': 'бій вниз на кожну долю й угору між долями',
     'sound.along.style.bass': 'тоніка на сильну долю й на зміну акорду, квінта на третю долю',
@@ -29,6 +30,7 @@ export const sound: Dict = {
   en: {
     'sound.play': 'Listen',
     'sound.along.title': '{instrument} plays along with the song: {style}',
+    'sound.along.volume': 'Play-along volume',
     'sound.along.style.guitar': 'strummed down on every beat and up between the beats',
     'sound.along.style.ukulele': 'strummed down on every beat and up between the beats',
     'sound.along.style.bass': 'the root on the downbeat and on every chord change, the fifth on beat 3',

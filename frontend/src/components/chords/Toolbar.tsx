@@ -18,6 +18,7 @@ import { CopyButton } from './CopyButton'
 import { resetChords } from './edit'
 import { HandpanScaleControls } from './handpan/HandpanScaleControls'
 import { useChordModel } from './model'
+import { PlayAlongVolume } from './PlayAlong'
 import { useChordUi } from './uiStore'
 import { Divider, IconButton, Segmented, ToggleChip } from './ui/controls'
 import { Floating } from './ui/Floating'
@@ -341,6 +342,9 @@ function SoundSettings() {
             <Volume2 size={15} />
           </IconButton>
         </div>
+      </Row>
+      <Row label={t('sound.along.volume')}>
+        <PlayAlongVolume className="flex pr-9" />
       </Row>
     </div>
   )

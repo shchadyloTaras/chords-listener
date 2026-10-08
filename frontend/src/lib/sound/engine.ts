@@ -1,8 +1,11 @@
 // The chord-sound engine: one lazily created AudioContext ("interactive" latency) shared by every
 // chord / note preview, separate from the metronome's. Graph:
 //
-//   voice → (panner) → instrument bus ─┬──────────────────────────→ master (chordSoundVolume)
-//                                      └→ send → room reverb ──────→ master → limiter → speakers
+//   voice → (panner) → volume ─→ instrument bus ─┬───────────────────────→ master
+//                                                 └→ send → room reverb ──→ master → limiter → speakers
+//
+// The volume stage is per group and instrument: the chord sound (clicks, the drone) follows the
+// chordSoundVolume setting, the play-along its own playAlongVolume.
 //
 // A new chord fades the previous one out over 70 ms; finished voices are disconnected; the context
 // is suspended after a few idle seconds, so nothing runs while nothing sounds. Every note is also
@@ -85,6 +88,20 @@ export function volumeGain(volume: number): number {
   return v * v
 }
 
+/** Highest play-along volume setting (2 = 200%): over a loud recording the accompaniment may need more. */
+export const PLAY_ALONG_MAX_VOLUME = 2
+
+/** The play-along volume's curve: perceptual up to 100%, then steeper (the limiter keeps it clean), like the metronome's. */
+export function alongVolumeGain(volume: number): number {
+  const v = clamp(Number.isFinite(volume) ? volume : 0.8, 0, PLAY_ALONG_MAX_VOLUME)
+  return v <= 1 ? v * v : 1 + (v - 1) * 3
+}
+
+/** What a voice belongs to, for its volume: a clicked chord / key / the drone, or the play-along. */
+export type SoundGroup = 'click' | 'along'
+
+const groupGain = (group: SoundGroup, volume: number) => (group === 'along' ? alongVolumeGain(volume) : volumeGain(volume))
+
 type Ctor = typeof AudioContext
 
 function audioContextCtor(): Ctor | null {
@@ -97,12 +114,14 @@ interface Graph {
   master: GainNode
   reverb: ConvolverNode | null
   buses: Partial<Record<Instrument, GainNode>>
+  /** each group's gain now, and its volume stage per instrument (in front of the bus) */
+  levels: Record<SoundGroup, number>
+  inputs: Record<SoundGroup, Partial<Record<Instrument, GainNode>>>
 }
 
-/** Master → limiter → destination, and the room. */
-function buildGraph(ctx: BaseAudioContext, volume: number): Graph {
+/** Master → limiter → destination, and the room; `volumes` = the groups' volume settings. */
+function buildGraph(ctx: BaseAudioContext, volumes: Record<SoundGroup, number>): Graph {
   const master = ctx.createGain()
-  master.gain.value = volumeGain(volume)
   // Gentle limiter: chords stay clean when they stack up at high volume.
   const limiter = ctx.createDynamicsCompressor()
   limiter.threshold.value = -6
@@ -126,7 +145,14 @@ function buildGraph(ctx: BaseAudioContext, volume: number): Graph {
   } catch {
     reverb = null
   }
-  return { ctx, master, reverb, buses: {} }
+  return {
+    ctx,
+    master,
+    reverb,
+    buses: {},
+    levels: { click: groupGain('click', volumes.click), along: groupGain('along', volumes.along) },
+    inputs: { click: {}, along: {} },
+  }
 }
 
 function busFor(g: Graph, instrument: Instrument): GainNode {
@@ -143,6 +169,17 @@ function busFor(g: Graph, instrument: Instrument): GainNode {
   }
   g.buses[instrument] = bus
   return bus
+}
+
+/** Where a voice of `group` on `instrument` connects: the group's volume, then the instrument's bus. */
+function inputFor(g: Graph, group: SoundGroup, instrument: Instrument): GainNode {
+  const have = g.inputs[group][instrument]
+  if (have) return have
+  const input = g.ctx.createGain()
+  input.gain.value = g.levels[group]
+  input.connect(busFor(g, instrument))
+  g.inputs[group][instrument] = input
+  return input
 }
 
 // Plucked strings (per instrument, pitch, sample rate), harmonium keys (per pitch, hold, sample rate),
@@ -475,7 +512,7 @@ class SoundEngine {
       out.gain.setValueAtTime(0, at)
       out.gain.linearRampToValueAtTime(DRONE_LEVEL, at + DRONE_SWELL)
       src.connect(out)
-      out.connect(busFor(g, 'harmonium'))
+      out.connect(inputFor(g, 'click', 'harmonium'))
       src.start(at)
       this.drone = { midi, src, out }
       window.clearTimeout(this.idleTimer)
@@ -598,10 +635,12 @@ class SoundEngine {
       } catch {
         ctx = new C()
       }
-      this.graph = buildGraph(ctx, useApp.getState().chordSoundVolume)
+      const s0 = useApp.getState()
+      this.graph = buildGraph(ctx, { click: s0.chordSoundVolume, along: s0.playAlongVolume })
       this.runningSince = performance.now()
       useApp.subscribe((s, p) => {
-        if (s.chordSoundVolume !== p.chordSoundVolume) this.setVolume(s.chordSoundVolume)
+        if (s.chordSoundVolume !== p.chordSoundVolume) this.setVolume('click', s.chordSoundVolume)
+        if (s.playAlongVolume !== p.playAlongVolume) this.setVolume('along', s.playAlongVolume)
       })
       ctx.addEventListener('statechange', () => {
         if (ctx.state === 'running') this.runningSince = performance.now()
@@ -614,13 +653,17 @@ class SoundEngine {
     }
   }
 
-  private setVolume(volume: number): void {
+  private setVolume(group: SoundGroup, volume: number): void {
     const g = this.graph
     if (!g) return
-    try {
-      g.master.gain.setTargetAtTime(volumeGain(volume), g.ctx.currentTime, 0.015)
-    } catch {
-      g.master.gain.value = volumeGain(volume)
+    const level = groupGain(group, volume)
+    g.levels[group] = level
+    for (const input of Object.values(g.inputs[group])) {
+      try {
+        input.gain.setTargetAtTime(level, g.ctx.currentTime, 0.015)
+      } catch {
+        input.gain.value = level
+      }
     }
   }
 
@@ -699,7 +742,7 @@ class SoundEngine {
     const ref = this.timeRef(ctx)
     const toPerf = (t: number) => contextToPerformance(t, ref)
     this.cutVoices(victims, t0, toPerf)
-    const bus = busFor(g, req.instrument)
+    const bus = inputFor(g, accomp ? 'along' : 'click', req.instrument)
     const id = ++this.playId
     const played: SoundingNote[] = []
     const times: number[] = []
@@ -819,8 +862,8 @@ export const soundEngine = new SoundEngine()
  */
 export async function renderOffline(req: PlayRequest, seconds = 4, sampleRate = 48000, volume = 1): Promise<AudioBuffer> {
   const ctx = new OfflineAudioContext(2, Math.round(seconds * sampleRate), sampleRate)
-  const g = buildGraph(ctx, volume)
-  const bus = busFor(g, req.instrument)
+  const g = buildGraph(ctx, { click: volume, along: volume })
+  const bus = inputFor(g, 'click', req.instrument)
   for (const n of req.notes) {
     const parts = startVoice(g, req.instrument, req.kind, n, 0.01 + n.offset)
     route(g, parts, panOf(req.instrument, n), bus)
