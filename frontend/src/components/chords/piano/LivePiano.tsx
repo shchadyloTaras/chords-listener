@@ -59,7 +59,11 @@ export default function LivePiano() {
     () => (!chordMode ? null : harmonium ? harmoniumShapeNotes(chords, transpose) : pianoShapeNotes(chords, grid, transpose)),
     [chordMode, harmonium, chords, grid, transpose],
   )
-  const songNotes = shapes ?? (notes.status === 'ready' ? notes.index : null)
+  // transcribed in audio time; a recording linked to a video (a YouTube fragment) plays at audio time + startOffset
+  const transcribed = notes.status === 'ready' ? notes.index : null
+  const offset = track.startOffset ?? 0
+  const songIndex = useMemo(() => transcribed?.shifted(offset) ?? null, [transcribed, offset])
+  const songNotes = shapes ?? songIndex
   // the Live keys tour: the panel is shown with its notes ready (never the demo: it has no audio)
   const notesReady = shapes ? shapes.count > 0 && !!track.audioUrl : keysNotesReady(notes)
   useTourFlags({ keysPanel: true, keysReady: notesReady })

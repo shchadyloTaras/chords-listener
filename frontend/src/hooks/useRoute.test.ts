@@ -31,3 +31,11 @@ describe('YouTube routes', () => {
     expect(parseHash(`#/listen/youtube/${ID}`)).toEqual({ name: 'capture', videoId: ID, blocked: false, start: null })
   })
 })
+
+describe('tuner route', () => {
+  it('round-trips, with or without a trailing slash', () => {
+    expect(paths.tuner()).toBe('/tuner')
+    expect(parseHash(`#${paths.tuner()}`)).toEqual({ name: 'tuner' })
+    expect(parseHash('#/tuner/')).toEqual({ name: 'tuner' })
+  })
+})

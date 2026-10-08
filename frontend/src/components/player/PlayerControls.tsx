@@ -3,11 +3,13 @@ import { motion } from 'framer-motion'
 import { Gauge, Pause, Play, Repeat, RotateCcw, RotateCw, Video, Volume1, Volume2, VolumeX, X } from 'lucide-react'
 import { useT } from '../../i18n'
 import { useApp } from '../../store'
+import type { Track } from '../../types'
 import { SEEK_STEP, SPEEDS, seekBy } from '../../hooks/useHotkeys'
 import { IconButton } from '../ui/IconButton'
 import { Menu, MenuItem, MenuLabel } from '../ui/Menu'
 import { formatSpeed, formatTime } from '../ui/format'
 import { usePlayerUi } from './playerUi'
+import { useViewWindow } from './useViewWindow'
 
 export function PlayButton() {
   const t = useT()
@@ -49,10 +51,11 @@ export function SkipButton({ dir }: { dir: 1 | -1 }) {
   )
 }
 
-export function TimeReadout({ which, fallbackDuration }: { which: 'current' | 'duration'; fallbackDuration: number }) {
-  const duration = useApp((s) => s.duration || fallbackDuration)
-  const time = useApp((s) => (which === 'current' ? s.currentTime : duration))
-  const long = duration >= 3600
+/** The playhead's time, or where the track ends: track (video) time, so a fragment of a video reads e.g. 34:30 … 35:00. */
+export function TimeReadout({ which, track }: { which: 'current' | 'duration'; track: Track }) {
+  const { end } = useViewWindow(track)
+  const time = useApp((s) => (which === 'current' ? s.currentTime : end))
+  const long = end >= 3600
   return (
     <span
       className={clsx(
@@ -61,7 +64,7 @@ export function TimeReadout({ which, fallbackDuration }: { which: 'current' | 'd
         long ? 'w-[7ch]' : 'w-[5ch]',
       )}
     >
-      {formatTime(time, duration)}
+      {formatTime(time, end)}
     </span>
   )
 }

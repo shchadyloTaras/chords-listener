@@ -47,7 +47,7 @@ function Section({ title, aside, children }: { title: string; aside?: ReactNode;
 
 export function TempoPanel() {
   const t = useT()
-  const { rhythm, track } = useChordModel()
+  const { rhythm, view } = useChordModel()
   const rate = useApp((s) => s.playbackRate)
   const local = useLocalBpm(rhythm.beats)
   const global = rhythm.tempo
@@ -81,7 +81,7 @@ export function TempoPanel() {
         <p className="-mt-1.5 text-xs text-faint">{t('tempo.atRate', { rate: formatRate(rate), n: Math.round(bpm * rate) })}</p>
       )}
 
-      <TempoSparkline beats={rhythm.beats} duration={track.duration} global={global} />
+      <TempoSparkline beats={rhythm.beats} view={view} global={global} />
 
       <FactorPicker />
       <TapSection />

@@ -16,6 +16,7 @@ import { refreshTracks, scheduleDelete, useTracks } from './tracksStore'
 import { TrackCover } from './TrackCover'
 import { BpmTag } from '../chords/tempo/BpmTag'
 import { resolveSpelling, transposeKeyName } from '../../lib/music/key'
+import { viewWindow } from '../../lib/viewWindow'
 
 function TrackRow({ track }: { track: TrackSummary }) {
   const t = useT()
@@ -28,6 +29,9 @@ function TrackRow({ track }: { track: TrackSummary }) {
   const lang = useApp((s) => s.lang)
   const accidentals = useApp((s) => s.accidentals)
   const subtitle = track.artist || (track.source.type === 'file' ? track.source.filename : null)
+  // a fragment of a video plays its own 30 s, not the video up to its end
+  const view = viewWindow(track)
+  const length = view.end - view.start
   return (
     <motion.li
       layout="position"
@@ -102,7 +106,7 @@ function TrackRow({ track }: { track: TrackSummary }) {
             </span>
           )}
           <BpmTag trackId={track.id} tempo={track.tempo} className="w-16 text-right" />
-          <span className="w-12 text-right font-mono text-xs text-muted tabular-nums">{formatTime(track.duration)}</span>
+          <span className="w-12 text-right font-mono text-xs text-muted tabular-nums">{formatTime(length)}</span>
         </div>
       </a>
       {cloud && local && (

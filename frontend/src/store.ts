@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { SectionKind } from './lib/music/sections'
+import { viewWindow } from './lib/viewWindow'
 import type { Track } from './types'
 
 /** Implemented by the Shell's player (HTML audio or YouTube iframe). */
@@ -86,6 +87,8 @@ export interface Settings {
   playAlongVolume: number // 0..2 (PLAY_ALONG_MAX_VOLUME)
   /** play-along timing correction, ms (positive = the instrument plays later), ±PLAY_ALONG_OFFSET_LIMIT */
   playAlongOffsetMs: number
+  /** the tuner's reference pitch A4, Hz (lib/tuner/notes.ts A4_MIN..A4_MAX); this device only */
+  tunerA4: number
 }
 
 export interface AppState extends Settings {
@@ -151,6 +154,7 @@ const defaultSettings: Settings = {
   playAlong: false,
   playAlongVolume: 0.8,
   playAlongOffsetMs: 0,
+  tunerA4: 440,
 }
 
 let toastSeq = 1
@@ -176,7 +180,7 @@ export const useApp = create<AppState>()(
 
       track: null,
       setTrack: (track) =>
-        set({ track, currentTime: track?.clip?.start ?? 0, isPlaying: false, loop: null, duration: track?.duration ?? 0 }),
+        set({ track, currentTime: track ? viewWindow(track).start : 0, isPlaying: false, loop: null, duration: track?.duration ?? 0 }),
 
       currentTime: 0,
       duration: 0,
@@ -188,8 +192,10 @@ export const useApp = create<AppState>()(
       pause: () => get().controller?.pause(),
       toggle: () => (get().isPlaying ? get().pause() : get().play()),
       seek: (time) => {
-        const d = get().duration || get().track?.duration || 0
-        const t = Math.max(0, d ? Math.min(time, d) : time)
+        // a fragment / a recording linked to a video plays only its own stretch of the video (lib/viewWindow)
+        const { track, duration } = get()
+        const w = track ? viewWindow(track, duration) : { start: 0, end: duration }
+        const t = Math.max(w.start, w.end ? Math.min(time, w.end) : time)
         get().controller?.seek(t)
         set({ currentTime: t })
       },
@@ -246,6 +252,7 @@ export const useApp = create<AppState>()(
         playAlong: s.playAlong,
         playAlongVolume: s.playAlongVolume,
         playAlongOffsetMs: s.playAlongOffsetMs,
+        tunerA4: s.tunerA4,
       }),
     },
   ),

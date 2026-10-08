@@ -12,6 +12,7 @@ import { resolveSpelling, transposeKeyName } from '../../lib/music/key'
 import type { Spelling } from '../../lib/music/notes'
 import { detectSections, withKinds, type SongSection } from '../../lib/music/sections'
 import type { EffectiveRhythm } from '../../lib/tempo'
+import { viewWindow, type ViewWindow } from '../../lib/viewWindow'
 import { useEffectiveRhythm } from './tempo/useRhythm'
 
 export interface ChordModel {
@@ -33,6 +34,8 @@ export interface ChordModel {
   rhythm: EffectiveRhythm
   /** the song's parts (intro, verse, chorus, …) over the bars, with the user's names for them */
   sections: SongSection[]
+  /** the stretch of the track the bars, the timeline and the player cover (a fragment of a video: lib/viewWindow) */
+  view: ViewWindow
   exportInput(barsPerLine: number, collapseRepeats: boolean): ExportInput
 }
 
@@ -51,16 +54,18 @@ export function useBuildChordModel(track: Track): ChordModel {
     [track.chords, transpose, simplify, spelling],
   )
   const rhythm = useEffectiveRhythm(track)
+  const view = useMemo(() => viewWindow(track), [track])
   const frames = useMemo(
     () =>
       buildBarGrid({
-        duration: track.duration,
+        start: view.start,
+        duration: view.end,
         beats: rhythm.beats,
         downbeats: rhythm.downbeats,
         tempo: rhythm.tempo,
         timeSignature: rhythm.timeSignature,
       }),
-    [track.duration, rhythm],
+    [view, rhythm],
   )
   const bars = useMemo(() => fillBars(frames, chords), [frames, chords])
   const unique = useMemo(() => uniqueChords(chords), [chords])
@@ -68,8 +73,8 @@ export function useBuildChordModel(track: Track): ChordModel {
   // on the same bar grid as the sheet
   const plainBars = useMemo(() => fillBars(frames, buildDisplayChords(track.chords, { transpose: 0, simplify: false, spelling: 'sharp' })), [frames, track.chords])
   const detected = useMemo(
-    () => detectSections({ bars: plainBars, waveform: track.waveform, duration: track.duration }),
-    [plainBars, track.waveform, track.duration],
+    () => detectSections({ bars: plainBars, waveform: track.waveform, duration: track.duration, start: view.start }),
+    [plainBars, track.waveform, track.duration, view.start],
   )
   const kinds = useApp((s) => s.sectionKinds?.[track.id])
   const sections = useMemo(() => withKinds(detected, kinds), [detected, kinds])
@@ -101,6 +106,7 @@ export function useBuildChordModel(track: Track): ChordModel {
       hasChords: unique.length > 0,
       rhythm,
       sections,
+      view,
       exportInput: (barsPerLine, collapseRepeats) => ({
         meta: {
           title: track.title,
@@ -115,7 +121,7 @@ export function useBuildChordModel(track: Track): ChordModel {
         collapseRepeats,
       }),
     }
-  }, [track, transpose, simplify, spelling, accidentals, chords, bars, unique, capo, rhythm, sections])
+  }, [track, transpose, simplify, spelling, accidentals, chords, bars, unique, capo, rhythm, sections, view])
 }
 
 export function useChordModel(): ChordModel {

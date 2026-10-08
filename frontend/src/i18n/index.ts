@@ -14,6 +14,7 @@ import { score } from './score'
 import { tour } from './tour'
 import { admin } from './admin'
 import { clip } from './clip'
+import { tuner } from './tuner'
 
 /**
  * Each dictionary: { uk: Record<key, string>, en: Record<key, string> }.
@@ -22,7 +23,7 @@ import { clip } from './clip'
  */
 export type Dict = Record<Lang, Record<string, string>>
 
-const dicts: Dict[] = [core, chords, account, handpan, tempo, web, sound, keys, cloud, live, score, tour, admin, clip]
+const dicts: Dict[] = [core, chords, account, handpan, tempo, web, sound, keys, cloud, live, score, tour, admin, clip, tuner]
 
 const merged: Record<Lang, Record<string, string>> = { uk: {}, en: {} }
 for (const d of dicts) {
