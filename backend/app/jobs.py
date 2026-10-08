@@ -610,7 +610,7 @@ class JobManager:
         except BaseException:
             shutil.rmtree(work, ignore_errors=True)
             raise
-        # downloaded: the job now waits for an analysis worker (its progress stays where the download left it)
+        # downloaded: the job now waits for an analysis worker (its progress is set to the end of the download)
         self._update(rec, status="queued", progress=DOWNLOAD_RANGE[1], message="Waiting for analysis")
         self._submit(
             rec,
