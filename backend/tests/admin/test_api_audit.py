@@ -336,7 +336,8 @@ def emulator(admin_db: FirestoreIndex, tmp_path: Path):
     admin_uid, victim, gone = f"t19-admin-{tag}", f"t19-victim-{tag}", f"t19-gone-{tag}"
     seed(admin_db, [
         make_admin(admin_uid),
-        make_user(victim, f"victim-{tag}@example.test", T0),
+        # registered now, as a real sign-up is: the e-mail index an earlier test may have built finds it on catch-up
+        make_user(victim, f"victim-{tag}@example.test", datetime.now(timezone.utc)),
         tombstone(gone),
     ])
     audit = Audit(admin_db, now=lambda: T0)

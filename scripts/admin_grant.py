@@ -74,25 +74,26 @@ class AuthEmailLookup:
             self._headers = None
             self._factory = session_factory or adc_session_factory(project)
 
-    def uid_for_email(self, email: str) -> Optional[str]:
-        self.verified = True
+    def uid_for_email(self, email: str) -> tuple[Optional[str], bool]:
+        """(the uid of the account with that email or None, whether Firebase Auth says the email is verified). Only an
+        explicit ``emailVerified: true`` counts as verified: a missing flag is not."""
         res = self._factory().post(self._url, json={"email": [email.strip().lower()]}, headers=self._headers,
                                    timeout=TIMEOUT_S)
         if res.status_code != 200:
             raise Refused(f"Firebase Auth answered {res.status_code} when looking the account up: {res.text[:200]}")
         users = res.json().get("users") or []
         uid = users[0].get("localId") if users else None
-        self.verified = bool(users and users[0].get("emailVerified"))
-        return uid if isinstance(uid, str) and uid else None
+        verified = bool(users) and users[0].get("emailVerified") is True
+        return (uid if isinstance(uid, str) and uid else None), verified
 
 
 def resolve_uid(target: str, lookup: Any, *, require_verified: bool = False) -> str:
     target = target.strip()
     if "@" in target:
-        uid = lookup.uid_for_email(target)
+        uid, verified = lookup.uid_for_email(target)
         if not uid:
             raise Refused("no account with that email in Firebase Auth: nothing changed")
-        if require_verified and not getattr(lookup, "verified", True):
+        if require_verified and verified is not True:  # fails closed: anything but a plain "yes" refuses the grant
             raise Refused("that account's email is not verified in Firebase Auth: nothing changed "
                           "(grant by uid once you have checked who owns it)")
         return uid

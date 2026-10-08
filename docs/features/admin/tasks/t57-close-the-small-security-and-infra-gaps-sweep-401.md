@@ -8,7 +8,7 @@ files_hint: ["backend/app/auth.py", "scripts/admin_grant.py", "backend/app/admin
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 10 — re-review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T57 — Close the small security and infra gaps: sweep 401, grant fails closed, tombstone reads, admin preflight
@@ -19,4 +19,4 @@ status: "todo"
 
 **Re-review fixes 10-13. Tests show an unverified call to /api/internal/sweep answers exactly like any other unauthenticated /api/* call; the grant script refuses an email whose verified flag is missing or false (offline and on the Auth emulator); a catch-up reads tombstones only for the uids it folds in; a real CORS preflight to /api/admin/* gets 200 from an allowed origin and 400 from another.**
 
-- [ ] lint + type-check clean (ruff / oxlint + tsc)
+- [x] lint + type-check clean (ruff / oxlint + tsc)

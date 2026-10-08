@@ -897,7 +897,8 @@ paths:
       description: |
         sad.md §6 «Cross-cutting: фонові роботи», Critical flow 3; AC-08/AC-22. Called by Cloud Scheduler
         at 00:15 and 12:15 UTC with an OIDC token of `chords-scheduler@…` (signature, audience and email
-        checked); any other caller gets the unknown-route 404. Idempotent by slot: the server derives the
+        checked); any other caller is answered exactly as at an unknown `/api` address: the 401 without a
+        valid sign-in, the unknown-route 404 with one. Idempotent by slot: the server derives the
         slot from the current time and claims `adminSweeps/{slot}` with `exists=false`; a slot already
         done or running returns its state without redoing work (no Idempotency-Key header — the key is
         the slot). Steps (each idempotent, resumable): replay the projections buffer → close stale
@@ -919,6 +920,7 @@ paths:
                 steps: { replay: done, staleJobs: done, freeze: done, emailIndex: done, purges: done }
                 startedAt: "2026-10-08T00:15:02Z"
                 finishedAt: "2026-10-08T00:16:40Z"
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "500":
           description: a step failed — the slot is marked `failed`, Cloud Scheduler retries

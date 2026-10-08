@@ -341,8 +341,7 @@ class AuthMiddleware:
                 scope = {**scope, "path": unknown, "raw_path": unknown.encode()}
             await self.app(scope, receive, send)
             return
-        if path == SWEEP_PATH:
-            await self._scheduler_call(scope, receive, send, path)
+        if path == SWEEP_PATH and await self._scheduler_call(scope, receive, send):
             return
         try:
             uid, auth_time = await self._authenticate(scope, path)
@@ -352,6 +351,9 @@ class AuthMiddleware:
         except AuthUnavailable as exc:
             await JSONResponse({"detail": str(exc), "code": "internal"}, status_code=503)(scope, receive, send)
             return
+        if path == SWEEP_PATH:  # signed in, but not the scheduler: for them the address does not exist
+            await unknown_endpoint_response(path)(scope, receive, send)
+            return
         scope.setdefault("state", {})[AUTH_TIME_KEY] = auth_time
         token = set_current_uid(uid)
         try:
@@ -359,9 +361,10 @@ class AuthMiddleware:
         finally:
             reset_current_uid(token)
 
-    async def _scheduler_call(self, scope: Scope, receive: Receive, send: Send, path: str) -> None:
-        """``/api/internal/sweep`` takes the scheduler's OIDC token and nothing else: every other caller (a user, an
-        admin, a bad or missing token) is answered as for an unknown address. The request runs without a user."""
+    async def _scheduler_call(self, scope: Scope, receive: Receive, send: Send) -> bool:
+        """``/api/internal/sweep`` runs for the scheduler's OIDC token and nothing else, without a user: True when
+        this call was the scheduler's (and is answered). Every other caller is answered exactly as at an unknown
+        ``/api`` address (False: the caller goes on): the 401 without a valid sign-in, the 404 with one (review)."""
         headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
         scheme, _, token = headers.get("authorization", "").partition(" ")
         verified = False
@@ -373,12 +376,12 @@ class AuthMiddleware:
                 pass
             except AuthUnavailable as exc:  # Google's certificates are unreachable: let the scheduler retry
                 await JSONResponse({"detail": str(exc), "code": "internal"}, status_code=503)(scope, receive, send)
-                return
+                return True
         if not verified:
-            await unknown_endpoint_response(path)(scope, receive, send)
-            return
+            return False
         scope.setdefault("state", {})[SCHEDULER_KEY] = True
         await self.app(scope, receive, send)
+        return True
 
     async def _authenticate(self, scope: Scope, path: str) -> tuple[str, Optional[float]]:
         headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}

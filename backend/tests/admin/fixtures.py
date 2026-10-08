@@ -431,7 +431,8 @@ class MemDb(FirestoreIndex):
     * Reads: ``get``, ``run_query`` (``== < <= > >=`` and ``array-contains`` filters on dotted paths, several orders
       ascending or descending, ``start_after`` cursor, ``limit``), ``aggregate`` / ``count``.
     * Billing, as Firestore bills it: ``reads`` is documents returned per collection (``count:<collection>`` for an
-      aggregation); ``total_reads`` sums it. ``bill_misses`` bills a missed ``get`` and an empty query 1 each.
+      aggregation); ``total_reads`` sums it. A ``batchGet`` (``get_many``, transaction reads) counts like a ``get`` per
+      document. ``bill_misses`` bills a missed ``get`` and an empty query 1 each.
       ``gets`` / ``queries`` / ``touched`` record what was asked; ``reset_counters()`` clears all of them.
     * ``indexed=True`` refuses (``AssertionError``) a query or aggregation no index of ``firestore.indexes.json`` serves
       (``IndexGuard``), so an offline test can't pass on a query production would reject; ``aggregations`` names the
@@ -560,10 +561,14 @@ class MemDb(FirestoreIndex):
             return {"transaction": f"tx{self._tx}"}
         if path == ":rollback":
             return {}
-        if path == ":batchGet":
+        if path == ":batchGet":  # ``get_many`` and transaction reads: billed and recorded like a ``get`` each
             rows = []
             for name in body["documents"]:
                 p = name.split("/documents/", 1)[1]
+                self.gets.append(p)
+                self.touched.append(p.rsplit("/", 1)[0])
+                if p in self.docs or self.bill_misses:
+                    self._bill(p.rsplit("/", 1)[0], 1)
                 rows.append({"found": {"name": name, "fields": {k: to_value(v) for k, v in self.docs[p].items()}}}
                             if p in self.docs else {"missing": name})
             return rows

@@ -298,6 +298,29 @@ def test_s2_2_a_purged_uid_is_not_indexed_again_by_a_full_sync_or_a_catch_up(db,
     assert d.search("back2@") == []
 
 
+def test_a_catch_up_reads_the_tombstones_of_the_users_it_folds_in_only(db, make_dir, clock):
+    """Every search catches up: it must not read the whole adminTombstones collection (it only grows) each time, just
+    the tombstones of the new registrations it is about to index (T57)."""
+    seed_ivans(db)
+    for i in range(40):
+        db.docs[f"adminTombstones/gone-{i}"] = {"status": "done"}
+    d = make_dir()
+    d.full_sync()
+    clock.advance(3600)
+
+    db.reset_counters()
+    assert d.catch_up() == 0                                          # nobody new: no tombstone is read at all
+    assert "adminTombstones" not in db.touched
+
+    db.add_user("new1", "new1@example.test", clock.now - timedelta(minutes=2))
+    db.add_user("gone-3", "gone3@example.test", clock.now - timedelta(minutes=1))   # a purged account wrote back
+    db.reset_counters()
+    assert d.catch_up() == 1
+    assert d.email_of("gone-3") is None and d.email_of("new1") == "new1@example.test"
+    assert "adminTombstones" not in [c for c, _ in db.queries]        # no query of the whole collection
+    assert sorted(db.gets) == ["adminTombstones/gone-3", "adminTombstones/new1"]
+
+
 # ===================================================================== remove / email_of
 
 

@@ -347,6 +347,16 @@ def test_a_read_only_transaction_is_rolled_back():
     assert verbs(s) == ["beginTransaction", "batchGet", "rollback"]
 
 
+def test_get_many_asks_for_the_paths_in_batches_and_returns_the_found_ones(monkeypatch):
+    found_a = {"found": {"name": f"{ROOT}/t/a", "fields": {"n": {"integerValue": "1"}}}}
+    idx, s = client((200, [found_a, {"missing": f"{ROOT}/t/b"}]), (200, [{"missing": f"{ROOT}/t/c"}]))
+    monkeypatch.setattr(fs, "GET_MANY_CHUNK", 2)
+    found = idx.get_many(["t/a", "t/b", "t/a", "t/c"])                 # a repeated path is asked once
+    assert {path: doc.data for path, doc in found.items()} == {"t/a": {"n": 1}}
+    assert verbs(s) == ["batchGet", "batchGet"]
+    assert [c[2]["documents"] for c in s.calls] == [[f"{ROOT}/t/a", f"{ROOT}/t/b"], [f"{ROOT}/t/c"]]
+
+
 def test_run_query_builds_a_structured_query():
     idx, s = client((200, [{"readTime": "x"}]))
     assert idx.run_query("users/alice/tracks", filters=[("source.type", "==", "youtube"), ("size", ">=", 10)],

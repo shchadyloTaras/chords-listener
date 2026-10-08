@@ -669,7 +669,7 @@ def test_a_repeated_call_returns_the_state_of_the_slot(env, client):
     assert len(env.purges) == 1
 
 
-@pytest.mark.parametrize("headers", [
+NON_SCHEDULER = [
     {},                                                    # no credentials
     {"Authorization": "Bearer tok-alice"},                 # an ordinary signed-in user
     {"Authorization": "Bearer tok-admin-1"},               # even an admin
@@ -677,11 +677,41 @@ def test_a_repeated_call_returns_the_state_of_the_slot(env, client):
     {"Authorization": "Basic c2NoZWQ6b2s="},
     {"Authorization": "Bearer"},
     {"X-Smoke-Key": "x" * 20},
-])
-def test_a_non_scheduler_caller_gets_the_unknown_route_404(env, client, headers):
-    res = client().post("/api/internal/sweep", headers=headers)
-    assert res.status_code == 404 and res.json() == unknown()
+]
+
+
+def as_unknown(res: Any, path: str = "/api/internal/sweep") -> tuple[int, Any, dict[str, str]]:
+    """A response with the unknown address it was asked for written as ``path``: status, body, headers."""
+    body = res.json()
+    if isinstance(body, dict) and isinstance(body.get("detail"), str):
+        body = {**body, "detail": re.sub(r"/api/internal/\S+", path, body["detail"])}
+    headers = {k: v for k, v in res.headers.items() if k not in ("content-length", "date")}
+    return res.status_code, body, headers
+
+
+@pytest.mark.parametrize("method", ["POST", "GET"])
+@pytest.mark.parametrize("headers", NON_SCHEDULER)
+def test_a_non_scheduler_caller_is_answered_exactly_like_at_an_unknown_api_address(env, client, headers, method):
+    """No sign-in: the 401 every other /api address answers; a signed-in user or admin: the unknown-route 404. Either
+    way the sweep address is not told apart from one that does not exist (T57)."""
+    c = client()
+    res = c.request(method, "/api/internal/sweep", headers=headers)
+    unknown_res = c.request(method, "/api/internal/zzz-unknown", headers=headers)
+    assert as_unknown(res) == as_unknown(unknown_res)
+    assert res.status_code in (401, 404)
     assert env.sweep_doc() is None                         # and nothing ran
+
+
+@pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer sched-bad"}, {"Authorization": "Bearer"}])
+def test_an_unauthenticated_caller_gets_the_401_of_any_api_address(env, client, headers):
+    res = client().post("/api/internal/sweep", headers=headers)
+    assert res.status_code == 401 and res.json()["code"] == "unauthorized"
+    assert res.headers["www-authenticate"] == "Bearer"
+
+
+def test_a_signed_in_non_scheduler_gets_the_unknown_route_404(env, client):
+    res = client().post("/api/internal/sweep", headers={"Authorization": "Bearer tok-alice"})
+    assert res.status_code == 404 and res.json() == unknown()
 
 
 def test_the_404_for_a_non_scheduler_is_the_one_an_unknown_address_gets(env, client):
@@ -696,7 +726,7 @@ def test_the_404_for_a_non_scheduler_is_the_one_an_unknown_address_gets(env, cli
 def test_other_methods_on_the_sweep_path_are_hidden_too(env, client):
     c = client()
     assert c.get("/api/internal/sweep", headers={"Authorization": "Bearer tok-alice"}).json() == unknown()
-    assert c.get("/api/internal/sweep").status_code == 404
+    assert as_unknown(c.get("/api/internal/sweep")) == as_unknown(c.get("/api/internal/zzz-unknown"))
     assert env.sweep_doc() is None
 
 
@@ -706,8 +736,11 @@ def test_a_scheduler_token_is_not_a_sign_in_for_the_rest_of_the_api(env, client)
 
 
 def test_without_a_scheduler_verifier_the_endpoint_does_not_exist(env, client):
-    res = client(scheduler=None).post("/api/internal/sweep", headers={"Authorization": "Bearer sched-ok"})
-    assert res.status_code == 404 and res.json() == unknown()
+    c = client(scheduler=None)
+    for headers in ({"Authorization": "Bearer sched-ok"}, {"Authorization": "Bearer tok-alice"}):
+        res = c.post("/api/internal/sweep", headers=headers)
+        assert as_unknown(res) == as_unknown(c.post("/api/internal/zzz-unknown", headers=headers))
+    assert env.sweep_doc() is None
 
 
 def test_in_local_mode_the_endpoint_does_not_exist(env, client):

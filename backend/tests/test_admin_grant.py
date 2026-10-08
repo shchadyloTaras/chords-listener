@@ -57,15 +57,18 @@ def load_script() -> Any:
 
 
 class FakeLookup:
-    """Stands in for the Identity Toolkit ``accounts:lookup`` call: email -> uid."""
+    """Stands in for the Identity Toolkit ``accounts:lookup`` call: email -> (uid, verified); every address it knows
+    is verified unless listed in ``unverified``."""
 
-    def __init__(self, accounts: dict[str, str]) -> None:
+    def __init__(self, accounts: dict[str, str], unverified: frozenset[str] = frozenset()) -> None:
         self.accounts = accounts
+        self.unverified = unverified
         self.asked: list[str] = []
 
     def uid_for_email(self, email: str):
         self.asked.append(email)
-        return self.accounts.get(email.lower())
+        uid = self.accounts.get(email.lower())
+        return (uid, email.lower() not in self.unverified) if uid else (None, False)
 
 
 # ------------------------------------------------------------------------------------------------- script, offline
@@ -329,6 +332,30 @@ def test_an_unauthenticated_options_to_admin_or_internal_routes_answers_like_an_
     assert _snapshot(client.options(path)) == _snapshot(unknown)
 
 
+PAGES = "https://shchadylotaras.github.io"   # where admin.html is served from
+
+
+@pytest.mark.parametrize("path, method", [
+    ("/api/admin/overview", "GET"),
+    ("/api/admin/users/u1/restriction", "PUT"),
+    ("/api/admin/users/u1/deletion", "POST"),
+])
+def test_the_admin_pages_real_preflight_passes_from_an_allowed_origin_only(tmp_path, path, method):
+    """hiding the admin routes from OPTIONS (T48) must not break the admin page itself: its browser preflight
+    (Origin + method + the Authorization header) gets 200 and the origin back; another origin gets 400 and none (T57)."""
+    client = TestClient(_cloud_app(tmp_path), base_url="http://localhost")
+    asks = {"Access-Control-Request-Method": method, "Access-Control-Request-Headers": "authorization,content-type"}
+    for origin in (PAGES, "http://localhost:5173"):
+        ok = client.options(path, headers={"Origin": origin, **asks})
+        assert ok.status_code == 200, (origin, ok.text)
+        assert ok.headers["access-control-allow-origin"] == origin
+        assert method in ok.headers["access-control-allow-methods"]
+        assert "authorization" in ok.headers["access-control-allow-headers"].lower()
+    refused = client.options(path, headers={"Origin": "https://evil.example", **asks})
+    assert refused.status_code == 400
+    assert "access-control-allow-origin" not in refused.headers
+
+
 def test_a_real_cors_preflight_still_works_for_normal_routes(tmp_path):
     client = TestClient(_cloud_app(tmp_path), base_url="http://localhost")
     res = client.options("/api/jobs", headers={"Origin": "http://localhost:5173",
@@ -337,22 +364,64 @@ def test_a_real_cors_preflight_still_works_for_normal_routes(tmp_path):
     assert res.headers["access-control-allow-origin"] == "http://localhost:5173"
 
 
-class VerifiedLookup(FakeLookup):
-    def __init__(self, accounts: dict[str, str], unverified: set[str]) -> None:
-        super().__init__(accounts)
-        self.unverified = unverified
-
-    def uid_for_email(self, email: str):
-        self.verified = email.lower() not in self.unverified
-        return super().uid_for_email(email)
-
-
 def test_grant_by_email_refuses_an_unverified_email_and_revoke_still_works(capsys):
     script, db = load_script(), MemDb()
-    lookup = VerifiedLookup({"a@x.io": "uidA"}, {"a@x.io"})
+    lookup = FakeLookup({"a@x.io": "uidA"}, frozenset({"a@x.io"}))
     assert script.run(["grant", "a@x.io"], db=db, lookup=lookup, now=NOW) == 1
     assert "not verified" in capsys.readouterr().err and db.docs == {}
     db.docs["adminAllowlist/uidA"] = {"grantedAt": NOW, "note": None}
     assert script.run(["revoke", "a@x.io"], db=db, lookup=lookup, now=NOW) == 0
     assert db.docs == {}
     assert script.run(["grant", "uidB"], db=db, lookup=lookup, now=NOW) == 0  # a uid argument is as before
+
+
+class SilentLookup:
+    """A lookup that finds the account but says nothing about its address being verified."""
+
+    def uid_for_email(self, email: str):
+        return ("uidS", None)
+
+
+def test_grant_by_email_fails_closed_when_nothing_says_the_email_is_verified(capsys):
+    script, db = load_script(), MemDb()
+    assert script.run(["grant", "s@x.io"], db=db, lookup=SilentLookup(), now=NOW) == 1
+    assert "not verified" in capsys.readouterr().err and db.docs == {} and db.commits == 0
+
+
+class AuthAnswer:
+    def __init__(self, body: dict) -> None:
+        self.status_code, self._body, self.text = 200, body, ""
+
+    def json(self) -> dict:
+        return self._body
+
+
+@pytest.mark.parametrize("user, verified", [
+    ({"localId": "uidV", "emailVerified": True}, True),
+    ({"localId": "uidV", "emailVerified": False}, False),
+    ({"localId": "uidV"}, False),                                         # no flag at all: not verified
+    ({"localId": "uidV", "emailVerified": "true"}, False),                # only a real true counts
+])
+def test_the_auth_lookup_reports_the_uid_and_whether_the_email_is_verified(user, verified, monkeypatch):
+    monkeypatch.delenv("FIREBASE_AUTH_EMULATOR_HOST", raising=False)
+    script = load_script()
+    session = type("S", (), {"post": lambda self, url, **kw: AuthAnswer({"users": [user]})})()
+    lookup = script.AuthEmailLookup("p1", session_factory=lambda: session)
+    assert lookup.uid_for_email("v@x.io") == ("uidV", verified)
+
+
+@needs_auth
+def test_granting_an_unverified_email_through_the_auth_emulator_fails_and_writes_nothing(emulator_db, capsys):
+    import requests
+
+    script = load_script()
+    email = f"grant-unverified-{uuid.uuid4().hex[:10]}@example.test"
+    sign_up = requests.post(
+        f"http://{AUTH_HOST}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake",
+        json={"email": email, "password": "not-a-real-secret-1"}, timeout=10)
+    assert sign_up.status_code == 200, sign_up.text
+    uid = sign_up.json()["localId"]
+    assert script.run(["grant", email, "--project", PROJECT], db=emulator_db) == 1
+    assert "not verified" in capsys.readouterr().err
+    assert emulator_db.get(f"adminAllowlist/{uid}") is None
+

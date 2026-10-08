@@ -195,15 +195,16 @@ class Directory:
         if cursor is None:                       # no index (or a shard without a cursor): build it from scratch
             return self._full_sync()
         total, last = 0, None
-        purged = self._purged()
         while True:
             page = self._db.run_query(
                 self._users, filters=[("createdAt", ">", cursor)], order_by=["createdAt"],
                 limit=CATCH_UP_PAGE, start_after=last)
             added: dict[str, str] = {}
             newest = cursor
+            emails = {doc.id: doc.data.get("email") for doc in page}
+            purged = self._purged_among([uid for uid, email in emails.items() if isinstance(email, str) and email])
             for doc in page:
-                email = doc.data.get("email")
+                email = emails[doc.id]
                 if isinstance(email, str) and email and doc.id not in purged:
                     added[doc.id] = email.lower()
                 created = parse_time(doc.data.get("createdAt"))
@@ -267,8 +268,17 @@ class Directory:
 
     def _purged(self) -> set[str]:
         """The uids that have a tombstone: a purged (or being purged) account is never indexed again, whatever a
-        client holding a still-valid token wrote back to ``users/{uid}`` (review S2-2)."""
+        client holding a still-valid token wrote back to ``users/{uid}`` (review S2-2). The full sync reads them all
+        once (it reads every user anyway)."""
         return {d.id for d in self._db.run_query(self._tombstones)}
+
+    def _purged_among(self, uids: list[str]) -> set[str]:
+        """Which of ``uids`` have a tombstone: a catch-up asks only about the registrations it folds in (a batched
+        read of just those), never the whole collection, which grows with every purge."""
+        if not uids:
+            return set()
+        found = self._db.get_many(f"{self._tombstones}/{uid}" for uid in uids)
+        return {path.rsplit("/", 1)[1] for path in found}
 
     def _all_emails(self) -> dict[str, str]:
         emails: dict[str, str] = {}

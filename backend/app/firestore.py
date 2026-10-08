@@ -32,6 +32,7 @@ log = logging.getLogger("chords.firestore")
 BASE_URL = "https://firestore.googleapis.com/v1/projects/{project}/databases/(default)/documents"
 SCOPES = ["https://www.googleapis.com/auth/datastore"]
 TIMEOUT_S = 10.0
+GET_MANY_CHUNK = 300  # documents per batchGet request
 
 
 class IndexError_(Exception):
@@ -266,6 +267,19 @@ class FirestoreIndex:
         """The document at ``path``, or None when there is none."""
         res = self._call("GET", f"{self._base}/{quote(path, safe='/')}", also_ok=(404,))
         return None if res.status_code == 404 else self._doc(res.json())
+
+    def get_many(self, paths: Iterable[str]) -> dict[str, Document]:
+        """The documents at ``paths`` that exist, by path: one ``batchGet`` round trip per ``GET_MANY_CHUNK`` paths
+        (Firestore bills one read per path asked, found or not)."""
+        wanted = list(dict.fromkeys(paths))
+        found: dict[str, Document] = {}
+        for i in range(0, len(wanted), GET_MANY_CHUNK):
+            rows = self._post(":batchGet", {"documents": [self._name(p) for p in wanted[i:i + GET_MANY_CHUNK]]})
+            for row in rows:
+                if "found" in row:
+                    doc = self._doc(row["found"])
+                    found[doc.path] = doc
+        return found
 
     def update_op(
         self,
