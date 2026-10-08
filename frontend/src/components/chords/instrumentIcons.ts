@@ -1,6 +1,6 @@
 // An icon per instrument for the phone's instrument menu. Lucide has the guitar and the piano; the bass,
-// ukulele, harmonium and handpan are drawn here on its 24 grid in its style (2 px round strokes), so
-// they sit next to lucide icons and take the same props.
+// ukulele, harmonium, handpan, sopilka and flute are drawn here on its 24 grid in its style (2 px round
+// strokes), so they sit next to lucide icons and take the same props.
 
 import { createLucideIcon, Guitar, Piano, type LucideIcon } from 'lucide-react'
 import type { Instrument } from '../../store'
@@ -65,6 +65,25 @@ export const Handpan = createLucideIcon('handpan', [
   ['path', { d: 'M16.4 12q1.1-1 2.2 0', key: 'field2' }],
 ])
 
+/** Sopilka, held down and away like a recorder: the beak and the window on top, a row of finger holes. */
+export const Sopilka = createLucideIcon('sopilka', [
+  ['path', { d: 'M10.4 7.5 10.8 2h2.4l.4 5.5', transform: 'rotate(-35 12 12)', key: 'beak' }],
+  ['rect', { x: '10', y: '7.5', width: '4', height: '15', rx: '2', transform: 'rotate(-35 12 12)', key: 'body' }],
+  ['path', { d: 'M11 5h2', transform: 'rotate(-35 12 12)', key: 'window' }],
+  ['circle', { cx: '12', cy: '12', r: '.4', transform: 'rotate(-35 12 12)', key: 'hole1' }],
+  ['circle', { cx: '12', cy: '15', r: '.4', transform: 'rotate(-35 12 12)', key: 'hole2' }],
+  ['circle', { cx: '12', cy: '18', r: '.4', transform: 'rotate(-35 12 12)', key: 'hole3' }],
+])
+
+/** Concert flute, held to the right: a long tube, the embouchure hole near the left end, the key rings along it. */
+export const Flute = createLucideIcon('flute', [
+  ['rect', { x: '1', y: '10', width: '22', height: '4', rx: '2', transform: 'rotate(-30 12 12)', key: 'tube' }],
+  ['circle', { cx: '4.6', cy: '12', r: '.4', transform: 'rotate(-30 12 12)', key: 'embouchure' }],
+  ['path', { d: 'M10.5 10v4', transform: 'rotate(-30 12 12)', key: 'key1' }],
+  ['path', { d: 'M14.5 10v4', transform: 'rotate(-30 12 12)', key: 'key2' }],
+  ['path', { d: 'M18.5 10v4', transform: 'rotate(-30 12 12)', key: 'key3' }],
+])
+
 export const INSTRUMENT_ICON: Record<Instrument, LucideIcon> = {
   guitar: Guitar,
   bass: BassGuitar,
@@ -72,4 +91,6 @@ export const INSTRUMENT_ICON: Record<Instrument, LucideIcon> = {
   piano: Piano,
   harmonium: Harmonium,
   handpan: Handpan,
+  sopilka: Sopilka,
+  flute: Flute,
 }

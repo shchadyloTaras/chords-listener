@@ -13,6 +13,8 @@ export interface VoiceParts {
   end: number
   /** seconds after the start when the note counts as released (the live note's `end`) */
   release: number
+  /** context time its own fade-out starts (a held key comes up, the breath stops): cut later, it is left to finish */
+  fadeFrom?: number
 }
 
 /** A start-to-stop gain node that also lists itself for cleanup. */

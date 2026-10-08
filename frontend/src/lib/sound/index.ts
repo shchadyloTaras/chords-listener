@@ -14,6 +14,7 @@ export {
   playHotkeyChord,
   playPianoKey,
   playTestSound,
+  playWindNote,
   type SongChords,
   type SoundOptions,
 } from './play'

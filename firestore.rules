@@ -17,7 +17,7 @@ rules_version = '2';
 //   - settings: map (required, exactly these 11 keys) - synced UI preferences
 //       - simplify: bool
 //       - accidentals: string, one of 'auto' | 'sharp' | 'flat'
-//       - instrument: string, one of 'guitar' | 'bass' | 'ukulele' | 'piano' | 'harmonium' | 'handpan'
+//       - instrument: string, one of 'guitar' | 'bass' | 'ukulele' | 'piano' | 'harmonium' | 'handpan' | 'sopilka' | 'flute'
 //       - view: string, one of 'sheet' | 'timeline' | 'score'
 //       - barsPerLine: int, one of 2 | 4 | 8
 //       - follow: bool
@@ -94,7 +94,7 @@ service cloud.firestore {
         s.keys().hasOnly(keys) &&
         s.simplify is bool &&
         s.accidentals in ['auto', 'sharp', 'flat'] &&
-        s.instrument in ['guitar', 'bass', 'ukulele', 'piano', 'harmonium', 'handpan'] &&
+        s.instrument in ['guitar', 'bass', 'ukulele', 'piano', 'harmonium', 'handpan', 'sopilka', 'flute'] &&
         s.view in ['sheet', 'timeline', 'score'] &&
         s.barsPerLine is int && s.barsPerLine in [2, 4, 8] &&
         s.follow is bool &&

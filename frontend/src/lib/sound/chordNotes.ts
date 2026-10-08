@@ -1,7 +1,8 @@
 // Which notes the chord sound plays — always exactly what the diagram for the selected instrument
 // shows: the staff voicing on the piano keys, the right hand's shape on the harmonium, the displayed guitar / ukulele / bass
-// voicing (strummed low → high; the bass arpeggiated), or the chord tones the selected handpan
-// really has (a low → high arpeggio). Pure functions.
+// voicing (strummed low → high; the bass arpeggiated), the chord tones the selected handpan
+// really has (a low → high arpeggio), or the sopilka's / flute's arpeggio, one note after the other.
+// Pure functions.
 
 import { BASS_TUNING } from '../diagrams/bass'
 import type { DbInstrument, FretInstrument, Voicing } from '../diagrams/chordsDb'
@@ -11,6 +12,7 @@ import { staffChord } from '../diagrams/staff'
 import { handpanMidis, playability, type HandpanScale } from '../handpan'
 import { parseChord, QUALITY_INTERVALS, type ParsedChord } from '../music/chord'
 import { mod12 } from '../music/notes'
+import { windChord, type WindInstrument } from '../wind'
 
 export interface NoteEvent {
   /** MIDI note number */
@@ -19,11 +21,11 @@ export interface NoteEvent {
   offset: number
   /** 0..1 */
   velocity: number
-  /** what lights up while it sounds: piano key index (0 = C4 of the diagram), harmonium key index (0 = C3), guitar / ukulele / bass string index, handpan note index (0 = ding) */
+  /** what lights up while it sounds: piano key index (0 = C4 of the diagram), harmonium key index (0 = C3), guitar / ukulele / bass string index, handpan note index (0 = ding), wind arpeggio note index */
   target: number
   /** stereo position −1..1 (when the instrument does not pan by pitch) */
   pan?: number
-  /** seconds the key stays down (piano, harmonium; default: the chord / note hold) */
+  /** seconds the key stays down / the note is blown (piano, harmonium, wind; default: the chord / note hold) */
   hold?: number
 }
 
@@ -237,6 +239,32 @@ export function handpanChordNotes(label: string, scale: HandpanScale): NoteEvent
     target: i,
     pan: handpanFieldPan(scale, i),
   }))
+}
+
+// ---------- sopilka / flute ----------
+
+/** Wind arpeggio: a note every 260 ms, rising, tongued (a breath between), the last one held. */
+export const WIND_STEP = 0.26
+const WIND_TONGUE = 0.04
+export const WIND_LAST_HOLD = 1.1
+
+/** The chord as the wind diagram shows it: its arpeggio, one note at a time, each until the next. */
+export function windChordNotes(label: string, instrument: WindInstrument): NoteEvent[] {
+  const notes = windChord(instrument, label)
+  const last = notes.length - 1
+  return notes.map((n, i) => ({
+    midi: n.midi,
+    offset: i * WIND_STEP,
+    velocity: i === 0 ? 0.86 : 0.8,
+    target: i,
+    hold: i === last ? WIND_LAST_HOLD : WIND_STEP - WIND_TONGUE,
+  }))
+}
+
+/** One note (column) of a chord's wind diagram. Null for an index the arpeggio does not have. */
+export function windNote(label: string, instrument: WindInstrument, index: number): NoteEvent | null {
+  const n = windChord(instrument, label)[index]
+  return n ? { midi: n.midi, offset: 0, velocity: 0.84, target: index } : null
 }
 
 // ---------- which chord ----------

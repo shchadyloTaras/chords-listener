@@ -48,10 +48,13 @@ describe('pickSynced', () => {
     expect(pickSynced({ ...local, instrument: 'handpan' }).instrument).toBe('handpan')
   })
 
-  it('keeps the bass and the harmonium', () => {
+  it('keeps the bass, the harmonium, the sopilka and the flute', () => {
     expect(pickSynced({ ...local, instrument: 'bass' }).instrument).toBe('bass')
     expect(pickSynced({ ...local, instrument: 'harmonium' }).instrument).toBe('harmonium')
+    expect(pickSynced({ ...local, instrument: 'sopilka' }).instrument).toBe('sopilka')
+    expect(pickSynced({ ...local, instrument: 'flute' }).instrument).toBe('flute')
     expect(isValidSynced('instrument', 'harmonium')).toBe(true)
+    expect(isValidSynced('instrument', 'flute')).toBe(true)
     expect(isValidSynced('instrument', 'banjo')).toBe(false)
   })
 
