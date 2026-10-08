@@ -57,3 +57,16 @@
 | [T48](./t48-stop-leaking-admin-routes-via-options-and-require.md) | Stop leaking admin routes via OPTIONS and require a verified email in the grant script | app | Тарас Щадило | S | T45 | done |
 | [T49](./t49-consolidate-the-in-memory-firestore-fakes-and-fix.md) | Consolidate the in-memory Firestore fakes and fix the AC-13b settings test | tests | Тарас Щадило | S | T48 | done |
 | [T50](./t50-run-the-emulator-tests-in-ci-and-align-the-test-pl.md) | Run the emulator tests in CI and align the test plan with the levels used | tests | Тарас Щадило | S | T49 | done |
+| [T51](./t51-offer-the-tab-on-the-fragment-picker-when-the-clou.md) | Offer the tab on the fragment picker when the cloud refuses for the admin's reason | ui | Тарас Щадило | S | T47 | todo |
+| [T52](./t52-label-quiet-pre-launch-days-as-restored-and-show-t.md) | Label quiet pre-launch days as restored and show the YouTube source in job rows | migration | Тарас Щадило | S | T42, T41 | todo |
+| [T53](./t53-pass-the-admin-set-upload-limit-to-the-link-and-fr.md) | Pass the admin-set upload limit to the link and fragment downloads on every job | app | Тарас Щадило | S | T40 | todo |
+| [T54](./t54-keep-get-settings-and-get-jobs-inside-the-contract.md) | Keep GET /settings and GET /jobs inside the contract | ports | Тарас Щадило | S | T43, T44 | todo |
+| [T55](./t55-resolve-accounts-through-firebase-auth-and-let-onl.md) | Resolve accounts through Firebase Auth and let only the purge delete a profile | app | Тарас Щадило | S | T45 | todo |
+| [T56](./t56-refuse-uploads-from-a-purged-account-in-the-storag.md) | Refuse uploads from a purged account in the Storage rules | wiring | Тарас Щадило | S | T45 | todo |
+| [T57](./t57-close-the-small-security-and-infra-gaps-sweep-401.md) | Close the small security and infra gaps: sweep 401, grant fails closed, tombstone reads, admin preflight | app | Тарас Щадило | S | T48 | todo |
+| [T58](./t58-guard-the-query-shapes-the-in-memory-firestore-ser.md) | Guard the query shapes the in-memory Firestore serves | tests | Тарас Щадило | S | T49 | todo |
+| [T59](./t59-make-the-emulator-ci-job-install-ffmpeg-fail-on-un.md) | Make the emulator CI job install ffmpeg, fail on unexpected skips and pin firebase-tools | tests | Тарас Щадило | S | T50 | todo |
+| [T60](./t60-show-the-shared-dialogs-and-pages-of-the-admin-pag.md) | Show the shared dialogs and pages of the admin page in Ukrainian | ui | Тарас Щадило | S | T46 | todo |
+| [T61](./t61-use-one-label-per-status-and-switch-across-the-adm.md) | Use one label per status and switch across the admin screens | ui | Тарас Щадило | S | T52 | todo |
+| [T62](./t62-make-the-test-plan-say-what-is-tested-where-today.md) | Make the test plan say what is tested where today | docs | Тарас Щадило | S | T50 | todo |
+| [T63](./t63-import-the-shared-test-fakes-from-fixtures-never-f.md) | Import the shared test fakes from fixtures, never from another test module | tests | Тарас Щадило | S | T58 | todo |

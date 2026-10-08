@@ -1010,6 +1010,262 @@
         "README.md",
         "test-plan.md"
       ]
+    },
+    {
+      "id": "T51",
+      "title": "Offer the tab on the fragment picker when the cloud refuses for the admin's reason",
+      "layer": "ui",
+      "deps": [
+        "T47"
+      ],
+      "acs": [
+        "AC-18",
+        "AC-26",
+        "AC-27"
+      ],
+      "dod": "Re-review fix 1. A ClipPage test shows that an admin refusal (youtube_disabled, cloud_restricted, analyses_paused) of a fragment opens «Слухати у вкладці» at the same start with the reason shown, and that a picker opened while the site already knows YouTube is off goes straight to the tab page without sending anything.",
+      "files_hint": [
+        "frontend/src/components/clip/ClipPage.tsx",
+        "frontend/src/components/clip/ClipPage.test.ts"
+      ]
+    },
+    {
+      "id": "T52",
+      "title": "Label quiet pre-launch days as restored and show the YouTube source in job rows",
+      "layer": "migration",
+      "deps": [
+        "T42",
+        "T41"
+      ],
+      "acs": [
+        "AC-07",
+        "AC-08"
+      ],
+      "dod": "Re-review fixes 2, 3. Emulator tests show migration 06 writes a restored day (zero counts) for every UTC day from the first track's day up to --before, idempotent, and .down removes them all; a Jobs test asserts on the row cell that a YouTube job reads «Посилання · YouTube».",
+      "files_hint": [
+        "docs/features/admin/migrations/06_restore_stats_from_tracks.up.py",
+        "backend/tests/admin/test_migration_06.py",
+        "frontend/src/admin/screens/Jobs.tsx",
+        "frontend/src/admin/screens/JobsStats.test.tsx"
+      ]
+    },
+    {
+      "id": "T53",
+      "title": "Pass the admin-set upload limit to the link and fragment downloads on every job",
+      "layer": "app",
+      "deps": [
+        "T40"
+      ],
+      "acs": [
+        "AC-24",
+        "AC-25"
+      ],
+      "dod": "Re-review fix 4 (review S1-1). Tests show a link download and a fragment download get the admin-set byte cap, not the deploy-time one, and a link longer than the admin-set duration fails too_long.",
+      "files_hint": [
+        "backend/app/sources.py",
+        "backend/app/fetch_client.py",
+        "backend/app/jobs.py",
+        "backend/tests/test_admission.py"
+      ]
+    },
+    {
+      "id": "T54",
+      "title": "Keep GET /settings and GET /jobs inside the contract",
+      "layer": "ports",
+      "deps": [
+        "T43",
+        "T44"
+      ],
+      "acs": [
+        "AC-07",
+        "AC-29"
+      ],
+      "dod": "Re-review fixes 5, 6. With publicStatus/current absent or invalid, GET /api/admin/settings returns the same validated placeholder banner migration 04 seeds (one shared constant); openapi.yaml declares both invalid_period and invalid_value for 422 on /api/admin/jobs, checked by a contract test.",
+      "files_hint": [
+        "backend/app/admin/settings.py",
+        "docs/features/admin/migrations/04_seed_runtime_config.up.py",
+        "docs/features/admin/contracts/openapi.yaml",
+        "backend/tests/admin/test_settings.py",
+        "backend/tests/admin/test_api_history.py"
+      ]
+    },
+    {
+      "id": "T55",
+      "title": "Resolve accounts through Firebase Auth and let only the purge delete a profile",
+      "layer": "app",
+      "deps": [
+        "T45"
+      ],
+      "acs": [
+        "AC-16",
+        "AC-20",
+        "AC-21",
+        "AC-23"
+      ],
+      "dod": "Re-review fix 8 (review S2-1). firestore.rules (and staged migration 03) refuse every client delete of users/{uid}; rules tests prove it. With no profile, no index entry and no admin state, an account Firebase Auth knows is found by the card, restricted, and scheduleDeletion confirms against its Auth e-mail.",
+      "files_hint": [
+        "firestore.rules",
+        "docs/features/admin/migrations/03_admin_rules.up.rules",
+        "firestore.rules.test.mjs",
+        "backend/app/admin/identity.py",
+        "backend/app/admin/router.py",
+        "backend/app/admin/actions.py",
+        "backend/tests/admin/test_actions_deletion.py"
+      ]
+    },
+    {
+      "id": "T56",
+      "title": "Refuse uploads from a purged account in the Storage rules",
+      "layer": "wiring",
+      "deps": [
+        "T45"
+      ],
+      "acs": [
+        "AC-22"
+      ],
+      "dod": "Re-review fix 9 (review S2-2). storage.rules refuses an upload create when adminTombstones/{uid} exists; a storage rules test (Auth + Firestore + Storage emulators) proves it; docs/CLOUD.md names the cross-service role the deploy needs.",
+      "files_hint": [
+        "storage.rules",
+        "storage.rules.test.mjs",
+        "docs/CLOUD.md"
+      ]
+    },
+    {
+      "id": "T57",
+      "title": "Close the small security and infra gaps: sweep 401, grant fails closed, tombstone reads, admin preflight",
+      "layer": "app",
+      "deps": [
+        "T48"
+      ],
+      "acs": [
+        "AC-31",
+        "AC-32"
+      ],
+      "dod": "Re-review fixes 10-13. Tests show an unverified call to /api/internal/sweep answers exactly like any other unauthenticated /api/* call; the grant script refuses an email whose verified flag is missing or false (offline and on the Auth emulator); a catch-up reads tombstones only for the uids it folds in; a real CORS preflight to /api/admin/* gets 200 from an allowed origin and 400 from another.",
+      "files_hint": [
+        "backend/app/auth.py",
+        "scripts/admin_grant.py",
+        "backend/app/admin/directory.py",
+        "backend/app/firestore.py",
+        "backend/tests/test_admin_grant.py",
+        "backend/tests/admin/test_directory.py"
+      ]
+    },
+    {
+      "id": "T58",
+      "title": "Guard the query shapes the in-memory Firestore serves",
+      "layer": "tests",
+      "deps": [
+        "T49"
+      ],
+      "acs": [
+        "AC-33"
+      ],
+      "dod": "Re-review fix 7. MemDb has an opt-in guard that refuses a query or aggregation whose filters and order no index in firestore.indexes.json (or a single-field index) can serve, and a sum where only count() is expected; the sweep and audit tests run with it on.",
+      "files_hint": [
+        "backend/tests/admin/fixtures.py",
+        "backend/tests/admin/test_fixtures.py",
+        "backend/tests/admin/test_sweeps.py",
+        "backend/tests/admin/test_api_audit.py"
+      ]
+    },
+    {
+      "id": "T59",
+      "title": "Make the emulator CI job install ffmpeg, fail on unexpected skips and pin firebase-tools",
+      "layer": "tests",
+      "deps": [
+        "T50"
+      ],
+      "acs": [
+        "AC-16",
+        "AC-36"
+      ],
+      "dod": "Re-review fix 14. The workflow installs ffmpeg, runs the storage rules tests too, and sets a flag under which a test skipped for want of ffmpeg or an emulator fails the run (tested); firebase-tools is pinned to the current major in the workflow, README and docs/CLOUD.md.",
+      "files_hint": [
+        ".github/workflows/backend-emulators.yml",
+        "backend/tests/conftest.py",
+        "README.md",
+        "docs/CLOUD.md"
+      ]
+    },
+    {
+      "id": "T60",
+      "title": "Show the shared dialogs and pages of the admin page in Ukrainian",
+      "layer": "ui",
+      "deps": [
+        "T46"
+      ],
+      "acs": [
+        "AC-31",
+        "AC-34"
+      ],
+      "dod": "Re-review fix 15. The admin entry pins the interface language to Ukrainian without writing the site's stored choice; a test with the site language set to English shows the admin's re-login dialog and not-found page in Ukrainian; ADR-0002 records it.",
+      "files_hint": [
+        "frontend/src/i18n/index.ts",
+        "frontend/src/admin/main.tsx",
+        "frontend/src/admin/AdminApp.test.ts",
+        "docs/features/admin/adr/0002-ship-admin-ui-as-separate-strict-csp-entry.md"
+      ]
+    },
+    {
+      "id": "T61",
+      "title": "Use one label per status and switch across the admin screens",
+      "layer": "ui",
+      "deps": [
+        "T52"
+      ],
+      "acs": [
+        "AC-01",
+        "AC-07",
+        "AC-08"
+      ],
+      "dod": "Re-review fix 16. STATUS_LABEL and SWITCH_LABEL live in screens/labels.ts and are the only wording; the stats headers come from ORIGIN_LABEL / KIND_LABEL; the journal filters use the shared fieldClass; tests assert the shared words.",
+      "files_hint": [
+        "frontend/src/admin/screens/labels.ts",
+        "frontend/src/admin/screens/Jobs.tsx",
+        "frontend/src/admin/screens/UserCard.tsx",
+        "frontend/src/admin/screens/Overview.tsx",
+        "frontend/src/admin/screens/Settings.tsx",
+        "frontend/src/admin/screens/Stats.tsx",
+        "frontend/src/admin/screens/Audit.tsx"
+      ]
+    },
+    {
+      "id": "T62",
+      "title": "Make the test plan say what is tested where today",
+      "layer": "docs",
+      "deps": [
+        "T50"
+      ],
+      "acs": [
+        "AC-16",
+        "AC-24",
+        "AC-26",
+        "AC-32"
+      ],
+      "dod": "Re-review fix 17. test-plan.md cites the AC-26 in-browser offer test and drops it from the known gaps, names only CI jobs that exist, and the AC-16/24/32 rows and the e2e rows name the level and clock actually used.",
+      "files_hint": [
+        "docs/features/admin/test-plan.md"
+      ]
+    },
+    {
+      "id": "T63",
+      "title": "Import the shared test fakes from fixtures, never from another test module",
+      "layer": "tests",
+      "deps": [
+        "T58"
+      ],
+      "acs": [
+        "AC-33"
+      ],
+      "dod": "Re-review fix 18. FakeDb, FakeVerifier, Clock, settings_for, ENGINE_INFO, H, never and the world fixture live in tests/admin/fixtures.py or a conftest.py; no test module imports from another test module (a test checks it).",
+      "files_hint": [
+        "backend/tests/admin/fixtures.py",
+        "backend/tests/admin/conftest.py",
+        "backend/tests/admin/test_actions_deletion.py",
+        "backend/tests/admin/test_api_overview.py",
+        "backend/tests/admin/test_settings.py"
+      ]
     }
   ]
 }
