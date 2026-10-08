@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import type { SectionKind } from './lib/music/sections'
 import type { Track } from './types'
 
 /** Implemented by the Shell's player (HTML audio or YouTube iframe). */
@@ -72,6 +73,10 @@ export interface Settings {
   syncOffsetMs: number
   /** what the live piano shows: the chords as a pianist plays them along (default) or the recording's transcribed notes */
   liveKeysSource: LiveKeysSource
+  /** the user's names for a track's song parts (track id → part key, lib/music/sections partKeys → kind); this device only */
+  sectionKinds: Record<string, Record<string, SectionKind>>
+  /** «Акорди в пісні» grouped by song part (default) or all together */
+  legendByParts: boolean
   /** the screen stays on while the app is open and visible (Screen Wake Lock, lib/wakeLock.ts); this device only */
   keepAwake: boolean
   /** the harmonium's drone: the song's tonic held while the song plays (lib/sound/drone.ts); this device only */
@@ -139,6 +144,8 @@ const defaultSettings: Settings = {
   liveKeys: true,
   syncOffsetMs: 0,
   liveKeysSource: 'chords',
+  sectionKinds: {},
+  legendByParts: true,
   keepAwake: true,
   harmoniumDrone: false,
   playAlong: false,
@@ -230,6 +237,8 @@ export const useApp = create<AppState>()(
         liveKeys: s.liveKeys,
         syncOffsetMs: s.syncOffsetMs,
         liveKeysSource: s.liveKeysSource,
+        sectionKinds: s.sectionKinds,
+        legendByParts: s.legendByParts,
         keepAwake: s.keepAwake,
         harmoniumDrone: s.harmoniumDrone,
         playAlong: s.playAlong,

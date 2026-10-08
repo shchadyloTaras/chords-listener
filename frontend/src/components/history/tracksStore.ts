@@ -108,6 +108,13 @@ function commitDelete(id: string, keepalive = false) {
     })
     .then(() => {
       useTracks.setState((s) => ({ tracks: s.tracks?.filter((tr) => tr.id !== id) ?? null }))
+      // the track's song-part names go with it
+      const names = useApp.getState().sectionKinds
+      if (names?.[id]) {
+        const rest = { ...names }
+        delete rest[id]
+        useApp.getState().setSetting('sectionKinds', rest)
+      }
     })
     .catch(() => undefined)
     .finally(() => {

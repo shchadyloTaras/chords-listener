@@ -27,7 +27,7 @@ afterEach(() => {
 const AM: UniqueChord = { label: 'Am', rootPc: 9, quality: 'min', count: 3, seconds: 6, firstIndex: 0 }
 
 function render() {
-  const model = { unique: [AM], spelling: 'sharp' } as unknown as ChordModel
+  const model = { unique: [AM], spelling: 'sharp', sections: [], chords: [], track: { id: 't' } } as unknown as ChordModel
   act(() => root!.render(createElement(ChordModelContext, { value: model }, createElement(ChordLegend))))
 }
 
