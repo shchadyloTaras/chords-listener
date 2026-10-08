@@ -8,7 +8,7 @@ files_hint: ["backend/tests/admin/fixtures.py", "backend/tests/test_cloud.py", "
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 9 — review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T49 — Consolidate the in-memory Firestore fakes and fix the AC-13b settings test

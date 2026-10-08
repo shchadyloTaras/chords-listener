@@ -6,7 +6,6 @@ The tests at the bottom run the same flows on the Firestore emulator (skipped wh
 """
 from __future__ import annotations
 
-import copy
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -18,6 +17,7 @@ import pytest
 from fastapi import APIRouter
 from fastapi.testclient import TestClient
 
+from admin.fixtures import MemDb
 from app.admin import audit as auditmod
 from app.admin.audit import (
     EXPIRE_AFTER,
@@ -28,7 +28,7 @@ from app.admin.audit import (
 )
 from app.admin.authz import AdminAuthz
 from app.admin.router import new_admin_router
-from app.firestore import Aborted, Document, FirestoreIndex, IndexError_, PreconditionFailed, from_value
+from app.firestore import Aborted, Document, FirestoreIndex, IndexError_, PreconditionFailed
 from app.main import create_app
 from app.models import Settings
 
@@ -47,45 +47,11 @@ def parse_ts(value: str) -> datetime:
 # --------------------------------------------------------------------------- fakes
 
 
-class FakeDb(FirestoreIndex):
-    """In-memory Firestore: documents by path, decoded like ``FirestoreIndex`` returns them. ``commit`` is atomic and
-    honours ``currentDocument.exists``; ``fail_next`` (a list of exceptions) breaks the next commit(s)."""
-
-    def __init__(self) -> None:
-        super().__init__("p1", session_factory=lambda: None)
-        self.docs: dict[str, dict[str, Any]] = {}
-        self.commits: list[list[dict[str, Any]]] = []
-        self.fail_next: list[Exception] = []
+class FakeDb(MemDb):
+    """The shared ``MemDb`` (``commit_log`` records every attempted commit, ``fail_next`` breaks the next ones)."""
 
     def audit_docs(self) -> list[tuple[str, dict[str, Any]]]:
         return [(p, d) for p, d in self.docs.items() if p.startswith(COLLECTION + "/")]
-
-    def commit(self, writes: list[dict[str, Any]], *, transaction: Optional[str] = None) -> None:
-        self.commits.append(copy.deepcopy(writes))
-        if self.fail_next:
-            raise self.fail_next.pop(0)
-        staged = copy.deepcopy(self.docs)
-        for w in writes:
-            if "delete" in w:
-                path = w["delete"].split("/documents/", 1)[1]
-                self._check(staged, path, w)
-                staged.pop(path, None)
-                continue
-            u = w["update"]
-            path = u["name"].split("/documents/", 1)[1]
-            self._check(staged, path, w)
-            fields = {k: from_value(v) for k, v in u.get("fields", {}).items()}
-            if "updateMask" in w:
-                staged.setdefault(path, {}).update({k: fields[k] for k in w["updateMask"]["fieldPaths"] if k in fields})
-            else:
-                staged[path] = fields
-        self.docs = staged
-
-    @staticmethod
-    def _check(staged: dict, path: str, write: dict) -> None:
-        cond = write.get("currentDocument")
-        if cond and "exists" in cond and (path in staged) != cond["exists"]:
-            raise PreconditionFailed(f"precondition on {path}")
 
 
 class FakeTx:
@@ -136,7 +102,7 @@ def test_record_with_writes_the_change_and_the_record_in_one_commit(db: FakeDb, 
         [effect_write(db, 100)],
         entry(target_uid="victim-1", setting="limits", before={"analyses": 40}, after={"analyses": 100}),
     )
-    assert len(db.commits) == 1, "the change and its record must share one commit"
+    assert len(db.commit_log) == 1, "the change and its record must share one commit"
     assert db.docs["adminAccounts/victim-1"] == {"limit": 100}
     doc = db.docs[f"{COLLECTION}/{ref}"]
     assert doc["action"] == "limit_set" and doc["outcome"] == "applied"
@@ -309,7 +275,7 @@ def test_a_rejected_attempt_is_journaled_with_its_reason(db: FakeDb, audit: Audi
 def test_malformed_entries_are_refused_before_any_write(db: FakeDb, audit: Audit, kw: dict[str, Any]) -> None:
     with pytest.raises(ValueError):
         audit.record_first(entry(**kw))
-    assert db.commits == []
+    assert db.commit_log == []
 
 
 def test_a_search_with_exactly_fifty_matches_is_accepted(db: FakeDb, audit: Audit) -> None:
@@ -349,7 +315,7 @@ def test_a_record_carries_the_admins_email_and_never_the_targets(db: FakeDb, aud
 
 def test_each_record_is_a_new_document_and_never_overwrites_one(db: FakeDb, audit: Audit) -> None:
     ref = audit.record_first(entry())
-    assert [w["currentDocument"] for c in db.commits for w in c] == [{"exists": False}]
+    assert [w["currentDocument"] for c in db.commit_log for w in c] == [{"exists": False}]
     with pytest.raises(NotApplied):  # the same id again would be an overwrite: the precondition refuses it
         Audit(db, now=lambda: T0, new_id=lambda: ref).record_first(entry())
     assert len(db.audit_docs()) == 1
@@ -364,7 +330,7 @@ def test_the_writer_has_no_way_to_update_or_delete_a_record() -> None:
 def test_the_writer_only_touches_the_audit_collection_itself(db: FakeDb, audit: Audit) -> None:
     audit.record_view(entry("view_card", target_uid="victim-1"))
     audit.record_first(entry("quota_reset"))
-    for commit in db.commits:
+    for commit in db.commit_log:
         for w in commit:
             assert w["update"]["name"].split("/documents/", 1)[1].startswith(COLLECTION + "/")
 

@@ -19,7 +19,7 @@ from typing import Any, Callable, Optional
 
 import pytest
 
-from admin.test_projections import MemDb
+from admin.fixtures import MemDb
 from app.models import Settings
 from app.sources import SourceError
 from app.storage import TrackStore

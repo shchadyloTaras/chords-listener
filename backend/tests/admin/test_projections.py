@@ -6,10 +6,8 @@ bodies (preconditions, masks, increment transforms), and on the Firestore emulat
 """
 from __future__ import annotations
 
-import copy
 import json
 import os
-import re
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -18,10 +16,10 @@ from typing import Any, Optional, get_args
 
 import pytest
 
-from admin.fixtures import make_stats_day
+from admin.fixtures import MemDb, make_stats_day
 from app.admin import history, stats
 from app.admin.history import AcceptedJob, FinishedJob, Projections
-from app.firestore import Document, FirestoreIndex, IndexError_, PreconditionFailed, from_value
+from app.firestore import FirestoreIndex, IndexError_
 from app.models import ErrorCode
 from app.users import SMOKE_UID
 
@@ -29,94 +27,6 @@ EMULATOR_HOST = os.environ.get("FIRESTORE_EMULATOR_HOST")
 UTC = timezone.utc
 NOON = datetime(2026, 10, 8, 12, 0, 0, tzinfo=UTC)
 ANALYSES = ("link", "file", "mic", "tab")
-
-
-def split_path(path: str) -> list[str]:
-    """``failedByReason.`a.b```  ->  ["failedByReason", "a.b"] (the inverse of app.firestore.field_path)."""
-    return [re.sub(r"\\(.)", r"\1", m.group(1)) if m.group(1) is not None else m.group(2)
-            for m in re.finditer(r"`((?:\\.|[^`\\])*)`|([^.`]+)", path)]
-
-
-class MemDb(FirestoreIndex):
-    """In-memory Firestore: documents by path, decoded the way ``FirestoreIndex`` returns them. ``commit`` is atomic
-    and honours ``currentDocument`` preconditions, ``updateMask`` and ``increment`` / ``REQUEST_TIME`` transforms.
-    """
-
-    def __init__(self) -> None:
-        super().__init__("p1", session_factory=lambda: None)
-        self.docs: dict[str, dict[str, Any]] = {}
-        self.commits = 0
-        self._tx = 0
-
-    def get(self, path: str) -> Optional[Document]:
-        return Document(path, copy.deepcopy(self.docs[path])) if path in self.docs else None
-
-    def _post(self, path: str, body: dict) -> Any:
-        if path == ":beginTransaction":
-            self._tx += 1
-            return {"transaction": f"tx{self._tx}"}
-        if path == ":rollback":
-            return {}
-        if path == ":batchGet":
-            rows = []
-            for name in body["documents"]:
-                p = name.split("/documents/", 1)[1]
-                rows.append({"found": {"name": name, "fields": _typed(self.docs[p])}} if p in self.docs
-                            else {"missing": name})
-            return rows
-        if path == ":commit":
-            self.commit(body["writes"])
-            return {}
-        raise AssertionError(f"MemDb does not serve {path}")
-
-    def commit(self, writes, *, transaction=None) -> None:
-        staged = copy.deepcopy(self.docs)
-        for w in writes:
-            target = w["delete"] if "delete" in w else w["update"]["name"]
-            path = target.split("/documents/", 1)[1]
-            cond = w.get("currentDocument")
-            if cond and "exists" in cond and (path in staged) != cond["exists"]:
-                raise PreconditionFailed(f"precondition on {path}")
-            if "delete" in w:
-                staged.pop(path, None)
-                continue
-            fields = {k: from_value(v) for k, v in w["update"].get("fields", {}).items()}
-            if "updateMask" not in w:
-                staged[path] = fields
-            else:
-                doc = staged.setdefault(path, {})
-                for fp in w["updateMask"]["fieldPaths"]:
-                    parts = split_path(fp)
-                    src: Any = fields
-                    for part in parts:
-                        src = src.get(part, _MISSING) if isinstance(src, dict) else _MISSING
-                    dst = doc
-                    for part in parts[:-1]:
-                        dst = dst.setdefault(part, {})
-                    if src is _MISSING:
-                        dst.pop(parts[-1], None)
-                    else:
-                        dst[parts[-1]] = src
-            doc = staged.setdefault(path, {})
-            for t in w.get("updateTransforms", []):
-                parts = split_path(t["fieldPath"])
-                dst = doc
-                for part in parts[:-1]:
-                    dst = dst.setdefault(part, {})
-                if "increment" in t:
-                    dst[parts[-1]] = dst.get(parts[-1], 0) + from_value(t["increment"])
-                else:
-                    dst[parts[-1]] = NOON.isoformat().replace("+00:00", "Z")
-        self.docs = staged
-        self.commits += 1
-
-
-_MISSING = object()
-
-
-def _typed(data: dict[str, Any]) -> dict[str, Any]:
-    from app.firestore import to_value
-    return {k: to_value(v) for k, v in data.items()}
 
 
 class Env:

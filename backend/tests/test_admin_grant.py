@@ -27,6 +27,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from admin.fixtures import MemDb
 from app.admin.authz import AdminAuthz
 from app.firestore import FirestoreIndex
 from app.main import create_app
@@ -40,6 +41,7 @@ FS_HOST = os.environ.get("FIRESTORE_EMULATOR_HOST")
 AUTH_HOST = os.environ.get("FIREBASE_AUTH_EMULATOR_HOST")
 PROJECT = "build-chords-listener"
 NOW = datetime(2026, 10, 7, 12, 0, 0, tzinfo=timezone.utc)
+NOW_STORED = "2026-10-07T12:00:00Z"  # a timestamp as ``MemDb`` (like Firestore) hands it back
 
 needs_firestore = pytest.mark.skipif(not FS_HOST, reason="needs the Firestore emulator (FIRESTORE_EMULATOR_HOST)")
 needs_auth = pytest.mark.skipif(not (FS_HOST and AUTH_HOST),
@@ -52,33 +54,6 @@ def load_script() -> Any:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
-
-class MemDb:
-    """Just enough of ``FirestoreIndex`` for the script: ``get`` / ``update_op`` / ``delete_op`` / ``commit``."""
-
-    def __init__(self) -> None:
-        self.docs: dict[str, dict[str, Any]] = {}
-        self.commits = 0
-
-    def get(self, path: str):
-        from app.firestore import Document
-
-        return Document(path=path, data=self.docs[path]) if path in self.docs else None
-
-    def update_op(self, path: str, data: dict[str, Any], **kw: Any) -> dict[str, Any]:
-        return {"op": "set", "path": path, "data": data, **kw}
-
-    def delete_op(self, path: str, **kw: Any) -> dict[str, Any]:
-        return {"op": "delete", "path": path, **kw}
-
-    def commit(self, writes: list[dict[str, Any]], **_: Any) -> None:
-        self.commits += 1
-        for w in writes:
-            if w["op"] == "set":
-                self.docs[w["path"]] = dict(w["data"])
-            else:
-                self.docs.pop(w["path"], None)
 
 
 class FakeLookup:
@@ -100,13 +75,13 @@ def test_grant_writes_the_allowlist_document_with_a_timestamp_and_the_note():
     script, db = load_script(), MemDb()
     code = script.run(["grant", "uid-1", "--note", "co-owner"], db=db, lookup=FakeLookup({}), now=NOW)
     assert code == 0
-    assert db.docs == {"adminAllowlist/uid-1": {"grantedAt": NOW, "note": "co-owner"}}
+    assert db.docs == {"adminAllowlist/uid-1": {"grantedAt": NOW_STORED, "note": "co-owner"}}
 
 
 def test_grant_without_a_note_stores_null():
     script, db = load_script(), MemDb()
     script.run(["grant", "uid-1"], db=db, lookup=FakeLookup({}), now=NOW)
-    assert db.docs["adminAllowlist/uid-1"] == {"grantedAt": NOW, "note": None}
+    assert db.docs["adminAllowlist/uid-1"] == {"grantedAt": NOW_STORED, "note": None}
 
 
 def test_grant_by_email_resolves_the_uid_and_never_stores_the_email():
@@ -137,7 +112,7 @@ def test_granting_twice_keeps_the_first_grant_time():
     script.run(["grant", "uid-1", "--note", "first"], db=db, lookup=FakeLookup({}), now=NOW)
     later = datetime(2026, 11, 1, tzinfo=timezone.utc)
     assert script.run(["grant", "uid-1", "--note", "second"], db=db, lookup=FakeLookup({}), now=later) == 0
-    assert db.docs["adminAllowlist/uid-1"] == {"grantedAt": NOW, "note": "first"}
+    assert db.docs["adminAllowlist/uid-1"] == {"grantedAt": NOW_STORED, "note": "first"}
 
 
 def test_revoke_deletes_the_document_and_is_a_no_op_when_there_is_none(capsys):

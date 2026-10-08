@@ -20,7 +20,7 @@ from app.publish import Publisher
 from app.storage import read_json, write_json_atomic
 from app.users import user_context
 from app.vocals import VocalsError
-from admin.test_projections import MemDb
+from admin.fixtures import MemDb
 from tests.test_cloud import BUCKET, FakeGcs, FakeIndex
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")

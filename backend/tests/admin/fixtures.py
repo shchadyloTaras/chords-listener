@@ -5,6 +5,7 @@
   network, so offline tests can assert on them; ``seed(db, seeds)`` writes them to an emulator in batches.
 * ``seed_synthetic_users(db, n)`` fills ``users/*`` and ``adminEmailIndex/s000…`` (NFR: search p95 at 10 000 users).
 * ``HOSTILE_STRINGS`` / ``HOSTILE_EMAILS`` plant markup, script URLs, bidi controls and very long text (AC-05).
+* ``MemDb`` is the one in-memory ``FirestoreIndex`` every offline test runs on (see its docstring).
 * ``ReadCounter`` counts the document reads a block of code costs, the way Firestore bills them (NFR: ≤ 200 reads
   per screen). The ``read_counter`` pytest fixture in ``conftest.py`` installs it on every ``FirestoreIndex``.
 
@@ -12,14 +13,17 @@ PII guard: every address is on ``example.test``; no real names or emails appear 
 """
 from __future__ import annotations
 
+import copy
+import re
 import secrets
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from functools import cmp_to_key
 from typing import Any, Iterable, Iterator, Optional
 
-from app.firestore import FirestoreIndex
+from app.firestore import Document, FirestoreIndex, PreconditionFailed, from_value, to_value
 
 EMAIL_DOMAIN = "example.test"
 ADMIN_EMAIL = f"admin@{EMAIL_DOMAIN}"
@@ -317,3 +321,226 @@ class ReadCounter:
             return response
 
         monkeypatch.setattr(FirestoreIndex, "_call", counted)
+
+
+# --------------------------------------------------------------------------- the in-memory Firestore
+
+_TS = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")
+_MISSING = object()
+REQUEST_TIME = "2026-10-08T12:00:00Z"  # what a ``REQUEST_TIME`` transform stores in ``MemDb`` (override: ``db.request_time``)
+
+
+def split_path(path: str) -> list[str]:
+    """``failedByReason.`a.b```  ->  ["failedByReason", "a.b"] (the inverse of app.firestore.field_path)."""
+    return [re.sub(r"\\(.)", r"\1", m.group(1)) if m.group(1) is not None else m.group(2)
+            for m in re.finditer(r"`((?:\\.|[^`\\])*)`|([^.`]+)", path)]
+
+
+def _key(value: Any) -> Any:
+    """A comparable value: timestamps (datetime or ISO string) as datetimes, anything else as it is."""
+    if isinstance(value, str) and _TS.match(value):
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return value
+
+
+def _dig(data: Any, path: str) -> Any:
+    """The value at a dotted field path (``deletion.purgeAfter``), or None."""
+    for part in path.split("."):
+        if not isinstance(data, dict) or part not in data:
+            return None
+        data = data[part]
+    return data
+
+
+def decode(value: Any) -> Any:
+    """A Python value the way ``FirestoreIndex`` hands it back: a timestamp is its ISO string."""
+    return from_value(to_value(value))
+
+
+_FILTERS = {"==": lambda a, b: a == b, "<": lambda a, b: a < b, ">": lambda a, b: a > b,
+            ">=": lambda a, b: a >= b, "<=": lambda a, b: a <= b}
+
+
+class MemDb(FirestoreIndex):
+    """In-memory ``FirestoreIndex``: documents by path (``docs``), decoded the way the real client returns them (a
+    timestamp is its ISO string).
+
+    * Writes: ``commit`` applies the real REST bodies of ``update_op`` / ``delete_op`` atomically (``currentDocument``
+      preconditions, ``updateMask`` incl. nested paths, ``increment`` / ``REQUEST_TIME`` transforms); the transaction
+      endpoints (``:beginTransaction``, ``:rollback``, ``:commit``, ``:batchGet``) are served too. ``commits`` counts
+      the successful commits, ``commit_log`` records every attempted one, ``fail_next`` (a list of exceptions) breaks
+      the next commit(s).
+    * Reads: ``get``, ``run_query`` (``== < <= > >=`` and ``array-contains`` filters on dotted paths, several orders
+      ascending or descending, ``start_after`` cursor, ``limit``), ``aggregate`` / ``count``.
+    * Billing, as Firestore bills it: ``reads`` is documents returned per collection (``count:<collection>`` for an
+      aggregation); ``total_reads`` sums it. ``bill_misses`` bills a missed ``get`` and an empty query 1 each.
+      ``gets`` / ``queries`` / ``touched`` record what was asked; ``reset_counters()`` clears all of them.
+    """
+
+    def __init__(self, *, bill_misses: bool = False) -> None:
+        super().__init__("p1", session_factory=lambda: None)
+        self.docs: dict[str, dict[str, Any]] = {}
+        self.commits = 0
+        self.commit_log: list[list[dict[str, Any]]] = []
+        self.fail_next: list[Exception] = []
+        self.request_time = REQUEST_TIME
+        self.bill_misses = bill_misses
+        self.reads: dict[str, int] = {}
+        self.gets: list[str] = []
+        self.queries: list[tuple[str, list]] = []
+        self.touched: list[str] = []  # collections read, in order
+        self._tx = 0
+
+    # ----- seeding and counters
+    def put(self, *seeds: Seed) -> None:
+        for s in seeds:
+            self.put_doc(s.path, s.data)
+
+    def put_all(self, seeds: Iterable[Seed]) -> None:
+        self.put(*seeds)
+
+    def put_doc(self, path: str, data: dict[str, Any]) -> None:
+        self.docs[path] = decode(data)
+
+    @property
+    def total_reads(self) -> int:
+        return sum(self.reads.values())
+
+    def reset_counters(self) -> None:
+        self.reads.clear()
+        self.gets.clear()
+        self.queries.clear()
+        self.touched.clear()
+
+    def _bill(self, collection: str, n: int) -> None:
+        self.reads[collection] = self.reads.get(collection, 0) + n
+
+    # ----- reads
+    def _read(self, path: str) -> Document:
+        self._bill(path.rsplit("/", 1)[0], 1)
+        return Document(path, copy.deepcopy(self.docs[path]))
+
+    def get(self, path: str) -> Optional[Document]:
+        self.gets.append(path)
+        self.touched.append(path.rsplit("/", 1)[0])
+        if path in self.docs:
+            return self._read(path)
+        if self.bill_misses:
+            self._bill(path.rsplit("/", 1)[0], 1)
+        return None
+
+    def _rows(self, collection: str, filters: Any) -> list[tuple[str, dict[str, Any]]]:
+        rows = [(p, d) for p, d in self.docs.items() if p.rsplit("/", 1)[0] == collection]
+        for field, op, value in filters or []:
+            def keep(doc: dict[str, Any]) -> bool:
+                got = _dig(doc, field)
+                if got is None:
+                    return False
+                if op == "array-contains":
+                    return isinstance(got, list) and value in got
+                return _FILTERS[op](_key(got), _key(value))
+
+            rows = [(p, d) for p, d in rows if keep(d)]
+        return rows
+
+    def run_query(self, collection, *, filters=None, order_by=None, limit=None, start_after=None,
+                  collection_group=False, transaction=None) -> list[Document]:
+        self.queries.append((collection, list(filters or [])))
+        self.touched.append(collection)
+        specs = [(o.lstrip("-"), o.startswith("-")) for o in (order_by or [])]
+        rows = [r for r in self._rows(collection, filters) if all(f in r[1] for f, _ in specs)]
+        name_desc = specs[-1][1] if specs else False
+
+        def compare(a: tuple[str, dict], b: tuple[str, dict]) -> int:
+            for field, desc in specs:
+                x, y = _key(a[1][field]), _key(b[1][field])
+                if x != y:
+                    return (-1 if x < y else 1) * (-1 if desc else 1)
+            if a[0] == b[0]:
+                return 0
+            return (-1 if a[0] < b[0] else 1) * (-1 if name_desc else 1)
+
+        rows.sort(key=cmp_to_key(compare))
+        if start_after is not None:
+            marker = (start_after.path, decode(start_after.data))
+            rows = [r for r in rows if compare(r, marker) > 0]
+        if limit is not None:
+            rows = rows[:limit]
+        if not rows and self.bill_misses:
+            self._bill(collection, 1)
+        return [self._read(p) for p, _ in rows]
+
+    def aggregate(self, collection, aggregations, *, filters=None, collection_group=False) -> dict[str, Any]:
+        rows = self._rows(collection, filters)
+        self.touched.append(collection)
+        self._bill("count:" + collection, 1)
+        out: dict[str, Any] = {}
+        for alias, how in aggregations.items():
+            if how == "count":
+                out[alias] = len(rows)
+            else:
+                out[alias] = sum(d[how[1]] for _, d in rows if isinstance(d.get(how[1]), (int, float)))
+        return out
+
+    # ----- writes and transactions (the REST endpoints ``Transaction`` talks to)
+    def _post(self, path: str, body: dict) -> Any:
+        if path == ":beginTransaction":
+            self._tx += 1
+            return {"transaction": f"tx{self._tx}"}
+        if path == ":rollback":
+            return {}
+        if path == ":batchGet":
+            rows = []
+            for name in body["documents"]:
+                p = name.split("/documents/", 1)[1]
+                rows.append({"found": {"name": name, "fields": {k: to_value(v) for k, v in self.docs[p].items()}}}
+                            if p in self.docs else {"missing": name})
+            return rows
+        if path == ":commit":
+            self.commit(body["writes"])
+            return {}
+        raise AssertionError(f"MemDb does not serve {path}")
+
+    def commit(self, writes, *, transaction=None) -> None:
+        self.commit_log.append(copy.deepcopy(writes))
+        if self.fail_next:
+            raise self.fail_next.pop(0)
+        staged = copy.deepcopy(self.docs)
+        for w in writes:
+            target = w["delete"] if "delete" in w else w["update"]["name"]
+            path = target.split("/documents/", 1)[1]
+            cond = w.get("currentDocument")
+            if cond and "exists" in cond and (path in staged) != cond["exists"]:
+                raise PreconditionFailed(f"precondition on {path}")
+            if "delete" in w:
+                staged.pop(path, None)
+                continue
+            fields = {k: from_value(v) for k, v in w["update"].get("fields", {}).items()}
+            if "updateMask" not in w:
+                staged[path] = fields
+            else:
+                doc = staged.setdefault(path, {})
+                for fp in w["updateMask"]["fieldPaths"]:
+                    parts = split_path(fp)
+                    src: Any = fields
+                    for part in parts:
+                        src = src.get(part, _MISSING) if isinstance(src, dict) else _MISSING
+                    dst = doc
+                    for part in parts[:-1]:
+                        dst = dst.setdefault(part, {})
+                    if src is _MISSING:
+                        dst.pop(parts[-1], None)
+                    else:
+                        dst[parts[-1]] = src
+            doc = staged.setdefault(path, {})
+            for t in w.get("updateTransforms", []):
+                parts = split_path(t["fieldPath"])
+                dst = doc
+                for part in parts[:-1]:
+                    dst = dst.setdefault(part, {})
+                if "increment" in t:
+                    dst[parts[-1]] = dst.get(parts[-1], 0) + from_value(t["increment"])
+                else:
+                    dst[parts[-1]] = self.request_time
+        self.docs = staged
+        self.commits += 1

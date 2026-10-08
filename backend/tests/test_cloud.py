@@ -35,7 +35,7 @@ from app.publish import NullPublisher, Publisher
 from app.sources import NormalizedUrl, RemoteMedia, SourceError, _map_ytdlp_error, find_executable, youtube_thumbnail
 from app.users import SMOKE_UID, current_uid, user_context
 
-from admin.test_projections import MemDb  # the in-memory Firestore of the projection tests
+from admin.fixtures import MemDb
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 

@@ -5,7 +5,7 @@ first natural wake after 00:00 UTC (the ``-wake`` slot). One sweep claims ``admi
 then runs its steps in order: replay the projections buffer, close stale jobs, reconcile and freeze yesterday, sync
 the email index, purges (a hook until T25).
 
-The flows run twice: on an in-memory ``QueryDb`` (``MemDb`` plus the queries and counts the sweep needs) and on the
+The flows run twice: on the in-memory ``MemDb`` and on the
 Firestore emulator (skipped unless ``FIRESTORE_EMULATOR_HOST`` is set). Each test uses its own collections.
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ from typing import Any, Optional
 import pytest
 from fastapi.testclient import TestClient
 
-from admin.test_projections import MemDb
+from admin.fixtures import MemDb
 from app.admin import directory as dirmod
 from app.admin import history, stats
 from app.admin.directory import Directory
@@ -51,50 +51,6 @@ LOG = "chords.admin"
 
 
 # --------------------------------------------------------------------------- the databases
-
-
-def _ts(value: Any) -> Any:
-    """A comparable value: timestamps (datetime or ISO string) as datetimes, anything else as it is."""
-    if isinstance(value, str) and re.match(r"^\d{4}-\d{2}-\d{2}T", value):
-        return dirmod.parse_time(value)
-    return value
-
-
-class QueryDb(MemDb):
-    """``MemDb`` that also answers the queries and counts the sweep makes (equality and range filters, one
-    ascending order, a limit, a cursor)."""
-
-    def run_query(self, collection, *, filters=None, order_by=None, limit=None, start_after=None,
-                  collection_group=False, transaction=None) -> list[Document]:
-        rows = self._rows(collection, filters)
-        order = list(order_by or [])
-        assert len(order) <= 1 and not any(o.startswith("-") for o in order)
-        if order:
-            rows = [(p, d) for p, d in rows if order[0] in d]
-
-        def key(row):
-            p, d = row
-            return (_ts(d[order[0]]), p) if order else (0, p)
-
-        rows.sort(key=key)
-        if start_after is not None:
-            marker = key((start_after.path, start_after.data))
-            rows = [r for r in rows if key(r) > marker]
-        if limit is not None:
-            rows = rows[:limit]
-        return [Document(p, json.loads(json.dumps(d))) for p, d in rows]
-
-    def _rows(self, collection, filters):
-        rows = [(p, d) for p, d in self.docs.items() if p.rsplit("/", 1)[0] == collection]
-        ops = {"==": lambda a, b: a == b, "<": lambda a, b: a < b, ">": lambda a, b: a > b,
-               ">=": lambda a, b: a >= b, "<=": lambda a, b: a <= b}
-        for field, op, value in filters or []:
-            rows = [(p, d) for p, d in rows if field in d and d[field] is not None and ops[op](_ts(d[field]), _ts(value))]
-        return rows
-
-    def aggregate(self, collection, aggregations, *, filters=None, collection_group=False):
-        assert set(aggregations.values()) == {"count"}
-        return {alias: len(self._rows(collection, filters)) for alias in aggregations}
 
 
 class Clock:
@@ -173,7 +129,7 @@ class Env:
 @pytest.fixture(params=["fake", pytest.param("emulator", marks=pytest.mark.skipif(
     not EMULATOR_HOST, reason="needs the Firestore emulator (FIRESTORE_EMULATOR_HOST)"))])
 def env(request, tmp_path) -> Env:
-    db: FirestoreIndex = QueryDb() if request.param == "fake" else FirestoreIndex(PROJECT, emulator_host=EMULATOR_HOST)
+    db: FirestoreIndex = MemDb() if request.param == "fake" else FirestoreIndex(PROJECT, emulator_host=EMULATOR_HOST)
     return Env(db, tmp_path, uuid.uuid4().hex[:10])
 
 
@@ -779,7 +735,7 @@ def test_the_sweep_endpoint_is_not_in_the_public_openapi_document(env, client):
 def test_create_app_builds_the_sweeper_from_the_admin_database(tmp_path):
     settings = Settings(data_dir=tmp_path / "data", frontend_dist=tmp_path / "no-dist", auth="firebase",
                         signing_key="test-signing-key-0123456789abcdef", publish=False)
-    app = create_app(settings, analyzer=lambda *_a, **_k: {}, token_verifier=FakeFirebase(), admin_db=QueryDb())
+    app = create_app(settings, analyzer=lambda *_a, **_k: {}, token_verifier=FakeFirebase(), admin_db=MemDb())
     assert isinstance(app.state.sweeper, Sweeper)
     local = create_app(Settings(data_dir=tmp_path / "d2", frontend_dist=tmp_path / "no-dist", publish=False),
                        analyzer=lambda *_a, **_k: {})
@@ -791,7 +747,7 @@ def test_the_default_sweeper_shares_the_jobs_projections_and_the_admin_routes_di
 
     settings = Settings(data_dir=tmp_path / "data", frontend_dist=tmp_path / "no-dist", auth="firebase",
                         signing_key="test-signing-key-0123456789abcdef", publish=False)
-    app = create_app(settings, analyzer=lambda *_a, **_k: {}, token_verifier=FakeFirebase(), admin_db=QueryDb())
+    app = create_app(settings, analyzer=lambda *_a, **_k: {}, token_verifier=FakeFirebase(), admin_db=MemDb())
     sweeper = app.state.sweeper
     assert app.state.jobs.projections is not None
     assert sweeper._projections is app.state.jobs.projections      # one owner of projections-pending.json

@@ -1,28 +1,25 @@
 """GET /api/admin/audit - the journal list (docs/features/admin: AC-10, AC-10b, AC-11; ADR-0007; data-model Aggregate 4).
 
-Offline: ``FakeDb`` is an in-memory Firestore that answers ``get`` and ``run_query`` (equality / ``>`` filters, ascending
-or descending order, ``start_after``) over documents decoded like ``FirestoreIndex`` returns them, and counts the
-documents it hands out. The tests at the bottom run the same list on the Firestore emulator (only when
+Offline: ``FakeDb`` is the shared in-memory Firestore (``MemDb``), made read-only: it counts the documents it hands out. The tests at the bottom run the same list on the Firestore emulator (only when
 FIRESTORE_EMULATOR_HOST is set).
 """
 from __future__ import annotations
 
-import copy
 import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
-from admin.fixtures import ADMIN_EMAIL, Seed, make_admin, make_audit, make_user, seed
+from admin.fixtures import ADMIN_EMAIL, MemDb, Seed, make_admin, make_audit, make_user, seed
 from app.admin.audit import Audit, AuditEntry
 from app.admin.authz import AdminAuthz
 from app.admin.router import router as admin_router
-from app.firestore import Document, FirestoreIndex, from_value, to_value
+from app.firestore import FirestoreIndex
 from app.main import create_app
 from app.models import Settings
 
@@ -39,10 +36,6 @@ AUDIT_URL = "/api/admin/audit"
 CONTRACT = Path(__file__).resolve().parents[3] / "docs" / "features" / "admin" / "contracts" / "openapi.yaml"
 
 
-def parse_ts(v: Any) -> datetime:
-    return v if isinstance(v, datetime) else datetime.fromisoformat(v.replace("Z", "+00:00"))
-
-
 def minutes(n: int) -> datetime:
     return T0 + timedelta(minutes=n)
 
@@ -50,62 +43,12 @@ def minutes(n: int) -> datetime:
 # --------------------------------------------------------------------------- fakes
 
 
-class FakeDb(FirestoreIndex):
-    """In-memory Firestore (documents keyed by path, timestamps as ISO strings) that bills what it returns."""
-
-    def __init__(self) -> None:
-        super().__init__("p1", session_factory=lambda: None)
-        self.docs: dict[str, dict[str, Any]] = {}
-        self.commits = 0
-        self.reads = 0
-        self.gets: list[str] = []
-
-    def put(self, path: str, data: dict[str, Any]) -> None:
-        self.docs[path] = from_value(to_value(data))  # what a read gives back: timestamps become ISO strings
-
-    def put_all(self, seeds: Iterable[Seed]) -> None:
-        for s in seeds:
-            self.put(s.path, s.data)
-
-    def get(self, path: str) -> Optional[Document]:
-        self.gets.append(path)
-        if path not in self.docs:
-            return None
-        self.reads += 1
-        return Document(path, copy.deepcopy(self.docs[path]))
+class FakeDb(MemDb):
+    """The shared ``MemDb`` for a read-only API: a commit is counted and refused."""
 
     def commit(self, writes: list[dict[str, Any]], *, transaction: Optional[str] = None) -> None:
         self.commits += 1
         raise AssertionError("listing the journal must not write anything")
-
-    def run_query(self, collection, *, filters=None, order_by=None, limit=None, start_after=None,
-                  collection_group=False, transaction=None) -> list[Document]:
-        rows = [(p, d) for p, d in self.docs.items() if p.rsplit("/", 1)[0] == collection]
-        for field, op, value in filters or []:
-            if op == "==":
-                rows = [r for r in rows if r[1].get(field) == value]
-            elif op == ">":
-                rows = [r for r in rows if field in r[1] and parse_ts(r[1][field]) > parse_ts(value)]
-            else:
-                raise AssertionError(f"FakeDb does not know the {op!r} filter")
-        order = list(order_by or [])
-        assert len(order) <= 1, order
-        descending = bool(order) and order[0].startswith("-")
-        field = order[0].lstrip("-") if order else None
-
-        def key(path: str, data: dict[str, Any]):
-            return (parse_ts(data[field]) if field in ("at", "createdAt") else data[field], path) if field else (0, path)
-
-        if field:
-            rows = [r for r in rows if field in r[1]]
-        rows.sort(key=lambda r: key(*r), reverse=descending)
-        if start_after is not None:
-            marker = key(start_after.path, start_after.data)
-            rows = [r for r in rows if (key(*r) < marker if descending else key(*r) > marker)]
-        if limit is not None:
-            rows = rows[:limit]
-        self.reads += len(rows)
-        return [Document(p, copy.deepcopy(d)) for p, d in rows]
 
 
 class FakeVerifier:
@@ -372,9 +315,9 @@ def test_a_page_reads_at_most_the_budget(db: FakeDb, client: TestClient) -> None
     """NFR: at most 200 document reads a screen (50 records + the email index + a tombstone per distinct target)."""
     db.put_all([tombstone(f"u-gone-{i}") for i in range(25)])
     db.put_all([make_audit("view_card", target_uid=f"u-gone-{i % 25}", at=minutes(i)) for i in range(1, 80)])
-    db.reads = 0
+    db.reset_counters()
     assert len(listed(client)["items"]) == 50
-    assert db.reads <= 200, db.reads
+    assert db.total_reads <= 200, db.reads
 
 
 def test_a_non_admin_gets_the_not_found_of_an_unknown_address(db: FakeDb, client: TestClient) -> None:

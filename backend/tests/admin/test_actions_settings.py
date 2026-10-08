@@ -14,9 +14,9 @@ from typing import Any, Optional
 import pytest
 from fastapi.testclient import TestClient
 
-from admin.fixtures import ADMIN_EMAIL, make_admin, make_user
+from admin.fixtures import ADMIN_EMAIL, MemDb, make_account_state, make_admin
 from admin.test_authz import ENGINE_INFO, never, settings_for
-from admin.test_projections import MemDb, NOON
+from admin.test_projections import NOON
 from app.admin.authz import AdminAuthz
 from app.admin.settings import CACHE_TTL_S, RuntimeSettings
 from app.firestore import IndexError_, to_value
@@ -146,17 +146,26 @@ def test_default_limit_change_applies_without_redeploy_within_a_minute(env: Env)
 
 def test_changing_the_default_vocal_limit_leaves_personal_limits_alone(env: Env) -> None:
     """AC-13b: the default is stored on its own; a personal limit (analyses 5) stays and the unset field follows."""
-    user = make_user("u-5")
-    env.put(user.path, {**user.data, "personalLimit": {"analyses": 5, "until": NOON, "setBy": ADMIN}})
-    before = copy.deepcopy(env.doc(user.path))
+    from app.admission import Admission
+    from app.quotas import effective_limits
+
+    account = make_account_state("u-5", personal_limit={"analyses": 5, "setAt": NOON, "byAdminUid": ADMIN})
+    env.put(account.path, account.data)                                       # the personal limit lives in adminAccounts/<uid>
+    before = copy.deepcopy(env.doc(account.path))
+
+    def in_force() -> tuple[int, int, int]:                                  # what the gate computes for u-5, from the database
+        gate = Admission(env.db, RuntimeSettings(env.db, monotonic=lambda: 1000.0), monotonic=lambda: 1000.0)
+        eff = effective_limits(gate.defaults(), gate.personal("u-5"), "2026-10-08")
+        return eff.analyses, eff.vocals, eff.jobs
+
+    assert in_force() == (5, 15, 2)                                          # the personal 5 wins below the default 40
 
     res = env.put_json(LIMITS_URL, {**LIMITS, "vocals": 10})
 
     assert res.status_code == 200, res.text
-    assert env.doc(user.path) == before                                      # the personal limit is not rewritten
-    limits = env.client.get("/api/admin/settings", headers=HEADERS).json()["limits"]
-    assert limits["vocals"] == 10                                            # what an unset personal field follows
-    assert limits["analyses"] == 40                                          # the default, below which 5 still wins
+    assert env.doc(account.path) == before                                   # the personal limit is not rewritten
+    assert env.doc(SETTINGS)["limits"]["vocals"] == 10
+    assert in_force() == (5, 10, 2)                                          # analyses stay 5; the unset vocals follow the default
 
 
 # ===================================================================== AC-25: invalid limits

@@ -1,7 +1,7 @@
 """GET /api/admin/overview and GET /api/admin/settings (AC-01, US-01; docs/features/admin/contracts/openapi.yaml).
 
-Unit tests run through the real app on ``OverviewDb``, an in-memory stand-in for ``FirestoreIndex`` (``FakeDb`` plus
-the ``count()`` the new-user total needs). The last test runs the same flow on the Firestore emulator (only when
+Unit tests run through the real app on ``FakeDb``, an in-memory stand-in for ``FirestoreIndex`` (the shared ``MemDb`` through
+``FakeDb``). The last test runs the same flow on the Firestore emulator (only when
 FIRESTORE_EMULATOR_HOST is set) and checks the read budget of the screen (NFR: at most 200 reads).
 """
 from __future__ import annotations
@@ -23,10 +23,9 @@ from admin.fixtures import (
     Seed,
 )
 from admin.test_authz import ENGINE_INFO, never, settings_for
-from admin.test_directory import FakeDb, iso, parse_ts
+from admin.test_directory import FakeDb, iso
 from app.admin import router as router_mod
 from app.admin.authz import AdminAuthz
-from app.firestore import Document
 from app.main import create_app
 from app.users import SMOKE_UID
 
@@ -49,19 +48,6 @@ TODAY_COUNTERS: dict[str, Any] = {
     "failedByReason": {"youtube_blocked": 1, "other": 1},
     "active": 7,
 }
-
-
-class OverviewDb(FakeDb):
-    """``FakeDb`` that also answers ``count`` (``>=`` / ``<`` filters on a timestamp field)."""
-
-    def count(self, collection: str, *, filters: Any = None, collection_group: bool = False) -> int:
-        rows = [d for p, d in self.docs.items() if p.rsplit("/", 1)[0] == collection]
-        for field, op, value in filters or []:
-            bound = parse_ts(value)
-            keep = {">=": lambda t: t >= bound, "<": lambda t: t < bound}[op]
-            rows = [d for d in rows if field in d and keep(parse_ts(d[field]))]
-        self.reads["count:" + collection] = self.reads.get("count:" + collection, 0) + 1
-        return len(rows)
 
 
 class Verifier:
@@ -117,8 +103,8 @@ def make_client(tmp_path: Path):
 
 
 @pytest.fixture
-def db() -> OverviewDb:
-    d = OverviewDb()
+def db() -> FakeDb:
+    d = FakeDb()
     put(d, make_admin(ADMIN))
     seed_config(d)
     return d

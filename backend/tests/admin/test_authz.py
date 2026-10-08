@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
+from admin.fixtures import MemDb
 from app.admin.authz import (
     FRESH_LOGIN_MAX_AGE_S,
     AdminAuthz,
@@ -56,21 +57,24 @@ class Clock:
         self.now += seconds
 
 
-class FakeDb:
-    """The ``get`` of ``FirestoreIndex`` over an in-memory ``adminAllowlist``."""
+class FakeDb(MemDb):
+    """The shared ``MemDb`` over an ``adminAllowlist`` kept as the mutable set ``admins``; ``fail`` makes ``get`` raise."""
 
     def __init__(self, *admins: str) -> None:
+        super().__init__()
         self.admins = set(admins)
-        self.gets: list[str] = []
         self.fail = False
 
     def get(self, path: str) -> Optional[Document]:
-        self.gets.append(path)
         if self.fail:
+            self.gets.append(path)
             raise IndexError_("down", retryable=True)
         collection, _, uid = path.partition("/")
         assert collection == "adminAllowlist", path
-        return Document(path, {"grantedAt": "2026-10-01T00:00:00Z"}) if uid in self.admins else None
+        self.docs.pop(path, None)
+        if uid in self.admins:
+            self.docs[path] = {"grantedAt": "2026-10-01T00:00:00Z"}
+        return super().get(path)
 
 
 class FakeVerifier:

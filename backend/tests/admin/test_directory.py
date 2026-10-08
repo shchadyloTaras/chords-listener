@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import copy
 import os
-import re
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -14,9 +13,10 @@ from typing import Any, Optional
 
 import pytest
 
+from admin.fixtures import MemDb
 from app.admin import directory as dirmod
 from app.admin.directory import Directory
-from app.firestore import Document, FirestoreIndex, from_value
+from app.firestore import FirestoreIndex
 
 T0 = datetime(2026, 10, 7, 12, 0, 0, tzinfo=timezone.utc)
 INDEX = "adminEmailIndex"
@@ -30,25 +30,9 @@ def parse_ts(v: Any) -> datetime:
     return v if isinstance(v, datetime) else datetime.fromisoformat(v.replace("Z", "+00:00"))
 
 
-def split_path(path: str) -> list[str]:
-    """``entries.`a.b```  ->  ["entries", "a.b"] (the inverse of app.firestore.field_path)."""
-    return [re.sub(r"\\(.)", r"\1", m.group(1)) if m.group(1) is not None else m.group(2)
-            for m in re.finditer(r"`((?:\\.|[^`\\])*)`|([^.`]+)", path)]
+class FakeDb(MemDb):
+    """The shared ``MemDb`` plus the seeding helpers of the directory tests."""
 
-
-class FakeDb(FirestoreIndex):
-    """In-memory Firestore: documents keyed by path, decoded the way ``FirestoreIndex`` returns them (a timestamp
-    is its ISO string). Real ``update_op`` / ``delete_op`` bodies are applied by ``commit``. ``reads`` counts the
-    documents each collection returned, which is what Firestore bills."""
-
-    def __init__(self) -> None:
-        super().__init__("p1", session_factory=lambda: None)
-        self.docs: dict[str, dict[str, Any]] = {}
-        self.reads: dict[str, int] = {}
-        self.queries: list[tuple[str, list]] = []
-        self._tx = 0
-
-    # ----- seeding helpers
     def add_user(self, uid: str, email: Optional[str], created: Optional[datetime]) -> None:
         data: dict[str, Any] = {"settings": {"theme": "dark"}}
         if email is not None:
@@ -59,97 +43,6 @@ class FakeDb(FirestoreIndex):
 
     def shard_ids(self) -> list[str]:
         return sorted(p.split("/")[1] for p in self.docs if p.startswith(f"{INDEX}/"))
-
-    def reset_counters(self) -> None:
-        self.reads.clear()
-        self.queries.clear()
-
-    # ----- reads
-    def _read(self, path: str) -> Document:
-        coll = path.rsplit("/", 1)[0]
-        self.reads[coll] = self.reads.get(coll, 0) + 1
-        return Document(path, copy.deepcopy(self.docs[path]))
-
-    def get(self, path: str) -> Optional[Document]:
-        return self._read(path) if path in self.docs else None
-
-    def run_query(self, collection, *, filters=None, order_by=None, limit=None, start_after=None,
-                  collection_group=False, transaction=None) -> list[Document]:
-        self.queries.append((collection, list(filters or [])))
-        rows = [(p, d) for p, d in self.docs.items() if p.rsplit("/", 1)[0] == collection]
-        for field, op, value in filters or []:
-            assert op == ">", "FakeDb only knows the '>' filter"
-            rows = [(p, d) for p, d in rows if field in d and parse_ts(d[field]) > parse_ts(value)]
-        order = list(order_by or [])
-        assert len(order) <= 1 and not any(o.startswith("-") for o in order)
-
-        def key(row):
-            p, d = row
-            if not order:
-                return (0, p)
-            return (parse_ts(d[order[0]]) if order[0] == "createdAt" else d[order[0]], p)
-
-        if order:
-            rows = [(p, d) for p, d in rows if order[0] in d]   # a query ordered by a field skips documents without it
-        rows.sort(key=key)
-        if start_after is not None:
-            marker = key((start_after.path, start_after.data))
-            rows = [r for r in rows if key(r) > marker]
-        if limit is not None:
-            rows = rows[:limit]
-        return [self._read(p) for p, _ in rows]
-
-    # ----- writes and transactions (the REST endpoints ``Transaction`` talks to)
-    def _post(self, path: str, body: dict) -> Any:
-        if path == ":beginTransaction":
-            self._tx += 1
-            return {"transaction": f"tx{self._tx}"}
-        if path == ":rollback":
-            return {}
-        if path == ":commit":
-            self.commit(body["writes"])
-            return {}
-        raise AssertionError(f"FakeDb does not serve {path}")
-
-    def commit(self, writes, *, transaction=None) -> None:
-        staged = copy.deepcopy(self.docs)
-        for w in writes:
-            if "delete" in w:
-                path = w["delete"].split("/documents/", 1)[1]
-                self._check(staged, path, w)
-                staged.pop(path, None)
-                continue
-            u = w["update"]
-            path = u["name"].split("/documents/", 1)[1]
-            self._check(staged, path, w)
-            fields = {k: from_value(v) for k, v in u.get("fields", {}).items()}
-            if "updateMask" not in w:
-                staged[path] = fields
-                continue
-            doc = staged.setdefault(path, {})
-            for fp in w["updateMask"]["fieldPaths"]:
-                parts = split_path(fp)
-                src: Any = fields
-                for part in parts:
-                    src = src.get(part, _MISSING) if isinstance(src, dict) else _MISSING
-                dst = doc
-                for part in parts[:-1]:
-                    dst = dst.setdefault(part, {})
-                if src is _MISSING:
-                    dst.pop(parts[-1], None)
-                else:
-                    dst[parts[-1]] = src
-        self.docs = staged
-
-    @staticmethod
-    def _check(staged, path, write) -> None:
-        cond = write.get("currentDocument")
-        if cond and "exists" in cond and (path in staged) != cond["exists"]:
-            from app.firestore import PreconditionFailed
-            raise PreconditionFailed(f"precondition on {path}")
-
-
-_MISSING = object()
 
 
 def email_of_user(i: int) -> str:

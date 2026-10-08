@@ -9,12 +9,9 @@ lookup of ``lastLoginAt`` is replaced by a fake. The last tests run the same flo
 from __future__ import annotations
 
 import base64
-import copy
 import json
-import operator
 import re
 from datetime import date, datetime, timedelta, timezone
-from functools import cmp_to_key
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Optional
@@ -25,6 +22,7 @@ from fastapi.testclient import TestClient
 from admin.fixtures import (
     ADMIN_EMAIL,
     HOSTILE_STRINGS,
+    MemDb,
     Seed,
     make_account_state,
     make_admin,
@@ -33,9 +31,8 @@ from admin.fixtures import (
     make_user,
 )
 from admin.test_authz import ENGINE_INFO, Clock, FakeVerifier, H, never, settings_for
-from admin.test_directory import FakeDb
 from app.admin.router import AdminServices, get_services
-from app.firestore import Document, FirestoreIndex, IndexError_
+from app.firestore import FirestoreIndex, IndexError_
 from app.main import create_app
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
@@ -43,47 +40,19 @@ pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 BOSS = "boss"
 LOGIN_AT = datetime(2026, 10, 7, 18, 20, tzinfo=timezone.utc)
 DEFAULT_LIMITS = {"analyses": 40, "vocals": 15, "jobs": 2, "maxDurationMin": 15, "maxUploadMb": 50}
-_TS = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")
-_OPS: dict[str, Callable[[Any, Any], bool]] = {
-    "==": operator.eq, ">": operator.gt, ">=": operator.ge, "<": operator.lt, "<=": operator.le,
-}
-
-
 def _iso(when: datetime) -> str:
     return when.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _decoded(value: Any) -> Any:
-    """A seed value the way ``FirestoreIndex`` hands it back: a timestamp is its ISO string."""
-    if isinstance(value, datetime):
-        return _iso(value)
-    if isinstance(value, dict):
-        return {k: _decoded(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_decoded(v) for v in value]
-    return value
-
-
-def _key(value: Any) -> Any:
-    if isinstance(value, str) and _TS.match(value):
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    return value
 
 
 # --------------------------------------------------------------------------- the fake Firestore
 
 
-class UsersDb(FakeDb):
-    """``FakeDb`` plus what the user handlers query: equality / range filters, descending orders, cursors on the
-    last document, ``count`` / ``sum`` aggregations. ``fail_audit`` breaks every commit that writes the journal."""
+class UsersDb(MemDb):
+    """``MemDb`` whose commits that write the journal can be made to fail (``fail_audit``)."""
 
     def __init__(self) -> None:
         super().__init__()
         self.fail_audit = False
-
-    def put(self, *seeds: Seed) -> None:
-        for s in seeds:
-            self.docs[s.path] = _decoded(copy.deepcopy(s.data))
 
     def audit_docs(self) -> list[dict[str, Any]]:
         return sorted((d for p, d in self.docs.items() if p.startswith("adminAudit/")), key=lambda d: d["at"])
@@ -92,47 +61,6 @@ class UsersDb(FakeDb):
         if self.fail_audit and any("/adminAudit/" in (w.get("update", {}).get("name", "")) for w in writes):
             raise IndexError_("Firestore is down", retryable=True)
         super().commit(writes, transaction=transaction)
-
-    def _rows(self, collection: str, filters: Any) -> list[tuple[str, dict[str, Any]]]:
-        rows = [(p, d) for p, d in self.docs.items() if p.rsplit("/", 1)[0] == collection]
-        for field, op, value in filters or []:
-            rows = [(p, d) for p, d in rows if field in d and _OPS[op](_key(d[field]), _key(value))]
-        return rows
-
-    def run_query(self, collection, *, filters=None, order_by=None, limit=None, start_after=None,
-                  collection_group=False, transaction=None) -> list[Document]:
-        self.queries.append((collection, list(filters or [])))
-        specs = [(o.lstrip("-"), o.startswith("-")) for o in (order_by or [])]
-        rows = [r for r in self._rows(collection, filters) if all(f in r[1] for f, _ in specs)]
-        name_desc = specs[-1][1] if specs else False
-
-        def compare(a: tuple[str, dict], b: tuple[str, dict]) -> int:
-            for field, desc in specs:
-                x, y = _key(a[1][field]), _key(b[1][field])
-                if x != y:
-                    return (-1 if x < y else 1) * (-1 if desc else 1)
-            if a[0] == b[0]:
-                return 0
-            return (-1 if a[0] < b[0] else 1) * (-1 if name_desc else 1)
-
-        rows.sort(key=cmp_to_key(compare))
-        if start_after is not None:
-            marker = (start_after.path, _decoded(start_after.data))
-            rows = [r for r in rows if compare(r, marker) > 0]
-        if limit is not None:
-            rows = rows[:limit]
-        return [self._read(p) for p, _ in rows]
-
-    def aggregate(self, collection, aggregations, *, filters=None, collection_group=False) -> dict[str, Any]:
-        rows = self._rows(collection, filters)
-        self.reads[collection] = self.reads.get(collection, 0) + 1
-        out: dict[str, Any] = {}
-        for alias, how in aggregations.items():
-            if how == "count":
-                out[alias] = len(rows)
-            else:
-                out[alias] = sum(d[how[1]] for _, d in rows if isinstance(d.get(how[1]), (int, float)))
-        return out
 
 
 # --------------------------------------------------------------------------- the world

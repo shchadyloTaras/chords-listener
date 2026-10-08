@@ -1,14 +1,11 @@
 """``GET /api/admin/jobs`` and ``GET /api/admin/stats`` (docs/features/admin: AC-07, AC-08, AC-09; T18).
 
-The handlers run in the real app (default admin router, real allowlist check) over ``MemDb``, an in-memory stand-in
-for ``FirestoreIndex`` that serves ``get`` / ``run_query`` / ``count`` and tallies the document reads the way
-Firestore bills them. The tests at the bottom run the same flows on the Firestore emulator (skipped unless
+The handlers run in the real app (default admin router, real allowlist check) over the shared in-memory ``MemDb`` (reads
+tallied the way Firestore bills them). The tests at the bottom run the same flows on the Firestore emulator (skipped unless
 FIRESTORE_EMULATOR_HOST is set); each of them uses a year of its own, so nothing needs cleaning up.
 """
 from __future__ import annotations
 
-import copy
-import operator
 import random
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -17,12 +14,11 @@ from typing import Any, Optional
 import pytest
 from fastapi.testclient import TestClient
 
-from admin.fixtures import HOSTILE_STRINGS, Seed, make_job, make_stats_day, make_user, seed
+from admin.fixtures import HOSTILE_STRINGS, MemDb, Seed, make_job, make_stats_day, make_user, seed
 from admin.test_authz import ENGINE_INFO, Clock, FakeVerifier, H, never, settings_for
 from app.admin import models
 from app.admin.authz import AdminAuthz
 from app.admin.history import REASONS
-from app.admin.directory import parse_time
 from app.firestore import Document, FirestoreIndex
 from app.main import create_app
 
@@ -32,85 +28,6 @@ UTC = timezone.utc
 ADMIN = "admin-1"
 PAGE = 50
 READ_BUDGET = 200  # NFR: at most 200 document reads per screen / list page
-
-
-# --------------------------------------------------------------------------- an in-memory Firestore
-
-
-class MemDb(FirestoreIndex):
-    """Documents by path, as ``FirestoreIndex`` reads them back (a timestamp is its ISO string). ``reads`` counts
-    the documents each call returns (a miss and a ``count`` cost 1), which is what Firestore bills."""
-
-    def __init__(self) -> None:
-        super().__init__("p1", session_factory=lambda: None)
-        self.docs: dict[str, dict[str, Any]] = {}
-        self.reads = 0
-        self.touched: list[str] = []  # collections read, in order
-
-    def put(self, *seeds: Seed) -> None:
-        for s in seeds:
-            self.docs[s.path] = copy.deepcopy(s.data)
-
-    @staticmethod
-    def _out(data: dict[str, Any]) -> dict[str, Any]:
-        def conv(v: Any) -> Any:
-            if isinstance(v, datetime):
-                return v.astimezone(UTC).isoformat().replace("+00:00", "Z")
-            if isinstance(v, dict):
-                return {k: conv(x) for k, x in v.items()}
-            return copy.deepcopy(v)
-
-        return conv(data)
-
-    def get(self, path: str) -> Optional[Document]:
-        self.touched.append(path.rsplit("/", 1)[0])
-        self.reads += 1
-        return Document(path, self._out(self.docs[path])) if path in self.docs else None
-
-    @staticmethod
-    def _cmp(a: Any, b: Any) -> Any:
-        return (parse_time(a), parse_time(b)) if isinstance(a, (str, datetime)) and isinstance(b, (str, datetime)) and \
-            (isinstance(a, datetime) or isinstance(b, datetime)) else (a, b)
-
-    def _match(self, collection: str, filters: Any) -> list[tuple[str, dict[str, Any]]]:
-        rows = [(p, d) for p, d in self.docs.items() if p.rsplit("/", 1)[0] == collection]
-        for field, op, value in filters or []:
-            def keep(d: dict[str, Any]) -> bool:
-                if field not in d:
-                    return False
-                x, y = self._cmp(d[field], value)
-                return {"==": operator.eq, ">=": operator.ge, ">": operator.gt, "<": operator.lt, "<=": operator.le}[op](x, y)
-
-            rows = [(p, d) for p, d in rows if keep(d)]
-        return rows
-
-    def run_query(self, collection, *, filters=None, order_by=None, limit=None, start_after=None,
-                  collection_group=False, transaction=None) -> list[Document]:
-        self.touched.append(collection)
-        rows = self._match(collection, filters)
-        order = list(order_by or [])
-        assert len(order) <= 1
-        desc = bool(order) and order[0].startswith("-")
-        field = order[0].lstrip("-") if order else None
-
-        def key(path: str, data: dict[str, Any]) -> Any:
-            return (parse_time(data[field]) if field else 0, path)
-
-        if field:
-            rows = [(p, d) for p, d in rows if field in d]
-        rows.sort(key=lambda r: key(*r), reverse=desc)
-        if start_after is not None:
-            marker = key(start_after.path, start_after.data)
-            rows = [r for r in rows if (key(*r) < marker if desc else key(*r) > marker)]
-        if limit is not None:
-            rows = rows[:limit]
-        self.reads += max(1, len(rows))
-        return [Document(p, self._out(d)) for p, d in rows]
-
-    def count(self, collection, *, filters=None, collection_group=False) -> int:
-        self.touched.append(collection)
-        self.reads += 1
-        return len(self._match(collection, filters))
 
 
 # --------------------------------------------------------------------------- the app
@@ -161,7 +78,7 @@ class _Allow:
 
 @pytest.fixture
 def mem() -> MemDb:
-    return MemDb()
+    return MemDb(bill_misses=True)  # a missed get and an empty page cost 1 read each, as Firestore bills
 
 
 @pytest.fixture
@@ -308,10 +225,10 @@ def test_history_pages_of_50_by_cursor_forwards_and_back_without_gaps_or_repeats
     pages: list[dict[str, Any]] = []
     cursor: Optional[str] = None
     while True:
-        mem.reads = 0
+        mem.reset_counters()
         params = {"after": cursor} if cursor else {}
         body = env.get("/api/admin/jobs", **params).json()
-        assert mem.reads <= READ_BUDGET, mem.reads
+        assert mem.total_reads <= READ_BUDGET, mem.total_reads
         assert len(body["items"]) <= PAGE
         pages.append(body)
         seen += ids(body)
@@ -348,13 +265,13 @@ def test_history_page_stays_within_the_read_budget_on_a_worst_case_page(env: Env
     """50 jobs of 50 different, purged users: 50 + 50 users + 50 tombstones + 7 counts is still <= 200."""
     for n in range(60):
         mem.put(make_job(f"gone-{n}", "error", REASONS[n % 7], "link", at("2026-10-08", 0, n), job_id=f"j{n:02d}"))
-    mem.reads = 0
+    mem.reset_counters()
 
     body = env.get("/api/admin/jobs", status="error").json()
 
     assert len(body["items"]) == 50
     assert sum(body["countsByReason"].values()) == 60
-    assert mem.reads <= READ_BUDGET, mem.reads
+    assert mem.total_reads <= READ_BUDGET, mem.total_reads
 
 
 # --------------------------------------------------------------------------- AC-09: an invalid period
@@ -367,7 +284,7 @@ def test_history_page_stays_within_the_read_budget_on_a_worst_case_page(env: Env
 )
 def test_an_invalid_period_is_refused_with_the_rule_and_nothing_is_read(env: Env, mem: MemDb, path: str, start: str, end: str) -> None:
     seed_week(mem)
-    mem.reads = 0
+    mem.reset_counters()
 
     r = env.get(path, **{"from": start, "to": end})
 
@@ -375,7 +292,7 @@ def test_an_invalid_period_is_refused_with_the_rule_and_nothing_is_read(env: Env
     body = r.json()
     assert body["code"] == "invalid_period"
     assert "90" in body["detail"] and "no earlier" in body["detail"]
-    assert mem.reads == 0 and mem.touched == []
+    assert mem.total_reads == 0 and mem.touched == []
 
 
 @pytest.mark.parametrize("path", ["/api/admin/jobs", "/api/admin/stats"])
@@ -470,13 +387,13 @@ def test_a_quiet_today_with_new_users_is_still_reported(env: Env, mem: MemDb, mo
 def test_stats_reads_one_document_per_day_and_never_more_than_90(env: Env, mem: MemDb) -> None:
     for n in range(90):
         mem.put(make_stats_day((date(2026, 7, 11) + timedelta(days=n)).isoformat(), "frozen"))
-    mem.reads = 0
+    mem.reset_counters()
 
     body = env.get("/api/admin/stats", **{"from": "2026-07-11", "to": "2026-10-08"}).json()
 
     assert len(body["days"]) == 90
-    assert mem.reads <= 90 + 2  # the days, plus a new-users count for a live today at most
-    assert READ_BUDGET > mem.reads
+    assert mem.total_reads <= 90 + 2  # the days, plus a new-users count for a live today at most
+    assert READ_BUDGET > mem.total_reads
 
 
 def test_stats_of_a_frozen_day_do_not_move_when_the_live_counters_do(env: Env, mem: MemDb) -> None:
@@ -493,12 +410,12 @@ def test_stats_of_a_frozen_day_do_not_move_when_the_live_counters_do(env: Env, m
 def test_a_non_admin_gets_the_unknown_address_answer_and_nothing_is_read(make_env, mem: MemDb, path: str) -> None:
     seed_week(mem)
     env = make_env(mem, admin="somebody-else")
-    mem.reads = 0
+    mem.reset_counters()
 
     r = env.client.get(path, params={"from": "2026-10-01", "to": "2026-10-08"}, headers=H("not-an-admin"))
 
     assert r.status_code == 404 and r.json()["code"] == "not_found"
-    assert mem.reads == 0
+    assert mem.total_reads == 0
 
 
 def test_the_admin_routes_are_left_out_of_the_public_openapi(env: Env) -> None:

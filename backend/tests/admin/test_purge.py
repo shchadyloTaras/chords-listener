@@ -5,7 +5,7 @@ Per due uid the purge writes the tombstone first (``adminTombstones/{uid}``, ``p
 index), anonymizes ``adminJobs`` and redacts ``adminAudit``, deletes the Firebase Auth account and marks the tombstone
 ``done``. Every step is idempotent and an interrupted purge is resumed by the next sweep (``status == purging``).
 
-The flows run twice: on ``PurgeDb`` (the in-memory Firestore of the sweep tests plus dotted-field and array filters,
+The flows run twice: on ``MemDb`` (the shared in-memory Firestore,
 with a fake Firebase Auth) and on the Firestore and Auth emulators (skipped unless ``FIRESTORE_EMULATOR_HOST`` and
 ``FIREBASE_AUTH_EMULATOR_HOST`` are set). Each test uses its own collections and a fresh uid, so nothing needs cleaning.
 """
@@ -24,8 +24,7 @@ from typing import Any, Callable, Optional
 import pytest
 import requests
 
-from admin.test_projections import MemDb  # noqa: F401  (documents what PurgeDb builds on)
-from admin.test_sweeps import QueryDb, _ts
+from admin.fixtures import MemDb
 from app.admin.deletion import AuthAdmin, AuthDeleteFailed, BucketEraser, PurgeFailed, Purger
 from app.admin.directory import Directory, parse_time
 from app.admin.history import Projections
@@ -49,34 +48,6 @@ FROZEN_DAY = "2026-10-07"
 
 
 # --------------------------------------------------------------------------- the databases and Firebase Auth
-
-
-def _dig(data: Any, path: str) -> Any:
-    for part in path.split("."):
-        if not isinstance(data, dict) or part not in data:
-            return None
-        data = data[part]
-    return data
-
-
-class PurgeDb(QueryDb):
-    """``QueryDb`` that also filters on dotted field paths (``deletion.purgeAfter``) and ``array-contains``."""
-
-    def _rows(self, collection, filters):
-        rows = [(p, d) for p, d in self.docs.items() if p.rsplit("/", 1)[0] == collection]
-        for field, op, value in filters or []:
-            def keep(doc: dict[str, Any]) -> bool:
-                got = _dig(doc, field)
-                if got is None:
-                    return False
-                if op == "array-contains":
-                    return isinstance(got, list) and value in got
-                got, want = _ts(got), _ts(value)
-                return {"==": got == want, "<": got < want, "<=": got <= want, ">": got > want,
-                        ">=": got >= want}[op]
-
-            rows = [(p, d) for p, d in rows if keep(d)]
-        return rows
 
 
 class FakeAuth:
@@ -245,7 +216,7 @@ class Env:
 @pytest.fixture(params=["fake", pytest.param("emulator", marks=pytest.mark.skipif(
     not (FS_HOST and AUTH_HOST), reason="needs the Firestore and Auth emulators"))])
 def env(request, tmp_path) -> Env:
-    db: FirestoreIndex = PurgeDb() if request.param == "fake" else FirestoreIndex(PROJECT, emulator_host=FS_HOST)
+    db: FirestoreIndex = MemDb() if request.param == "fake" else FirestoreIndex(PROJECT, emulator_host=FS_HOST)
     e = Env(db, tmp_path, uuid.uuid4().hex[:10], request.param)
     e.seed()
     return e
@@ -554,7 +525,7 @@ def test_the_apps_sweeper_purges(env, monkeypatch, tmp_path):
                         allowed_hosts=("testserver", "localhost"))
     deleted: list[str] = []
     monkeypatch.setattr(AuthAdmin, "delete_user", lambda self, uid: deleted.append(uid))
-    db = PurgeDb()
+    db = MemDb()
     db.commit([
         db.update_op(f"users/{env.uid}", {"email": env.gone_email, "createdAt": NOW - timedelta(days=9)}),
         db.update_op(f"adminAccounts/{env.uid}", {"deletion": {
@@ -660,7 +631,7 @@ def test_a_user_without_a_tombstone_still_queues_a_failed_publish(pub_world):
 def test_the_apps_publisher_checks_the_tombstone_in_the_admin_database(tmp_path):
     from app.main import create_app
 
-    db = PurgeDb()
+    db = MemDb()
     db.commit([db.update_op("adminTombstones/u-gone", {"status": "purging", "purgeAfter": DUE, "startedAt": NOW,
                                                       "doneAt": None})])
     settings = Settings(data_dir=tmp_path / "d", frontend_dist=tmp_path / "no-dist", auth="firebase",
