@@ -10,6 +10,7 @@ import { useT } from '../i18n'
 import { getIdToken, openAuthDialog, useAuth } from '../lib/auth'
 import { cloudPrefix } from '../lib/serverMode'
 import { useDocumentTheme } from '../hooks/useTheme'
+import { Overview } from './screens/Overview'
 import { ADMIN_NAV, useAdminRoute, type AdminRoute } from './useAdminRoute'
 
 /**
@@ -68,6 +69,7 @@ function SignInPrompt() {
 function Screen({ route }: { route: AdminRoute }) {
   // The screens arrive with their own tasks; each is rendered here by route name.
   if (route.name === 'notFound') return <NotFoundPage />
+  if (route.name === 'overview') return <Overview />
   return <section aria-live="polite" className="px-4 py-6" data-screen={route.name} />
 }
 
