@@ -3,7 +3,8 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-import { defineConfig, type Plugin } from 'vite'
+import type { Plugin } from 'vite'
+import { configDefaults, defineConfig } from 'vitest/config'
 
 const BACKEND = process.env.CHORDS_BACKEND_URL ?? 'http://127.0.0.1:8765'
 
@@ -88,6 +89,10 @@ export default defineConfig({
   preview: {
     port: 4173,
     proxy,
+  },
+  // e2e/*.spec.ts belong to Playwright (`npm run test:e2e`), not to vitest
+  test: {
+    exclude: [...configDefaults.exclude, 'e2e/**'],
   },
   build: {
     outDir,

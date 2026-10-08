@@ -58,6 +58,15 @@ jobs:
       - name: Check the admin page (CSP, bundle contents)
         run: node scripts/check-admin-bundle.mjs dist-pages
 
+      # Browser e2e of the built admin page against a stubbed API (docs/features/admin T38): hostile strings render as
+      # text, the strict CSP rejects an injected script, an idle tab sends no request for 30 minutes (fake timers).
+      # It builds admin.html itself (frontend/dist-e2e), so the Pages artifact above is untouched.
+      - name: Install the e2e browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Admin e2e
+        run: npm run test:e2e
+
       - uses: actions/configure-pages@v6
 
       - uses: actions/upload-pages-artifact@v5

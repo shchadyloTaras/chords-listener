@@ -2,6 +2,9 @@ data/
 node_modules/
 frontend/dist/
 frontend/dist-pages/
+frontend/dist-e2e/
+frontend/test-results/
+frontend/playwright-report/
 backend/.venv/
 __pycache__/
 .pytest_cache/
