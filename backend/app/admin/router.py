@@ -13,6 +13,7 @@ Served here:
   BEFORE the response is built, and a journal that cannot be written withholds the data (AC-33b); the songs of a
   user are metadata only, never audio, chords or edits (AC-06).
 * ``GET /jobs`` (job history, AC-07) and ``GET /stats`` (daily stats, AC-08, AC-09).
+* ``listAudit`` (``GET /audit``, AC-10, AC-10b, AC-11): the admin action journal, read-only.
 """
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ import re
 import threading
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Callable, Mapping, NoReturn, Optional
+from typing import Annotated, Any, Callable, Mapping, NoReturn, Optional
 
 from fastapi import APIRouter, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -34,6 +35,7 @@ from app.firestore import Document, Filter, FirestoreIndex
 from app.users import valid_uid
 
 from . import models, stats
+from .audit import COLLECTION as AUDIT_COLLECTION
 from .audit import Audit, AuditEntry
 from .authz import ADMIN_PREFIX, AdminRoute, current_admin_uid
 from .directory import MAX_RESULTS, USERS, Directory, parse_time
@@ -693,3 +695,86 @@ def get_stats(request: Request, from_: date = Query(alias="from"), to: date = Qu
         _fill_new_users(db, entry, doc is not None)
         entries.append(entry)
     return StatsRange(from_=from_.isoformat(), to=to.isoformat(), days=entries)
+
+
+# --------------------------------------------------------------------------- GET /api/admin/audit (AC-10, AC-10b, AC-11)
+
+_STAMP = "%Y-%m-%dT%H:%M:%S.%fZ"
+
+
+def _audit_cursor(doc: Document) -> str:
+    """The record's sort key (``at``, to the microsecond) and id."""
+    at = parse_time(doc.data["at"])
+    assert at is not None
+    return _pack_cursor({"c": at.astimezone(timezone.utc).strftime(_STAMP), "i": doc.id})
+
+
+def _audit_position(name: str, cursor: str) -> Document:
+    """The record a cursor stands for (just enough of it to resume a query after it); 422 when it is not one of ours."""
+    try:
+        data = _unpack_cursor(cursor)
+        at = datetime.strptime(data["c"], _STAMP).replace(tzinfo=timezone.utc)
+        doc_id = data["i"]
+        if not isinstance(doc_id, str) or not doc_id or "/" in doc_id:
+            raise ValueError(doc_id)
+    except (ValueError, KeyError, TypeError, binascii.Error) as exc:
+        raise _invalid(name, "not a cursor of this list") from exc
+    return Document(f"{AUDIT_COLLECTION}/{doc_id}", {"at": at})
+
+
+def _target_of(db: FirestoreIndex, people: Directory, uid: str) -> tuple[Optional[str], bool]:
+    """(email, deleted) of a journal target. A tombstone wins over the index (a purge writes it first, ADR-0011);
+    a uid nobody knows is neither: no email, not deleted."""
+    if db.get(f"{TOMBSTONES}/{uid}") is not None:
+        return None, True
+    return people.email_of(uid), False
+
+
+def _audit_entry(doc: Document, targets: dict[str, tuple[Optional[str], bool]]) -> models.AuditEntry:
+    d = doc.data
+    uid: Optional[str] = d.get("targetUid")
+    email, deleted = targets.get(uid, (None, False)) if uid else (None, False)
+    return models.AuditEntry(
+        id=doc.id, at=parse_time(d["at"]), admin_uid=d["adminUid"], admin_email=d["adminEmail"], action=d["action"],
+        outcome=d["outcome"], target_uid=uid, target_email=email, target_deleted=deleted, setting=d.get("setting"),
+        before=d.get("before"), after=d.get("after"), reject_reason=d.get("rejectReason"), query=d.get("query"),
+        ref_id=d.get("refId"), redacted_at=parse_time(d.get("redactedAt")),
+    )
+
+
+@router.get("/audit", response_model=models.AuditPage, operation_id="listAudit")
+def list_audit(
+    request: Request,
+    admin_uid: Annotated[Optional[models.Uid], Query(alias="adminUid")] = None,
+    target_uid: Annotated[Optional[models.Uid], Query(alias="targetUid")] = None,
+    action: Optional[models.AuditAction] = None,
+    after: Optional[models.Cursor] = None,
+    before: Optional[models.Cursor] = None,
+    limit: Annotated[int, Query(ge=1, le=PAGE_SIZE)] = PAGE_SIZE,
+) -> models.AuditPage:
+    """The admin action journal, newest first, filtered by admin / user / action. Read-only: there is no route that
+    changes or deletes a record (AC-11). The journal is not itself journaled (it holds no personal data beyond what
+    the records already hold); a purged target shows ``targetEmail: null, targetDeleted: true``."""
+    if after is not None and before is not None:
+        raise _invalid("before", "use either after or before, not both")
+    db = database(request)
+    people = directory(request)
+    filters = [(f, "==", v) for f, v in (("adminUid", admin_uid), ("targetUid", target_uid), ("action", action)) if v]
+    if before is not None:  # going back: the records just newer than the cursor, then turned to newest first
+        docs = db.run_query(AUDIT_COLLECTION, filters=filters, order_by=["at"], limit=limit + 1,
+                            start_after=_audit_position("before", before))
+        has_prev, has_next = len(docs) > limit, True
+        docs = docs[:limit][::-1]
+    else:
+        docs = db.run_query(AUDIT_COLLECTION, filters=filters, order_by=["-at"], limit=limit + 1,
+                            start_after=_audit_position("after", after) if after is not None else None)
+        has_next, has_prev = len(docs) > limit, after is not None
+        docs = docs[:limit]
+    uids = dict.fromkeys(str(d.data["targetUid"]) for d in docs if d.data.get("targetUid"))  # each target once
+    targets = {uid: _target_of(db, people, uid) for uid in uids}
+    return models.AuditPage(
+        items=[_audit_entry(d, targets) for d in docs],
+        has_next=has_next,
+        has_prev=has_prev,
+        next_cursor=_audit_cursor(docs[-1]) if has_next and docs else None,
+    )
