@@ -111,6 +111,20 @@ def test_the_id_token_is_reused(tmp_path: Path) -> None:
     assert audiences == [BASE]
 
 
+def test_a_failed_id_token_is_a_download_failure(tmp_path: Path) -> None:
+    session, bucket = FakeSession(ok()), FakeBucket({OBJECT: b"audio"})
+
+    def no_token(audience: str) -> str:
+        raise RuntimeError("no metadata server")
+
+    fetcher = RemoteClipFetcher(BASE, bucket, max_bytes=1000, token_fn=no_token, session=session)
+    with pytest.raises(SourceError) as err:
+        fetch(fetcher, tmp_path)
+    assert (err.value.code, err.value.message) == ("download_failed", "The download service failed")
+    assert session.calls == []
+    assert bucket.deleted == []
+
+
 def test_busy_containers_are_waited_for(tmp_path: Path) -> None:
     session = FakeSession(FakeResponse(429, None), FakeResponse(503, {"code": "internal"}),
                           requests.ConnectionError("cold start"), ok())

@@ -125,11 +125,12 @@ class RemoteClipFetcher:
     def _post(self, body: dict[str, Any]) -> tuple[int, Any]:
         import requests
 
+        token = self._id_token()  # a failure here is not a busy service: it is raised, not retried
         try:
             res = self._http().post(
                 f"{self.base_url}/clip",
                 json=body,
-                headers={"Authorization": f"Bearer {self._id_token()}"},
+                headers={"Authorization": f"Bearer {token}"},
                 timeout=(10, 300),
             )
         except requests.RequestException as exc:
@@ -151,7 +152,11 @@ class RemoteClipFetcher:
         with self._lock:
             now = self._clock()
             if self._token is None or now - self._token[1] > TOKEN_TTL_S:
-                self._token = (self._token_fn(self.base_url), now)
+                try:
+                    self._token = (self._token_fn(self.base_url), now)
+                except Exception as exc:  # google.auth errors, a dead metadata server: never a crash
+                    log.warning("could not get an ID token for chords-fetch: %s", exc)
+                    raise SourceError("download_failed", "The download service failed") from exc
             return self._token[0]
 
 
