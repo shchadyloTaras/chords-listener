@@ -38,7 +38,7 @@ export const cloud: Dict = {
     'cloud.ways.listen.hint': 'Мікрофон або звук вкладки — розпізнаємо акорди',
     'cloud.input.hintGuest': 'Відео з YouTube послухаємо прямо тут. Посилання з інших сайтів — після входу.',
     'cloud.input.hintYoutubeGuest': 'Відео з YouTube — натисни Enter, і послухаємо його на сторінці',
-    'cloud.input.hintYoutubeClip': 'Відео з YouTube — натисни Enter, вибери 30 секунд, і хмара розбере акорди',
+    'cloud.input.hintYoutubeClip': 'Відео з YouTube — натисни Enter, вибери {seconds} секунд, і хмара розбере акорди',
     'cloud.input.accountTitle': 'Посилання з інших сайтів розпізнає хмара',
     'cloud.input.accountText':
       'Сервер у хмарі завантажить аудіо й розпізнає акорди. Акаунт безкоштовний, а відео з YouTube можна послухати й без нього.',
@@ -46,7 +46,7 @@ export const cloud: Dict = {
     'cloud.input.hintGuestNoTab':
       'Файли й мікрофон працюють без акаунта. Відео з YouTube відкриємо тут і підкажемо, як його послухати. Посилання з інших сайтів — після входу.',
     'cloud.input.hintYoutubeHere': 'Відео з YouTube — відкриємо його тут і підкажемо, як його послухати',
-    // a YouTube playlist, channel or clip: nothing to listen to (and the cloud never gets YouTube links)
+    // a YouTube playlist, channel or clip: not one video, so nothing to listen to and no fragment to pick
     'cloud.input.notVideo': 'Це не окреме відео — відкрий на YouTube саме відео й скопіюй його посилання',
 
     // "listen in the tab" (YouTube)
@@ -189,7 +189,7 @@ export const cloud: Dict = {
     'cloud.ways.listen.hint': 'Microphone or tab audio — we find the chords',
     'cloud.input.hintGuest': 'YouTube videos are played and listened to right here. Links to other sites need an account.',
     'cloud.input.hintYoutubeGuest': 'YouTube video — press Enter and we will listen to it on the page',
-    'cloud.input.hintYoutubeClip': 'YouTube video — press Enter, pick 30 seconds and the cloud finds the chords',
+    'cloud.input.hintYoutubeClip': 'YouTube video — press Enter, pick {seconds} seconds and the cloud finds the chords',
     'cloud.input.accountTitle': 'Links to other sites are analyzed in the cloud',
     'cloud.input.accountText':
       'A cloud server downloads the audio and detects the chords. The account is free, and YouTube videos can be listened to without one.',

@@ -184,6 +184,9 @@ export function CapturePage({ videoId, blocked, start }: { videoId: string; bloc
   const [slowStart, setSlowStart] = useState(false)
   const [title, setTitle] = useState<string | null>(null)
   const [position, setPosition] = useState(start ?? 0)
+  // The `?t=` the page was opened with, read once per mount: a later change of it (back / forward between `?t=` entries,
+  // the same video pasted again, a blocked-fragment toast) must not destroy and recreate the player, even mid-recording.
+  const startRef = useRef(start)
   /** video time where the recording began (set when the video starts playing) */
   const startOffsetRef = useRef<number | null>(null)
   const titleRef = useRef<string | null>(null)
@@ -251,7 +254,7 @@ export function CapturePage({ videoId, blocked, start }: { videoId: string; bloc
             iv_load_policy: 3,
             enablejsapi: 1,
             origin: window.location.origin,
-            ...(start ? { start } : {}),
+            ...(startRef.current ? { start: startRef.current } : {}),
           },
           events: {
             onReady: (e) => {
@@ -300,7 +303,7 @@ export function CapturePage({ videoId, blocked, start }: { videoId: string; bloc
       }
       host.replaceChildren()
     }
-  }, [videoId, start, dispatch, current, playerKey])
+  }, [videoId, dispatch, current, playerKey])
 
   // ---- before starting: where the video is (to offer "start at 1:23")
   useEffect(() => {
@@ -309,13 +312,13 @@ export function CapturePage({ videoId, blocked, start }: { videoId: string; bloc
       const p = playerRef.current
       if (!p) return
       try {
-        setPosition(chooseStartOffset(idlePosition(p.getCurrentTime(), start), p.getDuration()))
+        setPosition(chooseStartOffset(idlePosition(p.getCurrentTime(), startRef.current), p.getDuration()))
       } catch {
         /* not ready */
       }
     }, 500)
     return () => window.clearInterval(id)
-  }, [state.phase, start])
+  }, [state.phase])
 
   // ---- waiting for the video to start: after a while, point at the play button of the video itself
   useEffect(() => {

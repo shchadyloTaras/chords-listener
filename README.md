@@ -376,9 +376,12 @@ chords-listener/
 ├── .github/workflows/       публікація веб-версії на GitHub Pages
 ├── firebase.json, firestore.rules   вхід в акаунт: правила доступу до налаштувань
 ├── storage.rules            Firebase Storage: користувач може лише завантажити свій файл
-├── scripts/                 deploy_cloud.sh (розгортання), smoke_cloud.py (перевірка), gcloud_token.cjs
+├── scripts/                 deploy_cloud.sh (розгортання), smoke_cloud.py (перевірка), gcloud_token.cjs,
+│                            deploy_fetch.sh (розгортання chords-fetch), smoke_fetch.py (перевірка фрагментів YouTube),
+│                            gcloud_common.sh (спільне для обох розгортань)
 ├── backend/                 Python 3.11 (uv)
 │   ├── Dockerfile           образ для Cloud Run (cloudbuild.yaml збирає його в Cloud Build)
+│   ├── fetch.Dockerfile     образ chords-fetch (сервісу фрагментів YouTube)
 │   ├── app/
 │   │   ├── main.py          FastAPI: маршрути /api, віддача зібраного інтерфейсу
 │   │   ├── jobs.py          черга завдань (завантаження → декодування → аналіз)
@@ -387,6 +390,9 @@ chords-listener/
 │   │   ├── models.py        схеми JSON (camelCase) і налаштування
 │   │   ├── auth.py, users.py   хмара: вхід через Firebase, підписані посилання, поточний користувач
 │   │   ├── quotas.py, gcs.py   хмара: денні ліміти, файли з Firebase Storage
+│   │   ├── fetch_service.py сервіс chords-fetch: фрагменти YouTube через WARP
+│   │   ├── fetch_client.py  виклик chords-fetch з chords-api
+│   │   ├── warp.py          тунель Cloudflare WARP, wireproxy
 │   │   ├── engine/          розпізнавання: нейромережі, ритм, тональність, акорди
 │   │   └── vocals/          мелодія вокалу (необовʼязково): Demucs → CREPE → ноти, стеми
 │   ├── scripts/             оцінка точності, синтетичні пісні, аналіз файлу з консолі, прогрів образу
@@ -398,6 +404,7 @@ chords-listener/
 │       │   ├── layout/      сторінки, шапка, довідка
 │       │   ├── input/       поле посилання, файли, мікрофон
 │       │   ├── jobs/        прогрес розпізнавання
+│       │   ├── clip/        вибір фрагмента YouTube
 │       │   ├── player/      плеєр (аудіо / YouTube), хвиля
 │       │   ├── chords/      поточний акорд, аркуш, таймлайн, копіювання, редагування,
 │       │   │                хендпан (handpan/), темп і метроном (tempo/)

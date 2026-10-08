@@ -54,7 +54,7 @@ export function JobPills() {
             {failed ? (
               <TriangleAlert className="size-3.5 shrink-0" aria-hidden="true" />
             ) : (
-              <ProgressRing progress={job.status === 'queued' ? null : job.progress} className="text-accent" />
+              <ProgressRing progress={job.status === 'queued' && job.progress === 0 ? null : job.progress} className="text-accent" />
             )}
             <span className="hidden truncate md:inline">{name}</span>
             {!failed && <span className="font-mono tabular-nums">{Math.round(job.progress * 100)}%</span>}

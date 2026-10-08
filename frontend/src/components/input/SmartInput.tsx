@@ -9,6 +9,7 @@ import { holdCloudBusy, onServerRequired, useConnection } from '../../lib/server
 import { useJobs } from '../../hooks/useJobs'
 import { paths } from '../../hooks/useRoute'
 import { useCanListenInTab, useIsDesktopPointer, useMediaQuery } from '../../hooks/useMediaQuery'
+import { CLIP_SECONDS } from '../clip/clipWindow'
 import { errorText } from '../jobs/errorText'
 import { AccountButtons } from '../account/AccountCta'
 import { useCloudInvite } from '../account/cloudInvite'
@@ -226,8 +227,8 @@ export function SmartInput({ className }: { className?: string }) {
   }
 
   // signed in from the notice: once the cloud is connected, start the waiting link (editing, clearing or
-  // dismissing it, another submit or leaving the page forgets it). Never a YouTube link: the cloud is not sent
-  // those (a video opens the capture page without an account).
+  // dismissing it, another submit or leaving the page forgets it). Never a YouTube link: a guest's video opens
+  // the capture page (no account needed), a signed-in user's opens the fragment picker.
   const submitRef = useRef(submit)
   useEffect(() => {
     submitRef.current = submit
@@ -314,7 +315,7 @@ export function SmartInput({ className }: { className?: string }) {
       case 'youtube':
         // a local server downloads the video; signed in, the cloud takes a fragment; a guest listens on the capture page
         if (localServer) return ok(t('core.input.hintYoutube'))
-        if (onCloud) return ok(t('cloud.input.hintYoutubeClip'))
+        if (onCloud) return ok(t('cloud.input.hintYoutubeClip', { seconds: CLIP_SECONDS }))
         return ok(t(tabCapable ? 'cloud.input.hintYoutubeGuest' : 'cloud.input.hintYoutubeHere'))
       case 'other':
         return guest ? (

@@ -2,17 +2,20 @@
 fields, the clip download helpers, clip jobs. Offline: yt-dlp and the clip fetcher are fakes."""
 from __future__ import annotations
 
+import logging
+import re
 import shutil
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Optional
+from typing import Callable, Optional
 
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from app.jobs import JobRecord
+from app.jobs import DOWNLOAD_RANGE, JobRecord
 from app.main import create_app
 from app.models import ClipRange, CreateJobRequest, Settings, TrackSummary
 from app.sources import (
@@ -39,6 +42,7 @@ from tests.test_api import (  # noqa: F401  (media is a fixture)
     assert_error,
     media,
     needs_ffmpeg,
+    upload,
     wait_job,
     work_leftovers,
 )
@@ -289,7 +293,7 @@ def clip_env(tmp_path: Path, media: SimpleNamespace):  # noqa: F811
         client = TestClient(app)
         client.__enter__()
         clients.append(client)
-        return SimpleNamespace(client=client, engine=engine, clips=clips, settings=settings)
+        return SimpleNamespace(client=client, engine=engine, clips=clips, settings=settings, media=media)
 
     yield factory
     for c in clients:
@@ -345,6 +349,223 @@ def test_the_same_fragment_twice_at_once_is_one_job(clip_env) -> None:
     env.clips.gate.set()
     assert wait_job(env.client, a["id"])["status"] == "done"
     assert len(env.clips.calls) == 1
+
+
+def wait_until(condition: Callable[[], object], what: str, timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not condition():
+        if time.monotonic() > deadline:
+            raise AssertionError(f"timed out waiting for {what}")
+        time.sleep(0.02)
+
+
+def job_json(env: SimpleNamespace, job_id: str) -> dict:
+    return env.client.get(f"/api/jobs/{job_id}").json()
+
+
+def post_clip(env: SimpleNamespace, start: int) -> dict:
+    return env.client.post("/api/jobs", json={"url": VIDEO_ID, "clip": {"start": start}}).json()
+
+
+def hold_the_only_analysis_worker(env: SimpleNamespace) -> str:
+    """``env`` has ``max_workers=1``: an upload parked in the engine keeps the analysis worker busy until
+    ``env.engine.gate`` opens. Returns that upload's job id."""
+    env.engine.gate = threading.Event()
+    held = upload(env.client, env.media.plain_wav).json()
+    wait_until(lambda: len(env.engine.calls) == 1, "the upload to reach the engine")
+    return held["id"]
+
+
+WAITING = "Waiting for analysis"
+
+
+def wait_downloaded(env: SimpleNamespace, job_id: str) -> None:
+    """The fragment is on disk and the job waits for its analysis (the download fills the progress up to 0.35)."""
+    wait_until(lambda: env.clips.calls, "the fragment download to start")
+    wait_until(lambda: job_json(env, job_id)["message"] == WAITING, "the fragment download to finish")
+
+
+def keys_in_use(env: SimpleNamespace) -> dict:
+    return dict(env.client.app.state.jobs._active)
+
+
+@needs_ffmpeg
+def test_a_fragment_download_does_not_wait_for_an_analysis_worker(clip_env) -> None:
+    env = clip_env(max_workers=1)
+    held = hold_the_only_analysis_worker(env)
+    clip = post_clip(env, 72)
+    wait_downloaded(env, clip["id"])  # the only analysis worker is still busy with the upload
+    state = job_json(env, clip["id"])
+    assert len(env.engine.calls) == 1, state
+    # downloaded, not downloading: it reads as waiting, with the progress of the finished download
+    assert (state["status"], state["message"], state["progress"]) == ("queued", WAITING, DOWNLOAD_RANGE[1]), state
+    env.engine.gate.set()
+    assert wait_job(env.client, held)["status"] == "done"
+    done = wait_job(env.client, clip["id"])
+    assert done["status"] == "done" and done["trackId"] == track_id_for("youtube", f"{VIDEO_ID}@72")
+    assert len(env.engine.calls) == 2 and work_leftovers(env) == [] and keys_in_use(env) == {}
+
+
+@needs_ffmpeg
+def test_a_fragment_is_one_job_while_it_waits_for_analysis_and_while_it_is_analyzed(clip_env) -> None:
+    env = clip_env(max_workers=1)
+    held = hold_the_only_analysis_worker(env)
+    queued = post_clip(env, 72)
+    wait_downloaded(env, queued["id"])
+    again = post_clip(env, 72)  # downloaded, its analysis queued behind the upload
+    assert again["id"] == queued["id"] and len(env.clips.calls) == 1
+    env.engine.gate.set()
+    assert wait_job(env.client, held)["status"] == "done"
+    assert wait_job(env.client, queued["id"])["status"] == "done"
+
+    env.engine.gate = threading.Event()
+    running = post_clip(env, 0)
+    wait_until(lambda: len(env.engine.calls) == 3, "the fragment to reach the engine")
+    again = post_clip(env, 0)  # being analyzed
+    assert again["id"] == running["id"] and len(env.clips.calls) == 2
+    assert keys_in_use(env) != {}
+    env.engine.gate.set()
+    assert wait_job(env.client, running["id"])["status"] == "done"
+    assert keys_in_use(env) == {} and work_leftovers(env) == []
+
+
+@needs_ffmpeg
+def test_the_done_log_of_a_fragment_counts_its_download_too(clip_env, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="chords.jobs")
+    env = clip_env()
+    env.clips.gate = threading.Event()
+    clip = post_clip(env, 72)
+    wait_until(lambda: env.clips.calls, "the fragment download to start")
+    time.sleep(0.4)  # a slow download: phase 1 alone takes this long
+    env.clips.gate.set()
+    assert wait_job(env.client, clip["id"])["status"] == "done"
+    wait_until(lambda: any("done in" in r.getMessage() for r in caplog.records), "the done log line")
+    line = next(r.getMessage() for r in caplog.records if "done in" in r.getMessage())
+    phase, total = map(float, re.search(r"done in ([\d.]+)s \(([\d.]+)s since it was created\)", line).groups())  # type: ignore[union-attr]
+    assert total >= 0.4 and total >= phase, line  # the analysis phase alone is far shorter than the whole job
+
+
+@needs_ffmpeg
+def test_a_fragment_releases_its_keys_when_the_download_fails(clip_env) -> None:
+    env = clip_env()
+    env.clips.error = SourceError("download_blocked", "YouTube refused the download from the server (bot check).")
+    failed = wait_job(env.client, post_clip(env, 72)["id"])
+    assert failed["status"] == "error" and failed["errorCode"] == "download_blocked"
+    assert keys_in_use(env) == {}
+    env.clips.error = None
+    retry = post_clip(env, 72)
+    assert retry["id"] != failed["id"]  # a finished job isn't shared: asking again starts afresh
+    assert wait_job(env.client, retry["id"])["status"] == "done"
+    assert keys_in_use(env) == {} and work_leftovers(env) == []
+
+
+@needs_ffmpeg
+def test_cancelling_a_fragment_while_it_downloads(clip_env) -> None:
+    env = clip_env()
+    env.clips.gate = threading.Event()
+    clip = post_clip(env, 72)
+    wait_until(lambda: env.clips.calls, "the fragment download to start")
+    assert env.client.post(f"/api/jobs/{clip['id']}/cancel").status_code == 200
+    env.clips.gate.set()
+    done = wait_job(env.client, clip["id"])
+    assert done["status"] == "error" and done["errorCode"] == "cancelled"
+    wait_until(lambda: work_leftovers(env) == [], "the work dir to be removed")
+    assert env.engine.calls == [] and keys_in_use(env) == {}
+
+
+@needs_ffmpeg
+def test_cancelling_a_fragment_whose_analysis_is_queued_removes_the_download(clip_env) -> None:
+    env = clip_env(max_workers=1)
+    held = hold_the_only_analysis_worker(env)
+    clip = post_clip(env, 72)
+    wait_downloaded(env, clip["id"])
+    assert any(p.name.startswith(clip["id"]) for p in env.settings.work_dir.iterdir())  # the file waits on disk
+    assert env.client.post(f"/api/jobs/{clip['id']}/cancel").status_code == 200
+    env.engine.gate.set()
+    assert wait_job(env.client, held)["status"] == "done"
+    done = wait_job(env.client, clip["id"])
+    assert done["status"] == "error" and done["errorCode"] == "cancelled"
+    wait_until(lambda: work_leftovers(env) == [], "the work dir to be removed")
+    assert len(env.engine.calls) == 1 and keys_in_use(env) == {}  # the fragment never reached the engine
+
+
+@needs_ffmpeg
+def test_cancelling_an_upload_that_is_still_queued_removes_its_work_dir(clip_env) -> None:
+    env = clip_env(max_workers=1)
+    held = hold_the_only_analysis_worker(env)
+    queued = upload(env.client, env.media.tagged_mp3).json()
+    assert job_json(env, queued["id"])["message"] == "Waiting in queue"
+    assert len(work_leftovers(env)) == 2  # the running upload's dir and the queued one's
+    assert env.client.post(f"/api/jobs/{queued['id']}/cancel").status_code == 200
+    env.engine.gate.set()
+    assert wait_job(env.client, held)["status"] == "done"
+    done = wait_job(env.client, queued["id"])
+    assert done["status"] == "error" and done["errorCode"] == "cancelled"
+    wait_until(lambda: work_leftovers(env) == [], "the queued upload's work dir to be removed")
+    assert len(env.engine.calls) == 1 and keys_in_use(env) == {}  # it never reached the engine
+
+
+@needs_ffmpeg
+def test_deleting_the_track_of_a_queued_upload_removes_its_work_dir(clip_env) -> None:
+    env = clip_env(max_workers=1)
+    held = hold_the_only_analysis_worker(env)
+    queued = upload(env.client, env.media.tagged_mp3).json()
+    jobs = env.client.app.state.jobs
+    track_id = next(k.split(":", 1)[1] for k in keys_in_use(env) if k.startswith("track:") and jobs._active[k] == queued["id"])
+    jobs.cancel_track_jobs(track_id, "not_found", "The track was deleted")
+    env.engine.gate.set()
+    assert wait_job(env.client, held)["status"] == "done"
+    assert wait_job(env.client, queued["id"])["errorCode"] == "not_found"
+    wait_until(lambda: work_leftovers(env) == [], "the queued upload's work dir to be removed")
+
+
+def test_a_closed_manager_removes_the_work_dir_of_an_upload(clip_env) -> None:
+    from app.sources import ProbeResult, ReceivedUpload
+
+    env = clip_env()
+    jobs = env.client.app.state.jobs
+    work = jobs.store.new_work_dir("upload")
+    path = work / "song.mp3"
+    path.write_bytes(b"x")
+    jobs._closed = True
+    try:
+        job = jobs.submit_upload(ReceivedUpload(path=path, filename="song.mp3", size=1, sha1="0" * 40), ProbeResult(10.0, True), {})
+    finally:
+        jobs._closed = False
+    assert job.status == "error" and job.error_code == "internal"
+    assert not work.exists() and keys_in_use(env) == {}
+
+
+def test_a_closed_manager_refuses_the_second_phase_and_cleans_up(clip_env) -> None:
+    env = clip_env()
+    jobs = env.client.app.state.jobs
+    rec = jobs._new_record("url", {}, keys={"track:x"})
+    cleaned: list[int] = []
+    jobs._closed = True
+    try:
+        jobs._submit(rec, lambda: pytest.fail("must not run"), cleanup=lambda: cleaned.append(1))
+    finally:
+        jobs._closed = False
+    assert cleaned == [1] and rec.status == "error" and rec.error_code == "internal"
+    assert keys_in_use(env) == {}
+
+
+@needs_ffmpeg
+def test_shutdown_stops_the_download_pool_too(clip_env) -> None:
+    env = clip_env()
+    jobs = env.client.app.state.jobs
+    env.clips.gate = threading.Event()
+    clip = post_clip(env, 72)
+    wait_until(lambda: env.clips.calls, "the fragment download to start")
+    jobs.shutdown()
+    for pool in (jobs._executor, jobs._fetch_executor):
+        with pytest.raises(RuntimeError):
+            pool.submit(lambda: None)
+    env.clips.gate.set()
+    done = wait_job(env.client, clip["id"])  # the download stops at its next check: no second phase after a shutdown
+    assert done["status"] == "error" and done["message"] == "The server was stopped"
+    wait_until(lambda: work_leftovers(env) == [], "the work dir to be removed")
+    assert env.engine.calls == []
 
 
 @needs_ffmpeg

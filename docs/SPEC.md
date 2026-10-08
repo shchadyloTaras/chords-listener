@@ -103,7 +103,7 @@ Errors: `{"detail": str, "code": ErrorCode}` with proper HTTP status. Job failur
 
 `ErrorCode`: `invalid_url | download_failed | unsupported_format | too_long | too_large | analysis_failed | not_found | internal`.
 
-Job progress mapping (overall `progress` 0..1): queued 0 → downloading 0–0.35 → decoding/transcoding 0.35–0.45 → analyzing 0.45–1.0 (engine fraction scaled) → done 1.
+Job progress mapping (overall `progress` 0..1): queued 0 → downloading 0–0.35 → decoding/transcoding 0.35–0.45 → analyzing 0.45–1.0 (engine fraction scaled) → done 1. A YouTube fragment job (`clip`) downloads first, then waits as `queued` at 0.35 (message "Waiting for analysis") until an analysis worker takes it, then continues with decoding.
 
 Limits (env-overridable): `CHORDS_MAX_DURATION_MIN=30`, `CHORDS_MAX_UPLOAD_MB=500`, `CHORDS_DATA_DIR=<project>/data`.
 

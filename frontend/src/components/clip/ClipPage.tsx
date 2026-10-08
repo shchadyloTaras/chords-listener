@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useT } from '../../i18n'
 import { useDocumentTitle } from '../../hooks/useDocumentTitle'
 import { submitClip } from '../../hooks/useJobs'
-import { navigate, paths } from '../../hooks/useRoute'
+import { currentPath, navigate, paths } from '../../hooks/useRoute'
 import { toApiError } from '../../lib/api'
 import { clipReady } from '../../lib/tour/trigger'
 import { useApp } from '../../store'
@@ -147,9 +147,12 @@ export function ClipPage({ videoId, start: initialStart }: { videoId: string; st
     } catch {
       /* player gone */
     }
+    const here = currentPath()
     try {
       await submitClip(videoId, range.start) // opens the job page
     } catch (e) {
+      // the user left the picker while the request was pending: a redirect or a toast would pull them back
+      if (currentPath() !== here) return
       const { code } = toApiError(e)
       // this cloud cannot download YouTube fragments: listen to the video in the tab, from the same place
       if (code === 'unavailable') navigate(paths.capture(videoId, { blocked: true, t: range.start }), { replace: true })

@@ -226,7 +226,7 @@ export function JobPage({ id }: { id: string }) {
           )}
 
           <div className="mt-7">
-            <StageStepper status={job?.status ?? 'queued'} steps={stepsFor(job ?? {})} />
+            <StageStepper status={job?.status ?? 'queued'} progress={job?.progress} steps={stepsFor(job ?? {})} />
           </div>
 
           <div className="mt-6">

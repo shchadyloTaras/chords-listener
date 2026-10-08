@@ -1,7 +1,8 @@
 """Background job system: in-memory registry + a small worker pool running the analysis pipeline.
 
 Overall progress mapping (docs/SPEC.md): queued 0 -> downloading 0..0.35 -> decoding 0.35..0.45 ->
-analyzing 0.45..1.0 (engine fraction scaled) -> done 1.
+analyzing 0.45..1.0 (engine fraction scaled) -> done 1. A YouTube fragment job runs in two phases (download, then
+processing) and waits as ``queued`` at 0.35 between them.
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ from .quotas import QuotaExceeded, Quotas
 from .sources import (
     Cancelled,
     ClipFetcher,
+    FetchedClip,
     NormalizedUrl,
     ProbeResult,
     ReceivedUpload,
@@ -56,6 +58,9 @@ ERROR_CODES = frozenset(get_args(ErrorCode))
 DOWNLOAD_RANGE = (0.0, 0.35)
 DECODE_RANGE = (0.35, 0.45)
 ANALYZE_RANGE = (0.45, 1.0)
+# A YouTube fragment's download (phase 1 of its job) mostly waits on the network or on chords-fetch (a local server
+# runs yt-dlp/ffmpeg here): it runs on its own pool, so it never holds one of the few analysis workers.
+CLIP_FETCH_WORKERS = 4
 
 
 class JobFailed(Exception):
@@ -132,6 +137,7 @@ class JobManager:
         self._active: dict[str, str] = {}  # dedup key ("track:<id>" / "url:<url>") -> job id
         self._track_locks: dict[str, threading.Lock] = {}
         self._executor = ThreadPoolExecutor(max_workers=settings.max_workers, thread_name_prefix="chords-job")
+        self._fetch_executor = ThreadPoolExecutor(max_workers=CLIP_FETCH_WORKERS, thread_name_prefix="chords-clip-fetch")
         self._closed = False
         self.quotas = Quotas(settings, store)
 
@@ -236,7 +242,7 @@ class JobManager:
                 clip={"start": float(start), "end": float(start + self.settings.clip_s)},
                 keys=keys,
             )
-            self._submit(rec, lambda: self._run_clip(rec, video_id, start, track_id))
+            self._submit(rec, lambda: self._run_clip(rec, video_id, start, track_id), fetch=True)
             return rec.to_model()
 
     def submit_upload(self, upload: ReceivedUpload, probe: ProbeResult, options: dict[str, Any]) -> Job:
@@ -263,7 +269,11 @@ class JobManager:
                 title=probe.title or display_name(upload.filename),
                 keys=keys,
             )
-            self._submit(rec, lambda: self._run_upload(rec, upload, probe, track_id))
+            self._submit(
+                rec,
+                lambda: self._run_upload(rec, upload, probe, track_id),
+                cleanup=lambda: shutil.rmtree(upload.work_dir, ignore_errors=True),
+            )
             return rec.to_model()
 
     def submit_reanalyze(self, track_id: str, options: dict[str, Any]) -> Job:
@@ -385,6 +395,7 @@ class JobManager:
                     rec.cancel_reason = ("internal", "The server was stopped")
                     rec.cancel.set()
         self._executor.shutdown(wait=False, cancel_futures=True)
+        self._fetch_executor.shutdown(wait=False, cancel_futures=True)
 
     # ------------------------------------------------------------------ registry internals
 
@@ -455,21 +466,60 @@ class JobManager:
         if rec.cancel.is_set():
             raise Cancelled()
 
-    def _submit(self, rec: JobRecord, fn: Callable[[], None]) -> None:
-        if self._closed:
-            self._fail(rec, "internal", "The server is shutting down")
-            self._release(rec)
-            return
+    def _submit(
+        self,
+        rec: JobRecord,
+        fn: Callable[[], None],
+        *,
+        fetch: bool = False,
+        cleanup: Optional[Callable[[], None]] = None,
+    ) -> None:
+        """Queue ``fn`` as (the next phase of) ``rec``'s job on the analysis pool. ``fetch=True``: the job's
+        first phase, a download, on the download pool; ``fn`` then queues the job's last phase itself and the
+        dedup keys stay claimed in between. ``cleanup`` takes over whatever ``fn`` needs on disk: it runs once
+        when the queued work has ended, even if it never started (cancelled while queued), and at once when
+        the work is refused (the manager is closed). ``shutdown()`` drops queued work with ``cancel_futures``, without
+        its ``cleanup``: the work root is wiped at the next start (``TrackStore.init``)."""
         # The worker runs in a copy of the submitting request's context: same user (app.users), so the
         # storage helpers resolve that user's paths inside the job.
-        self._executor.submit(contextvars.copy_context().run, self._run, rec, fn)
+        if not self._closed:
+            executor = self._fetch_executor if fetch else self._executor
+            try:
+                # Invariant: a first phase (``fetch``) must either end the job (done or failed) or queue the next phase,
+                # otherwise ``_run`` never releases the job's dedup keys.
+                executor.submit(contextvars.copy_context().run, self._run, rec, fn, last=not fetch, cleanup=cleanup)
+                return
+            except RuntimeError:  # shutdown() closed the pool between the check and the call
+                pass
+        self._fail(rec, "internal", "The server is shutting down")
+        if cleanup:
+            cleanup()
+        self._release(rec)
 
-    def _run(self, rec: JobRecord, fn: Callable[[], None]) -> None:
+    def _run(
+        self,
+        rec: JobRecord,
+        fn: Callable[[], None],
+        *,
+        last: bool = True,
+        cleanup: Optional[Callable[[], None]] = None,
+    ) -> None:
+        """Run one phase of ``rec``'s job. The dedup keys are released when the job ends: after its ``last``
+        phase, or whenever it has failed or been cancelled before that."""
         started = time.monotonic()
         try:
             self._check_cancel(rec)
             fn()
-            log.info("job %s (%s) done in %.1fs -> track %s", rec.id, rec.kind, time.monotonic() - started, rec.track_id)
+            if last:
+                # "done in" is this phase; a fragment job's download phase ran before it, so the whole job is logged too
+                log.info(
+                    "job %s (%s) done in %.1fs (%.1fs since it was created) -> track %s",
+                    rec.id,
+                    rec.kind,
+                    time.monotonic() - started,
+                    time.time() - rec.created_ts,
+                    rec.track_id,
+                )
         except Cancelled:
             code, message = rec.cancel_reason
             self._fail(rec, code, message)
@@ -480,9 +530,14 @@ class JobManager:
             log.exception("job %s (%s) crashed", rec.id, rec.kind)
             self._fail(rec, "internal", "Unexpected server error")
         finally:
-            self._release(rec)
-            with self._lock:
-                self._prune()
+            try:
+                if cleanup:
+                    cleanup()
+            finally:
+                if last or rec.finished:
+                    self._release(rec)
+                with self._lock:
+                    self._prune()
 
     def _fail(self, rec: JobRecord, code: ErrorCode, message: str) -> None:
         self._update(rec, status="error", error_code=code, error=message, message=message)
@@ -534,6 +589,9 @@ class JobManager:
             shutil.rmtree(work, ignore_errors=True)
 
     def _run_clip(self, rec: JobRecord, video_id: str, start: int, track_id: str) -> None:
+        """Phase 1 of a fragment job, on the download pool: fetch the fragment into a work dir, then queue
+        phase 2 (``_process_clip``) on the analysis pool. The work dir is removed here on any failure; once
+        phase 2 is queued, it owns the directory."""
         assert self.clip_fetcher is not None
         self._update(rec, status="downloading", progress=0.01, message="Downloading the fragment")
         work = self.store.new_work_dir(rec.id)
@@ -549,33 +607,44 @@ class JobManager:
             self._check_cancel(rec)
             span = {"start": clip.start, "end": clip.end}
             self._update(rec, title=clip.title, thumbnail=clip.thumbnail or rec.thumbnail, clip=span)
-            meta = {
-                "title": clip.title,
-                "artist": clip.artist,
-                "thumbnail": clip.thumbnail or rec.thumbnail,
-                "source": rec.source,
-                "sourceDuration": clip.duration,
-                "clip": span,
-            }
-            # only the fragment was downloaded: the video's own length doesn't matter (no too_long check here)
-            self._process(rec, clip.path, work, track_id, meta, probe=None, start_offset=clip.start)
-        finally:
+        except BaseException:
             shutil.rmtree(work, ignore_errors=True)
+            raise
+        # downloaded: the job now waits for an analysis worker (its progress is set to the end of the download)
+        self._update(rec, status="queued", progress=DOWNLOAD_RANGE[1], message="Waiting for analysis")
+        self._submit(
+            rec,
+            lambda: self._process_clip(rec, clip, work, track_id),
+            cleanup=lambda: shutil.rmtree(work, ignore_errors=True),
+        )
+
+    def _process_clip(self, rec: JobRecord, clip: FetchedClip, work: Path, track_id: str) -> None:
+        """Phase 2 of a fragment job, on the analysis pool: the downloaded fragment becomes a track. Its work
+        dir is removed by the ``cleanup`` that ``_run_clip`` queued it with."""
+        meta = {
+            "title": clip.title,
+            "artist": clip.artist,
+            "thumbnail": clip.thumbnail or rec.thumbnail,
+            "source": rec.source,
+            "sourceDuration": clip.duration,
+            "clip": {"start": clip.start, "end": clip.end},
+        }
+        # only the fragment was downloaded: the video's own length doesn't matter (no too_long check here)
+        self._process(rec, clip.path, work, track_id, meta, probe=None, start_offset=clip.start)
 
     def _run_upload(self, rec: JobRecord, upload: ReceivedUpload, probe: ProbeResult, track_id: str) -> None:
-        try:
-            meta = {
-                "title": rec.title or display_name(upload.filename),
-                "artist": probe.artist,
-                "thumbnail": None,
-                "source": rec.source,
-                "sourceDuration": probe.duration,
-                "fileSize": upload.size,
-                "sha1": upload.sha1,
-            }
-            self._process(rec, upload.path, upload.work_dir, track_id, meta, probe=probe)
-        finally:
-            shutil.rmtree(upload.work_dir, ignore_errors=True)
+        """The upload's work dir is removed by the ``cleanup`` that ``submit_upload`` queued it with (it also runs
+        when the job is cancelled before it starts)."""
+        meta = {
+            "title": rec.title or display_name(upload.filename),
+            "artist": probe.artist,
+            "thumbnail": None,
+            "source": rec.source,
+            "sourceDuration": probe.duration,
+            "fileSize": upload.size,
+            "sha1": upload.sha1,
+        }
+        self._process(rec, upload.path, upload.work_dir, track_id, meta, probe=probe)
 
     def _run_storage(self, rec: JobRecord, path: str, bucket: UploadBucket, size: int, start_offset: float) -> None:
         self._update(rec, status="downloading", progress=0.01, message="Fetching the upload")

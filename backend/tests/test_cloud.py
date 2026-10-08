@@ -1226,5 +1226,5 @@ def test_bucket_upload(cloud: SimpleNamespace, tmp_path: Path) -> None:
     assert cloud.app.state.bucket.upload("fetch/0123456789abcdef/source.webm", src, content_type="audio/webm") == 3
     obj = cloud.gcs.objects[(BUCKET, "fetch/0123456789abcdef/source.webm")]
     assert obj["data"] == b"abc" and obj["content_type"] == "audio/webm"
-    # the name is new: with the precondition the storage client may retry a transient 503 (a plain upload is not retried)
+    # the name is new: the precondition makes the create idempotent (a retried upload can never overwrite another object)
     assert cloud.gcs.uploads == [{"name": "fetch/0123456789abcdef/source.webm", "if_generation_match": 0}]
