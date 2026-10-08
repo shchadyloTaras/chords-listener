@@ -1,6 +1,7 @@
 // Timeline view: a horizontally scrolling lane of chord blocks (width ∝ duration, colored by
 // root), bar/beat ruler and waveform underneath. Playhead centered while following; click to
-// seek; zoom with buttons or Ctrl/⌘ + wheel (anchored at the cursor).
+// seek; zoom with buttons or Ctrl/⌘ + wheel (anchored at the cursor). The lane starts at the
+// track's view window (a fragment of a video: lib/viewWindow), x = (time − start) × zoom.
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, type CSSProperties } from 'react'
 import clsx from 'clsx'
@@ -10,6 +11,7 @@ import type { DisplayChord } from '../../lib/music/display'
 import { chordTone } from '../../lib/music/color'
 import { formatTime } from '../../lib/music/formats'
 import { clickChordSound } from '../../lib/sound'
+import { sliceWaveform } from '../../lib/viewWindow'
 import { useApp } from '../../store'
 import { popoverIntent } from './popoverIntent'
 import { ChordName } from './ChordName'
@@ -28,22 +30,24 @@ const ZOOM_STEP = 1.4
 
 export const TimelineView = memo(function TimelineView() {
   const t = useT()
-  const { chords, bars, track } = useChordModel()
+  const { chords, bars, track, view } = useChordModel()
   const zoom = useChordUi((s) => s.zoom)
   const setZoom = useChordUi((s) => s.setZoom)
   const loop = useApp((s) => s.loop)
   const scroller = useRef<HTMLDivElement>(null)
   const playhead = useRef<HTMLDivElement>(null)
   const playedClip = useRef<SVGRectElement>(null)
+  /** while zooming: seconds from the lane's start under the cursor, and the cursor's x */
   const anchor = useRef<{ time: number; x: number } | null>(null)
-  const duration = Math.max(track.duration, chords.length ? chords[chords.length - 1].end : 0)
-  const width = Math.max(1, Math.ceil(duration * zoom))
+  const origin = view.start
+  const span = Math.max(view.end, chords.length ? chords[chords.length - 1].end : 0) - origin
+  const width = Math.max(1, Math.ceil(span * zoom))
   const pos = useChordPos(chords)
 
   // Playhead + follow-centering, every frame without re-rendering.
   useClockEffect(
     (time) => {
-      const x = time * zoom
+      const x = Math.max(0, (time - origin) * zoom)
       if (playhead.current) playhead.current.style.transform = `translateX(${x}px)`
       if (playedClip.current) playedClip.current.setAttribute('width', String(Math.max(0, x)))
       const el = scroller.current
@@ -53,7 +57,7 @@ export const TimelineView = memo(function TimelineView() {
         if (Math.abs(el.scrollLeft - target) > 0.5) el.scrollLeft = target
       }
     },
-    [zoom],
+    [zoom, origin],
   )
 
   // Re-centre right away when following resumes (also while paused).
@@ -62,8 +66,8 @@ export const TimelineView = memo(function TimelineView() {
   useEffect(() => {
     const el = scroller.current
     if (!el || !follow || followPaused) return
-    el.scrollLeft = getClockTime() * useChordUi.getState().zoom - el.clientWidth / 2
-  }, [follow, followPaused])
+    el.scrollLeft = (getClockTime() - origin) * useChordUi.getState().zoom - el.clientWidth / 2
+  }, [follow, followPaused, origin])
 
   // Keep the time under the cursor fixed while zooming.
   useLayoutEffect(() => {
@@ -117,29 +121,30 @@ export const TimelineView = memo(function TimelineView() {
 
   const seekAt = (clientX: number, target: Element) => {
     const left = target.getBoundingClientRect().left
-    useApp.getState().seek(Math.max(0, (clientX - left) / zoom))
+    useApp.getState().seek(origin + Math.max(0, (clientX - left) / zoom))
   }
 
   const ruler = useMemo(() => {
     if (!bars.length) return { path: '', beatPath: '', labels: [] as { x: number; n: number }[] }
-    const avgBar = duration / bars.length
+    const avgBar = span / bars.length
     const every = [1, 2, 4, 8, 16, 32, 64].find((k) => k * avgBar * zoom >= 38) ?? 64
     let path = ''
     let beatPath = ''
     const labels: { x: number; n: number }[] = []
     const beatPx = (avgBar / Math.max(1, bars[0].beats)) * zoom
     for (const b of bars) {
-      const x = Math.round(b.start * zoom) + 0.5
+      const x = Math.round((b.start - origin) * zoom) + 0.5
       path += `M${x} ${RULER_H - 9}V${HEIGHT}`
       if (b.index % every === 0) labels.push({ x, n: b.index + 1 })
-      if (beatPx >= 7) for (let k = 1; k < b.boundaries.length - 1; k++) beatPath += `M${Math.round(b.boundaries[k] * zoom) + 0.5} ${RULER_H - 4}V${RULER_H}`
+      if (beatPx >= 7) for (let k = 1; k < b.boundaries.length - 1; k++) beatPath += `M${Math.round((b.boundaries[k] - origin) * zoom) + 0.5} ${RULER_H - 4}V${RULER_H}`
     }
     return { path, beatPath, labels }
-  }, [bars, zoom, duration])
+  }, [bars, zoom, span, origin])
 
+  const peaks = useMemo(() => sliceWaveform(track.waveform ?? [], track.duration, view), [track.waveform, track.duration, view])
   const wave = useMemo(() => {
-    const w = track.waveform
-    if (!w?.length) return ''
+    const w = peaks
+    if (!w.length) return ''
     const n = w.length
     let top = `M0 50`
     let bottom = ''
@@ -149,8 +154,9 @@ export const TimelineView = memo(function TimelineView() {
       bottom = `L${i} ${(50 + v).toFixed(1)}` + bottom
     }
     return `${top}L${n - 1} 50${bottom}Z`
-  }, [track.waveform])
-  const waveN = Math.max(1, (track.waveform?.length ?? 1) - 1)
+  }, [peaks])
+  const waveN = Math.max(1, peaks.length - 1)
+  const loopFrom = loop ? Math.max(loop.start, origin) : 0
 
   return (
     <div role="region" aria-label={t('chords.timeline.label')} className="flex flex-col gap-2">
@@ -214,19 +220,19 @@ export const TimelineView = memo(function TimelineView() {
             </g>
           </svg>
 
-          {loop && (
+          {loop && loop.end > loopFrom && (
             <div
               aria-hidden
               className="pointer-events-none absolute top-0 bottom-0 border-x-2 border-accent bg-accent-soft"
-              style={{ left: loop.start * zoom, width: Math.max(2, (loop.end - loop.start) * zoom) }}
+              style={{ left: (loopFrom - origin) * zoom, width: Math.max(2, (loop.end - loopFrom) * zoom) }}
             />
           )}
 
           {/* chord blocks */}
           <div className="absolute inset-x-0" style={{ top: RULER_H, height: LANE_H }}>
-            {chords.map((c) => (
-              <Block key={c.index} chord={c} zoom={zoom} active={c.index === pos} />
-            ))}
+            {chords.map((c) =>
+              c.end > origin + 1e-6 ? <Block key={c.index} chord={c} origin={origin} zoom={zoom} active={c.index === pos} /> : null,
+            )}
           </div>
 
           <div
@@ -241,10 +247,13 @@ export const TimelineView = memo(function TimelineView() {
   )
 })
 
-const Block = memo(function Block({ chord, zoom, active }: { chord: DisplayChord; zoom: number; active: boolean }) {
+const Block = memo(function Block({ chord, origin, zoom, active }: { chord: DisplayChord; origin: number; zoom: number; active: boolean }) {
   const t = useT()
   const hovered = useChordUi((s) => !chord.isNone && s.hoverLabel === chord.label)
-  const w = (chord.end - chord.start) * zoom
+  // a chord already sounding when the lane starts is cut at its start
+  const from = Math.max(chord.start, origin)
+  const left = (from - origin) * zoom
+  const w = (chord.end - from) * zoom
   const color = chordTone(chord.rootPc, chord.quality)
   const info = (el: HTMLElement, mode: 'info' | 'edit' = 'info') => ({ chordIndex: chord.index, anchor: el, mode, time: chord.start })
 
@@ -252,7 +261,7 @@ const Block = memo(function Block({ chord, zoom, active }: { chord: DisplayChord
     return (
       <div
         className="cw-hatch absolute inset-y-1 rounded-md"
-        style={{ left: chord.start * zoom + 1, width: Math.max(0, w - 2) }}
+        style={{ left: left + 1, width: Math.max(0, w - 2) }}
         aria-hidden
       />
     )
@@ -285,7 +294,7 @@ const Block = memo(function Block({ chord, zoom, active }: { chord: DisplayChord
       style={
         {
           '--cw-c': color,
-          left: chord.start * zoom + 1,
+          left: left + 1,
           width: Math.max(2, w - 2),
           borderColor: color,
           background: active ? color : `color-mix(in oklch, ${color} 16%, var(--surface))`,

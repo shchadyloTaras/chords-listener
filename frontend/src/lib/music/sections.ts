@@ -44,9 +44,11 @@ export interface SongSection {
 
 export interface SectionInput {
   bars: readonly Bar[]
-  /** the track's waveform peaks (0..1), spread evenly over `duration` */
+  /** the track's waveform peaks (0..1), spread evenly over 0..`duration` */
   waveform?: readonly number[] | null
   duration: number
+  /** where the song starts (a fragment of a video / a recording linked to one: lib/viewWindow); 0 by default */
+  start?: number
 }
 
 /** Two phrases are the same music when they agree this well (0..1): bar by bar and as a whole. */
@@ -362,6 +364,7 @@ export function detectSections(input: SectionInput): SongSection[] {
     }
   }
 
+  const songStart = input.start ?? 0
   const lastChorus = split.reduce((last, s, i) => (kinds.get(s.group!) === 'chorus' ? i : last), -1)
   const sections: SongSection[] = []
   const seen = new Map<string, number>()
@@ -374,7 +377,7 @@ export function detectSections(input: SectionInput): SongSection[] {
       const len = s.endBar - s.startBar
       if (i === 0 && split.length > 1) kind = 'intro'
       else if (i === split.length - 1 && split.length > 1) kind = 'outro'
-      else if (lastChorus > i && len >= 4 && from >= 0.5 * input.duration) kind = 'bridge'
+      else if (lastChorus > i && len >= 4 && from - songStart >= 0.5 * (input.duration - songStart)) kind = 'bridge'
     }
     const k = (seen.get(g) ?? 0) + 1
     seen.set(g, k)
