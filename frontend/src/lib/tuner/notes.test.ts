@@ -60,7 +60,14 @@ describe('display', () => {
   it('«in tune» within ±5 cents', () => {
     expect(isInTune(5)).toBe(true)
     expect(isInTune(-5)).toBe(true)
-    expect(isInTune(5.1)).toBe(false)
+    expect(isInTune(5.5)).toBe(false)
+  })
+  it('green exactly when the shown whole cents are within ±5', () => {
+    for (const c of [4.6, 5.1, 5.4, -5.4, -5.5, 5.5, 6, -5.6]) {
+      expect(isInTune(c), `${c} → ${formatCents(c)}`).toBe(Math.abs(Number(formatCents(c).replace('−', '-'))) <= 5)
+    }
+    expect(isInTune(5.4)).toBe(true)
+    expect(isInTune(-5.6)).toBe(false)
   })
   it('hertz with one decimal in the language\'s style, no grouping', () => {
     expect(formatHz(82.40689, 'uk')).toBe('82,4')

@@ -42,8 +42,9 @@ export function tunerSpelling(accidentals: Accidentals): Spelling {
   return accidentals === 'flat' ? 'flat' : 'sharp'
 }
 
+/** Judged on the whole cents formatCents shows, so «+5 ц» is always green and «+6 ц» never. */
 export function isInTune(cents: number): boolean {
-  return Math.abs(cents) <= IN_TUNE_CENTS
+  return Math.abs(Math.round(cents)) <= IN_TUNE_CENTS
 }
 
 /** "82,4" / "82.4": one decimal, the language's decimal mark, no grouping. */
