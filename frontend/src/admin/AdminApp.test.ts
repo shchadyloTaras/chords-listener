@@ -86,6 +86,14 @@ describe('AdminApp access', () => {
     expect(text()).not.toContain('Сторінку не знайдено')
   })
 
+  it.each(['#/', '#/users', '#/jobs', '#/stats', '#/audit', '#/settings'])('renders a real screen at %s, not the empty placeholder', async (hash) => {
+    vi.stubGlobal('fetch', () => new Promise(() => undefined))
+    signedIn()
+    window.location.hash = hash
+    await render(() => Promise.resolve(true))
+    expect(document.querySelector('section[data-screen]:empty')).toBeNull()
+  })
+
   it('shows an admin «Сторінку не знайдено» for an unknown address', async () => {
     signedIn()
     window.location.hash = '#/nope'

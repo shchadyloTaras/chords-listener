@@ -15,6 +15,8 @@ import { UserCard } from './screens/UserCard'
 import { Users } from './screens/Users'
 import { Jobs } from './screens/Jobs'
 import { Stats } from './screens/Stats'
+import { Audit } from './screens/Audit'
+import { Settings } from './screens/Settings'
 import { ADMIN_NAV, useAdminRoute, type AdminRoute } from './useAdminRoute'
 
 /**
@@ -71,14 +73,15 @@ function SignInPrompt() {
 }
 
 function Screen({ route }: { route: AdminRoute }) {
-  // The screens arrive with their own tasks; each is rendered here by route name.
+  // Each screen is rendered here by route name.
   if (route.name === 'notFound') return <NotFoundPage />
   if (route.name === 'overview') return <Overview />
   if (route.name === 'users') return <Users />
   if (route.name === 'user') return <UserCard key={route.uid} uid={route.uid} />
   if (route.name === 'jobs') return <Jobs />
   if (route.name === 'stats') return <Stats />
-  return <section aria-live="polite" className="px-4 py-6" data-screen={route.name} />
+  if (route.name === 'audit') return <Audit />
+  return <Settings />
 }
 
 function Shell() {
