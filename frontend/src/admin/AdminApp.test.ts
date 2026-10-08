@@ -4,9 +4,11 @@
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useAuth, useAuthDialog } from '../lib/auth'
+import { pinLanguage } from '../i18n'
+import { openAuthDialog, useAuth, useAuthDialog } from '../lib/auth'
 import { useApp } from '../store'
 import { AdminApp } from './AdminApp'
+import { pinAdminLanguage } from './ui'
 import { ADMIN_NAV } from './useAdminRoute'
 
 let root: Root
@@ -101,3 +103,34 @@ describe('AdminApp access', () => {
     expect(text()).toContain('Сторінку не знайдено')
   })
 })
+
+describe('the admin page is Ukrainian whatever the site language is (ADR-0002)', () => {
+  beforeEach(() => {
+    useApp.setState({ lang: 'en' }) // the site's own choice, kept in the persisted store
+    pinAdminLanguage() // what admin.html's entry does before it renders
+  })
+
+  afterEach(() => {
+    pinLanguage(null)
+  })
+
+  it('shows a non-admin the shared «Сторінку не знайдено» page in Ukrainian', async () => {
+    signedIn()
+    await render(() => Promise.resolve(false))
+    expect(text()).toContain('Сторінку не знайдено')
+    expect(text()).not.toContain('Page not found')
+    expect(useApp.getState().lang).toBe('en') // pinned for this page only, never written into the site's store
+  })
+
+  it('asks for the password again (AC-34) in a Ukrainian dialog', async () => {
+    signedIn()
+    await render(() => Promise.resolve(true))
+    await act(async () => openAuthDialog('signIn', 'expired'))
+    const dialog = document.querySelector('[role="dialog"]')
+    expect(dialog?.querySelector('h2')?.textContent).toBe('Вхід')
+    expect(dialog?.textContent).toContain('Сесія завершилась')
+    expect(dialog?.textContent).not.toContain('Sign in')
+    expect(useApp.getState().lang).toBe('en')
+  })
+})
+

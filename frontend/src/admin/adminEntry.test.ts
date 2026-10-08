@@ -61,6 +61,13 @@ describe('admin.html', () => {
     expect(html).toMatch(/<html\s+lang="uk"/)
   })
 
+  it('pins the interface language before it renders anything, shared dialogs and pages included (T60)', () => {
+    const entry = readFileSync(join(root, 'src/admin/main.tsx'), 'utf8')
+    const pin = entry.indexOf('pinAdminLanguage()')
+    expect(pin, 'main.tsx calls pinAdminLanguage()').toBeGreaterThan(-1)
+    expect(pin).toBeLessThan(entry.indexOf('createRoot('))
+  })
+
   it('has no inline script and loads the admin entry as a module', () => {
     const scripts = [...html.matchAll(/<script\b([^>]*)>/gi)].map((m) => m[1])
     expect(scripts.length).toBeGreaterThan(0)

@@ -8,7 +8,7 @@
 // signed-in account alone: they go on sign-out and when another account signs in.
 import type { Auth } from 'firebase/auth'
 import { create } from 'zustand'
-import { useApp } from '../store'
+import { currentLang } from '../i18n'
 import { findLegacySession, onSignInElsewhere, rememberSignIn, signedInBefore } from './authMarker'
 import { clearCloudCache } from './cloud/cache'
 import { stopLibrary } from './cloud/library'
@@ -172,7 +172,7 @@ const CONTINUE_URL_ERRORS = ['auth/unauthorized-continue-uri', 'auth/invalid-con
  */
 export async function sendPasswordReset(email: string) {
   const { auth, sdk } = await accountSdk()
-  auth.languageCode = useApp.getState().lang
+  auth.languageCode = currentLang() // the e-mails Firebase sends (password reset) speak the page's language
   const address = email.trim()
   const url = `${window.location.origin}${window.location.pathname}`
   if (!/^https?:/.test(url)) return sdk.sendPasswordResetEmail(auth, address)

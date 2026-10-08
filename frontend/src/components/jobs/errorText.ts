@@ -1,9 +1,8 @@
 import type { ClientErrorCode } from '../../lib/api'
 import { canListenInTab } from '../../lib/live/capture'
 import { useConnection } from '../../lib/serverMode'
-import { translate } from '../../i18n'
+import { currentLang, translate } from '../../i18n'
 import type { Lang } from '../../store'
-import { useApp } from '../../store'
 
 const KNOWN: ReadonlySet<string> = new Set<ClientErrorCode>([
   'invalid_url',
@@ -45,11 +44,11 @@ function keyFor(kind: 'error' | 'errorTitle', code: string | null | undefined): 
 }
 
 /** Localized, user-facing explanation for an error code (falls back to a generic message). */
-export function errorText(code: string | null | undefined, lang: Lang = useApp.getState().lang): string {
+export function errorText(code: string | null | undefined, lang: Lang = currentLang()): string {
   return translate(lang, keyFor('error', code))
 }
 
 /** Short localized headline for an error code. */
-export function errorTitle(code: string | null | undefined, lang: Lang = useApp.getState().lang): string {
+export function errorTitle(code: string | null | undefined, lang: Lang = currentLang()): string {
   return translate(lang, keyFor('errorTitle', code))
 }

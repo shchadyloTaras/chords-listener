@@ -8,7 +8,7 @@ files_hint: ["frontend/src/i18n/index.ts", "frontend/src/admin/main.tsx", "front
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 10 — re-review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T60 — Show the shared dialogs and pages of the admin page in Ukrainian
@@ -19,4 +19,4 @@ status: "todo"
 
 **Re-review fix 15. The admin entry pins the interface language to Ukrainian without writing the site's stored choice; a test with the site language set to English shows the admin's re-login dialog and not-found page in Ukrainian; ADR-0002 records it.**
 
-- [ ] lint + type-check clean (ruff / oxlint + tsc)
+- [x] lint + type-check clean (ruff / oxlint + tsc)
