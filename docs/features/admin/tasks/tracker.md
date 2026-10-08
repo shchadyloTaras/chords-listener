@@ -68,5 +68,5 @@
 | [T59](./t59-make-the-emulator-ci-job-install-ffmpeg-fail-on-un.md) | Make the emulator CI job install ffmpeg, fail on unexpected skips and pin firebase-tools | tests | Тарас Щадило | S | T50 | done |
 | [T60](./t60-show-the-shared-dialogs-and-pages-of-the-admin-pag.md) | Show the shared dialogs and pages of the admin page in Ukrainian | ui | Тарас Щадило | S | T46 | done |
 | [T61](./t61-use-one-label-per-status-and-switch-across-the-adm.md) | Use one label per status and switch across the admin screens | ui | Тарас Щадило | S | T52 | done |
-| [T62](./t62-make-the-test-plan-say-what-is-tested-where-today.md) | Make the test plan say what is tested where today | docs | Тарас Щадило | S | T50 | todo |
+| [T62](./t62-make-the-test-plan-say-what-is-tested-where-today.md) | Make the test plan say what is tested where today | docs | Тарас Щадило | S | T50 | done |
 | [T63](./t63-import-the-shared-test-fakes-from-fixtures-never-f.md) | Import the shared test fakes from fixtures, never from another test module | tests | Тарас Щадило | S | T58 | done |

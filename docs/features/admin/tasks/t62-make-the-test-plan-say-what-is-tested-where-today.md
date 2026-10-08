@@ -8,7 +8,7 @@ files_hint: ["docs/features/admin/test-plan.md"]
 owner: "Тарас Щадило"
 estimate: "S"
 stage: "Stage 10 — re-review follow-ups"
-status: "todo"
+status: "done"
 ---
 
 # T62 — Make the test plan say what is tested where today
@@ -19,4 +19,4 @@ status: "todo"
 
 **Re-review fix 17. test-plan.md cites the AC-26 in-browser offer test and drops it from the known gaps, names only CI jobs that exist, and the AC-16/24/32 rows and the e2e rows name the level and clock actually used.**
 
-- [ ] lint + type-check clean (ruff / oxlint + tsc)
+- [x] lint + type-check clean (ruff / oxlint + tsc)
