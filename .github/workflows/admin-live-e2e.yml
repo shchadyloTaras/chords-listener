@@ -1,0 +1,105 @@
+# Live e2e of the admin feature (docs/features/admin/test-plan.md, the scheduled level): a real browser, the real backend
+# (uvicorn, cloud mode) and the Firebase emulators (Auth, Firestore, Storage), in real time — no stubs, no fake clocks.
+# `npm run test:e2e:live` (frontend/e2e-live/run.mjs) starts the emulators with firebase-tools 15 and runs
+# frontend/playwright.live.config.ts inside them. Locally: README → «Розробка» / docs/CLOUD.md → "Live e2e".
+#
+# Nightly it includes the 30-minute idle-tab spec (LIVE_SLOW=1). By hand: optionally with it, or with
+# update_snapshots=true to take the Linux screenshot baselines of the site banner (AC-29) and upload them as the
+# artifact `banner-baselines-linux` — the one-time step docs/CLOUD.md describes (baselines are per platform).
+name: Admin live e2e (browser + server + emulators)
+
+on:
+  schedule:
+    - cron: '30 2 * * *' # 02:30 UTC, away from the 00:15 / 12:15 sweeps of the real service (not that this touches it)
+  workflow_dispatch:
+    inputs:
+      update_snapshots:
+        description: Take the Linux banner baselines (runs only the banner spec, uploads the PNGs as an artifact)
+        type: boolean
+        default: false
+      slow:
+        description: Also run the 30-minute idle-tab spec (always on in the nightly run)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: admin-live-e2e-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      LIVE_SLOW: ${{ (github.event_name == 'schedule' || inputs.slow) && !inputs.update_snapshots && '1' || '' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # the Firestore emulator needs a JRE (firebase-tools 15 asks for 21+)
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      # madmom is built from git (as in backend/Dockerfile): git and a compiler are on the runner image
+      - name: Install backend dependencies
+        working-directory: backend
+        run: uv sync --frozen
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Live e2e (emulators via firebase-tools@15)
+        if: ${{ !inputs.update_snapshots }}
+        run: npm run test:e2e:live
+        env:
+          # the server's data directory and its log (the access log the specs read): a known place, uploaded on failure
+          LIVE_RUN_DIR: ${{ runner.temp }}/live-e2e-run
+
+      - name: Take the Linux banner baselines
+        if: ${{ inputs.update_snapshots }}
+        run: npm run test:e2e:live -- banner.spec.ts --update-snapshots
+        env:
+          LIVE_RUN_DIR: ${{ runner.temp }}/live-e2e-run
+
+      - name: Upload the Linux banner baselines
+        if: ${{ inputs.update_snapshots }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: banner-baselines-linux
+          path: frontend/e2e-live/banner.spec.ts-snapshots/*-linux.png
+          if-no-files-found: error
+
+      - name: Upload the report, traces and the server log
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: admin-live-e2e-report
+          path: |
+            frontend/playwright-report-live/
+            frontend/test-results/live/
+            ${{ runner.temp }}/live-e2e-run/backend.log
+          if-no-files-found: ignore
