@@ -124,9 +124,11 @@ class UploadBucket:
         return writer.written
 
     def upload(self, path: str, src: Path, content_type: Optional[str] = None) -> int:
-        """Store ``src`` as the object ``path`` (chords-fetch → ``fetch/...``); returns its size. Raises SourceError."""
+        """Store ``src`` as the object ``path`` (chords-fetch → ``fetch/...``); returns its size. Raises SourceError.
+        ``path`` is always new (a random request id), so the upload carries ``if_generation_match=0``: the storage
+        client retries only such conditional uploads, and so survives a transient 503."""
         try:
-            self._bucket().blob(path).upload_from_filename(str(src), content_type=content_type)
+            self._bucket().blob(path).upload_from_filename(str(src), content_type=content_type, if_generation_match=0)
         except Exception as exc:
             raise _map_error(exc, "Couldn't store the file") from exc
         return src.stat().st_size

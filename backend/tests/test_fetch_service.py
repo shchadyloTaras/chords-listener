@@ -50,19 +50,19 @@ class ScriptedFetcher:
 
 class FakeWarp:
     def __init__(self) -> None:
-        self.ready, self.started, self.stopped, self.restarts = False, 0, 0, 0
+        self.ready, self.alive, self.started, self.stopped, self.restarts = False, False, 0, 0, 0
 
     def start(self) -> None:
         self.started += 1
-        self.ready = True
+        self.ready = self.alive = True
 
     def stop(self) -> None:
         self.stopped += 1
-        self.ready = False
+        self.ready = self.alive = False
 
     def restart(self) -> None:
         self.restarts += 1
-        self.ready = True
+        self.ready = self.alive = True
 
 
 class FakeBucket:
@@ -180,6 +180,52 @@ def test_a_lost_tunnel_is_brought_back_before_the_next_fragment(service) -> None
     warp.ready = False  # e.g. a reconnect failed during the previous request
     assert post(client).status_code == 200
     assert warp.restarts == 1
+
+
+def test_a_dead_wireproxy_is_replaced_before_the_next_fragment(service) -> None:
+    client, fetcher, _, warp = service()
+    warp.alive = False  # wireproxy exited after start-up, ``ready`` still says up
+    assert warp.ready
+    assert post(client).status_code == 200
+    assert warp.restarts == 1 and warp.alive
+    assert post(client).status_code == 200
+    assert warp.restarts == 1  # a healthy tunnel is left alone
+
+
+@pytest.mark.parametrize("failure", [STALL, FFMPEG_FAILED, FORBIDDEN])
+def test_the_next_request_reconnects_after_the_retries_ran_out(service, failure: SourceError) -> None:
+    client, fetcher, _, warp = service(failure, failure, failure)
+    assert post(client).status_code == 502 and fetcher.calls == 3
+    assert not warp.ready and warp.restarts == 0  # a wedged tunnel looks like this; wireproxy itself may still run
+    assert post(client).status_code == 200
+    assert warp.restarts == 1 and warp.ready
+
+
+def test_a_hung_tunnel_is_replaced_before_the_next_request(service) -> None:
+    client, _, _, warp = service("hang", "hang", attempt_timeout_s=0.05, max_attempts=2)
+    assert post(client).status_code == 502
+    assert not warp.ready
+    assert post(client).status_code == 200
+    assert warp.restarts == 1
+
+
+@pytest.mark.parametrize("failure", [GONE, SourceError("too_large", "too big")])
+def test_a_final_error_leaves_the_tunnel_alone(service, failure: SourceError) -> None:
+    client, _, _, warp = service(failure)
+    assert post(client).status_code in (413, 502)
+    assert warp.ready and warp.restarts == 0
+
+
+def test_a_bot_check_that_persists_leaves_the_tunnel_alone(service) -> None:
+    client, _, _, warp = service(BOT, BOT)
+    assert post(client).status_code == 502
+    assert warp.ready and warp.restarts == 1  # the one reconnect inside the request, none for the next one
+
+
+def test_a_request_that_succeeds_after_retries_keeps_the_tunnel(service) -> None:
+    client, _, _, warp = service(STALL, FFMPEG_FAILED)
+    assert post(client).status_code == 200
+    assert warp.ready and warp.restarts == 0
 
 
 def test_an_ffmpeg_failure_gets_fresh_tries(service) -> None:

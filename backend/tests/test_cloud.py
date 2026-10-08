@@ -180,7 +180,9 @@ class FakeBlob:
         self._staged.clear()
         self.gcs.patched.append(self.name)
 
-    def upload_from_filename(self, filename: str, content_type: Optional[str] = None) -> None:
+    def upload_from_filename(self, filename: str, content_type: Optional[str] = None,
+                             if_generation_match: Optional[int] = None) -> None:
+        self.gcs.uploads.append({"name": self.name, "if_generation_match": if_generation_match})
         self.gcs.put(self.name, Path(filename).read_bytes(), bucket=self.bucket_name,
                      content_type=content_type or "application/octet-stream")
 
@@ -214,6 +216,7 @@ class FakeGcs:
         self.objects: dict[tuple[str, str], dict[str, Any]] = {}
         self.deleted: list[str] = []
         self.patched: list[str] = []
+        self.uploads: list[dict[str, Any]] = []  # upload_from_filename calls: the name and its generation precondition
 
     def put(self, name: str, data: bytes, *, bucket: str = BUCKET, age_s: float = 0, content_type: str = "audio/mpeg",
             metadata: Optional[dict[str, str]] = None) -> str:
@@ -1016,14 +1019,17 @@ def test_pending_sweep_repeats_and_stops_with_the_app(tmp_path: Path, monkeypatc
             return 0
 
     monkeypatch.setattr(main_module, "PUBLISH_SWEEP_INTERVAL_S", 0.01)
+    gcs = FakeGcs()  # the bucket sweep thread of this app works on the fake, never on a real bucket
+    gcs.put("fetch/0123456789abcdef/source.webm", b"1", age_s=2 * 3600)
     settings = Settings(data_dir=tmp_path / "data", frontend_dist=tmp_path / "no-dist", auth="firebase",
                         signing_key=SIGNING_KEY, scratch_dir=tmp_path / "scratch", upload_bucket=BUCKET)
-    app = create_app(settings, analyzer=FakeEngine(), token_verifier=FakeVerifier(),
+    app = create_app(settings, analyzer=FakeEngine(), token_verifier=FakeVerifier(), gcs_client_factory=lambda: gcs,
                      publisher_factory=lambda store: CountingPublisher())
     wait_for(lambda: not sweep_threads())  # earlier tests' apps are shut down
     with TestClient(app):
         assert [t.daemon for t in sweep_threads()] == [True]
         wait_for(lambda: CountingPublisher.calls >= 4)
+        wait_for(lambda: not gcs.objects)  # the start-up pass of the bucket sweep took the stale fragment from the fake
     wait_for(lambda: not sweep_threads())  # the app's shutdown ends the loop
     stopped = CountingPublisher.calls
     time.sleep(0.1)
@@ -1220,3 +1226,5 @@ def test_bucket_upload(cloud: SimpleNamespace, tmp_path: Path) -> None:
     assert cloud.app.state.bucket.upload("fetch/0123456789abcdef/source.webm", src, content_type="audio/webm") == 3
     obj = cloud.gcs.objects[(BUCKET, "fetch/0123456789abcdef/source.webm")]
     assert obj["data"] == b"abc" and obj["content_type"] == "audio/webm"
+    # the name is new: with the precondition the storage client may retry a transient 503 (a plain upload is not retried)
+    assert cloud.gcs.uploads == [{"name": "fetch/0123456789abcdef/source.webm", "if_generation_match": 0}]

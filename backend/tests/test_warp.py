@@ -74,6 +74,17 @@ def test_restart_starts_a_new_session(tmp_path: Path) -> None:
     assert [p.terminated for p in h.procs] == [True, False] and h.warp.sessions == 2 and h.warp.ready
 
 
+def test_alive_follows_the_wireproxy_process(tmp_path: Path) -> None:
+    h = Harness(tmp_path, [TRACE_ON])
+    assert not h.warp.alive  # not started yet
+    h.warp.start()
+    assert h.warp.alive
+    h.procs[0].returncode = 1  # wireproxy died after start-up; ``ready`` was set once and stays set
+    assert h.warp.ready and not h.warp.alive
+    h.warp.stop()
+    assert not h.warp.alive
+
+
 def test_no_tunnel_in_time_is_an_error_and_wireproxy_is_stopped(tmp_path: Path) -> None:
     h = Harness(tmp_path, [])
     with pytest.raises(WarpError, match="did not come up"):

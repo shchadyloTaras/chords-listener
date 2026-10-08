@@ -46,7 +46,7 @@ log = logging.getLogger("chords.fetch")
 
 MAX_ATTEMPTS = 3  # a refused media URL (HTTP 403, ~1 in 10 first tries) or a stall: fresh tries
 ATTEMPT_TIMEOUT_S = 90.0
-REQUEST_BUDGET_S = 240.0  # no new attempt after this: a request stays under Cloud Run's 300 s timeout (and chords-api's read timeout)
+REQUEST_BUDGET_S = 240.0  # no new attempt starts after this; with ffmpeg's 20 s stall timeout a request normally ends well under Cloud Run's 300 s
 MAX_CLIP_BYTES = 50 * 1024 * 1024  # a minute of the best audio is a few MB
 STATUS = {"invalid_url": 400, "too_large": 413, "download_blocked": 502, "download_failed": 502}
 CONTENT_TYPES = {
@@ -86,6 +86,13 @@ def _reconnect(warp: Warp) -> None:
         raise SourceError("download_failed", "The download service lost its connection - try again in a minute") from exc
 
 
+def _tunnel_suspect(warp: Optional[Warp]) -> None:
+    """A request that ends in network failures may have a wedged tunnel (wireproxy up, nothing flowing): the next
+    request opens a new WARP session first."""
+    if warp is not None:
+        warp.ready = False
+
+
 def fetch_with_retries(
     fetcher: ClipFetcher,
     warp: Optional[Warp],
@@ -99,7 +106,8 @@ def fetch_with_retries(
 ) -> FetchedClip:
     """One fragment, retried: a refused media URL or a stall gets up to ``max_attempts`` fresh tries (a new
     extraction each time); a bot check gets one WARP reconnect (a new session, usually a new address) and one more
-    try, then ``download_blocked``. No new attempt starts once ``budget_s`` has passed since the first. ``stats["attempts"]``
+    try, then ``download_blocked``. No new attempt starts once ``budget_s`` has passed since the first. A request that
+    ends in such network failures marks the tunnel not ready, so the next one reconnects first. ``stats["attempts"]``
     counts the tries."""
     stats = stats if stats is not None else {}
     attempts, reconnected = 0, False
@@ -121,6 +129,7 @@ def fetch_with_retries(
             return fetcher.fetch(body.videoId, body.start, body.length, dest, lambda _f: None, cancel)
         except Cancelled as exc:  # only the watchdog cancels here
             if attempts >= max_attempts or out_of_time():
+                _tunnel_suspect(warp)
                 raise SourceError(
                     "download_failed", f"Network error: the download timed out after {attempt_timeout_s:g} s"
                 ) from exc
@@ -134,6 +143,8 @@ def fetch_with_retries(
             elif kind == "retry" and attempts < max_attempts and not out_of_time():
                 log.info("clip %s: attempt %d failed (%s), trying again", body.videoId, attempts, exc.code)
             else:
+                if kind == "retry":  # the retries ran out (or the budget did)
+                    _tunnel_suspect(warp)
                 raise
         finally:
             watchdog.cancel()
@@ -189,7 +200,7 @@ def create_fetch_app(
         stats = {"attempts": 0}
         started, outcome = time.monotonic(), "internal"
         try:
-            if warp is not None and not warp.ready:
+            if warp is not None and (not warp.ready or not warp.alive):
                 _reconnect(warp)
             got = fetch_with_retries(fetcher, warp, body, dest, max_attempts=max_attempts,
                                      attempt_timeout_s=attempt_timeout_s, budget_s=budget_s, stats=stats)

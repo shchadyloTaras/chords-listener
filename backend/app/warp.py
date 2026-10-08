@@ -72,6 +72,12 @@ class Warp:
         """The same tunnel as an HTTP (CONNECT) proxy: ffmpeg, which cuts the fragment, can't use SOCKS."""
         return f"http://127.0.0.1:{self.http_port}"
 
+    @property
+    def alive(self) -> bool:
+        """wireproxy is running. ``ready`` is set once the tunnel carried traffic and says nothing later on: a
+        wireproxy that died afterwards is told apart here."""
+        return self._proc is not None and self._proc.poll() is None
+
     def start(self) -> None:
         if not self.profile.is_file():
             raise WarpError(f"WARP profile not found: {self.profile}")
