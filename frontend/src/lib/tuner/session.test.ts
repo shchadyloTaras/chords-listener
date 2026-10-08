@@ -22,6 +22,7 @@ class FakeContext {
   static startState: AudioContextState = 'running'
   sampleRate = 48000
   state: AudioContextState = FakeContext.startState
+  onstatechange: (() => void) | null = null
   destination = {}
   analyser = new FakeAnalyser()
   source = new FakeNode()
@@ -86,6 +87,29 @@ describe('startTuner', () => {
     ctx.state = 'suspended'
     window.dispatchEvent(new Event('pointerdown'))
     expect(ctx.resume).toHaveBeenCalledTimes(2)
+  })
+
+  it('a context that stops rendering reads as silence, not as its last window', () => {
+    const input = startTuner(fakeStream().stream)
+    const ctx = FakeContext.last
+    ctx.analyser.data.fill(0.5)
+    ctx.state = 'suspended'
+    const frame = new Float32Array(FRAME_SIZE).fill(0.3)
+    expect(input.read(frame)).toBe(0)
+    expect(frame.every((v) => v === 0)).toBe(true)
+  })
+
+  it('Safari "interrupted" (a call, Siri) is resumed when it happens and on the next tap, not after stop', () => {
+    const input = startTuner(fakeStream().stream)
+    const ctx = FakeContext.last
+    ctx.state = 'interrupted' as AudioContextState
+    ctx.onstatechange?.()
+    expect(ctx.resume).toHaveBeenCalledTimes(1)
+    ctx.state = 'interrupted' as AudioContextState // still on the call
+    window.dispatchEvent(new Event('pointerdown'))
+    expect(ctx.resume).toHaveBeenCalledTimes(2)
+    input.stop()
+    expect(ctx.onstatechange).toBeNull()
   })
 
   it('stop() releases the microphone and closes the context once', () => {

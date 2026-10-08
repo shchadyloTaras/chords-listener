@@ -37,18 +37,24 @@ export function startTuner(stream: MediaStream): TunerInput {
   analyser.connect(silent)
   silent.connect(ctx.destination)
 
-  // without a user activation left (iOS after the permission prompt) the context can stay suspended:
-  // resume it now and on the next tap or key press
+  // without a user activation left (iOS after the permission prompt) the context can stay suspended, and
+  // Safari interrupts it for a call or Siri: resume it now, whenever it leaves "running", and on the next tap
   const unlock = () => {
-    if (ctx.state === 'suspended') ctx.resume().catch(() => undefined)
+    if (ctx.state !== 'running' && ctx.state !== 'closed') ctx.resume().catch(() => undefined)
   }
   for (const e of UNLOCK_EVENTS) window.addEventListener(e, unlock, { capture: true, passive: true })
+  ctx.onstatechange = unlock
   unlock()
 
   let stopped = false
   return {
     sampleRate: ctx.sampleRate,
     read(into) {
+      // a context that is not rendering keeps returning its last window: that is silence, not a held note
+      if (ctx.state !== 'running') {
+        into.fill(0)
+        return 0
+      }
       analyser.getFloatTimeDomainData(into)
       let sum = 0
       for (let i = 0; i < into.length; i++) sum += into[i] * into[i]
@@ -58,6 +64,7 @@ export function startTuner(stream: MediaStream): TunerInput {
       if (stopped) return
       stopped = true
       for (const e of UNLOCK_EVENTS) window.removeEventListener(e, unlock, { capture: true })
+      ctx.onstatechange = null
       source.disconnect()
       stream.getTracks().forEach((t) => t.stop())
       ctx.close().catch(() => undefined)
