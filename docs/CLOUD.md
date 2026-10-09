@@ -329,7 +329,9 @@ them. Repeat only when the banner's look changes on purpose (locally: `--update-
 
 NFR "admin overview from a sleeping server: p95 ≤ 15 s" needs the deployed service, so it is not part of CI.
 
-**Measured 2026-10-09** (chords-api-00012, `--verify-cold`, `/api/health`): 13.46, 12.59, 16.35, 11.44, 8.26 s — p95 16.35 s, **over the 15 s bound** (median 12.6 s). One start: GCSFuse mount ~2.6 s, Python imports ~3 s, the rest container start; the engine warm-up (~10.7 s of CPU) and the wake sweep start right after, and the answer came 2.3–5 s after `Application startup complete`. Since then (admin T65) that work starts only after the first response; not re-measured yet. Open in spec §8.
+**Measured 2026-10-09** (chords-api-00012, `--verify-cold`, `/api/health`): 13.46, 12.59, 16.35, 11.44, 8.26 s — p95 16.35 s, **over the 15 s bound** (median 12.6 s). One start: GCSFuse mount ~2.6 s, Python imports ~3 s, the rest container start; the engine warm-up (~10.7 s of CPU) and the wake sweep start right after, and the answer came 2.3–5 s after `Application startup complete`. Since then (admin T65) that work starts only after the first response (measured below). Decided in spec §8 (option a).
+
+**After T65** (chords-api-00013, the start-up background work waits for the first response): 3 confirmed cold starts out of 10 tries (traffic kept the service warm the rest of the day) — 10.66, 10.82, 11.28 s, all under 15 s; two more are needed for a 5-attempt p95. Server ready → first `/api/health` answer is now ~1.9 s (was 2.3–5 s), mostly the handler's own `yt_dlp` import.
 After a deploy, from any machine (standard library only; `gcloud` with the owner's login for `--verify-cold`):
 
 ```bash
