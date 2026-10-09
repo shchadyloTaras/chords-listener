@@ -693,14 +693,15 @@ def test_delete_works_while_the_index_is_down(cloud: SimpleNamespace, media: Sim
 
 
 @needs_ffmpeg
-def test_failed_publish_is_queued_and_swept_at_startup(make_cloud, media: SimpleNamespace) -> None:
+def test_failed_publish_is_queued_and_swept_after_a_restart(make_cloud, media: SimpleNamespace) -> None:
     env = make_cloud()
     env.index.fail, env.index.retryable = 99, False
     _, track = upload_and_wait(env, media.a, "alice")  # the request succeeds, publishing does not
     key = ("alice", track["id"])
     pending = env.settings.data_dir / "users" / "alice" / "publish-pending.json"
     assert key not in env.index.docs and json.loads(pending.read_text()) == {"ids": {track["id"]: "publish"}}
-    again = make_cloud(env.settings.data_dir)  # a restart: the sweep thread works through the queue
+    again = make_cloud(env.settings.data_dir)  # a restart: the sweep thread works through the queue ...
+    assert again.client.get("/api/health").status_code == 200  # ... once the new instance has answered (T65)
     wait_for(lambda: key in again.index.docs and not pending.exists())
 
 
@@ -750,10 +751,12 @@ def test_pending_sweep_repeats_and_stops_with_the_app(tmp_path: Path, monkeypatc
     app = create_app(settings, analyzer=FakeEngine(), token_verifier=FakeVerifier(), gcs_client_factory=lambda: gcs,
                      publisher_factory=lambda store: CountingPublisher())
     wait_for(lambda: not sweep_threads())  # earlier tests' apps are shut down
-    with TestClient(app):
+    with TestClient(app) as client:
+        assert not sweep_threads() and CountingPublisher.calls == 0 and gcs.objects  # nothing before the first response
+        assert client.get("http://localhost/api/health").status_code == 200
         assert [t.daemon for t in sweep_threads()] == [True]
         wait_for(lambda: CountingPublisher.calls >= 4)
-        wait_for(lambda: not gcs.objects)  # the start-up pass of the bucket sweep took the stale fragment from the fake
+        wait_for(lambda: not gcs.objects)  # the first pass of the bucket sweep took the stale fragment from the fake
     wait_for(lambda: not sweep_threads())  # the app's shutdown ends the loop
     stopped = CountingPublisher.calls
     time.sleep(0.1)
@@ -1110,9 +1113,11 @@ def test_the_hourly_sweep_removes_old_uploads_and_fragments(tmp_path: Path, monk
                         signing_key=SIGNING_KEY, scratch_dir=tmp_path / "scratch", upload_bucket=BUCKET, publish=False)
     app = create_app(settings, analyzer=FakeEngine(), token_verifier=FakeVerifier(), gcs_client_factory=lambda: gcs)
     others = upload_sweeps()  # earlier tests' apps may still have one winding down (a real GCS client times out)
-    with TestClient(app):
+    with TestClient(app) as client:
+        assert not [t for t in upload_sweeps() if t not in others]  # the sweep starts after the first response (T65)
+        assert client.get("http://localhost/api/health").status_code == 200
         wait_for(lambda: left() == {"fetch/fedcba9876543210/source.webm", "users/alice/uploads/u1/a.mp3"})
-        gcs.put("fetch/aaaaaaaaaaaaaaaa/source.webm", b"5", age_s=3 * 3600)  # left behind after start-up: the next pass
+        gcs.put("fetch/aaaaaaaaaaaaaaaa/source.webm", b"5", age_s=3 * 3600)  # left behind after the first pass
         wait_for(lambda: "fetch/aaaaaaaaaaaaaaaa/source.webm" not in left())
         assert left() == {"fetch/fedcba9876543210/source.webm", "users/alice/uploads/u1/a.mp3"}
         mine = [t for t in upload_sweeps() if t not in others]

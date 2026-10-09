@@ -24,7 +24,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.engine import engine_info
 
@@ -81,6 +81,7 @@ from .users import current_uid
 log = logging.getLogger("chords.api")
 
 PUBLISH_SWEEP_INTERVAL_S = 600.0  # how often the pending publishes (publish-pending.json) are retried
+BACKGROUND_START_QUIET_S = 10.0  # with no request, the start-up background work begins this long after start-up
 _UNSET: Any = object()  # "not given" for create_app arguments where None means "none"
 
 
@@ -262,6 +263,79 @@ class LocalOnlyMiddleware:
 LOCAL_ORIGIN_REGEX = r"https?://(localhost|127\.0\.0\.1|\[::1\]|[a-z0-9-]+\.localhost)(:\d+)?"
 
 
+# --------------------------------------------------------------------------- start-up background work
+
+
+class BackgroundStart:
+    """Starts the cloud start-up background work (``work``: the chord-model preload, the bucket and publish sweeps, the
+    first-wake sweep) once per app, after the first response of a new instance has been sent: a cold instance answers
+    its first request without that work competing for the CPU, the GIL and the cold disk (docs/features/admin T65).
+
+    ``arm`` (the lifespan's start-up) makes ``start`` effective and calls it anyway after ``BACKGROUND_START_QUIET_S``
+    when no response triggers it first; ``stop`` (shutdown) makes any later ``start`` - the timer's or a response's -
+    do nothing. Never armed (local mode): nothing ever starts."""
+
+    def __init__(self, work: Callable[[], None]) -> None:
+        self._work = work
+        self._lock = threading.Lock()
+        self._state = "idle"  # idle -> armed -> started; stopped from any of them
+        self._timer: Optional[threading.Timer] = None
+
+    def arm(self) -> None:
+        with self._lock:
+            if self._state != "idle":
+                return
+            self._state = "armed"
+            self._timer = threading.Timer(BACKGROUND_START_QUIET_S, self.start)
+            self._timer.name, self._timer.daemon = "chords-background-start", True
+            self._timer.start()
+
+    def start(self) -> None:
+        with self._lock:
+            if self._state != "armed":
+                return
+            self._state = "started"
+            if self._timer is not None:
+                self._timer.cancel()
+        try:
+            self._work()
+        except Exception:  # pragma: no cover - called after a response was sent: nothing may surface there
+            log.warning("the start-up background work did not start", exc_info=True)
+
+    def stop(self) -> None:
+        with self._lock:
+            self._state = "stopped"
+            if self._timer is not None:
+                self._timer.cancel()
+
+
+class AfterFirstResponseMiddleware:
+    """Calls ``start`` once the first response of the app has been sent in full (its last body part handed to the
+    server), then is a plain pass-through. A CORS preflight does not count: the request it asked about follows at once
+    and is the one to answer first. Pure ASGI on purpose - BaseHTTPMiddleware would cost every request and runs
+    before the body is sent."""
+
+    def __init__(self, app: ASGIApp, start: Callable[[], None]) -> None:
+        self.app = app
+        self.start = start
+        self.fired = False
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if self.fired or scope["type"] != "http" or scope.get("method") == "OPTIONS":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_then_start(message: Message) -> None:
+            await send(message)
+            if message["type"] == "http.response.pathsend" or (
+                message["type"] == "http.response.body" and not message.get("more_body", False)
+            ):
+                self.fired = True
+                self.start()
+
+        await self.app(scope, receive, send_then_start)
+
+
 # --------------------------------------------------------------------------- app factory
 
 
@@ -291,8 +365,9 @@ def create_app(
     ``admin_router`` replaces ``app.admin.router.router`` (tests). ``sweeper`` (default: built on ``admin_db``;
     None = no sweep endpoint) runs ``POST /api/internal/sweep``, which only ``scheduler_verifier`` (``.verify(token)``;
     default: from ``CHORDS_SCHEDULER_*``; None = nobody) may call. ``wake_sweep`` runs the first-wake sweep of the
-    UTC day at start-up (default: on Cloud Run, i.e. when ``K_SERVICE`` is set). ``clip_fetcher`` replaces the YouTube fragment
-    downloader (tests; see ``_clip_fetcher``)."""
+    UTC day with the rest of the start-up background work, after the first response (``BackgroundStart``; default: on
+    Cloud Run, i.e. when ``K_SERVICE`` is set). ``clip_fetcher`` replaces the YouTube fragment downloader (tests; see
+    ``_clip_fetcher``)."""
     settings = settings or Settings.from_env()
     ensure_tool_path()
     if not logging.getLogger().handlers:
@@ -358,7 +433,21 @@ def create_app(
         log.error("CHORDS_UPLOAD_BUCKET is not set: track changes are not published")
         publisher = NullPublisher()
     store.publisher = publisher
-    stop_background = threading.Event()  # set at shutdown: ends the sweep thread
+    stop_background = threading.Event()  # set at shutdown: ends the sweep threads
+
+    def start_background_work() -> None:
+        _start_cloud_background_tasks(
+            preload_engine=analyzer is None,
+            bucket=bucket,
+            work_dir=settings.work_dir,
+            publisher=None if isinstance(publisher, NullPublisher) else publisher,
+            stop=stop_background,
+        )
+        if sweeper is not None and wake_sweep_on:  # the first natural wake of the UTC day runs the -wake slot
+            threading.Thread(target=sweeper.run_wake, name="chords-wake-sweep", daemon=True).start()
+
+    # cloud only: after the first response (AfterFirstResponseMiddleware below) or a quiet period, whichever is first
+    background = BackgroundStart(start_background_work)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -368,18 +457,11 @@ def create_app(
             cap_warning = instance_cap_warning()
             if cap_warning:
                 log.warning(cap_warning)
-            _start_cloud_background_tasks(
-                preload_engine=analyzer is None,
-                bucket=bucket,
-                work_dir=settings.work_dir,
-                publisher=None if isinstance(publisher, NullPublisher) else publisher,
-                stop=stop_background,
-            )
-            if sweeper is not None and wake_sweep_on:  # the first natural wake of the UTC day runs the -wake slot
-                threading.Thread(target=sweeper.run_wake, name="chords-wake-sweep", daemon=True).start()
+            background.arm()
         try:
             yield
         finally:
+            background.stop()  # a quiet-period timer that has not fired yet starts nothing
             stop_background.set()
             jobs.shutdown()
 
@@ -449,6 +531,8 @@ def create_app(
         allowed_origins=settings.allowed_origins,
         cloud=settings.cloud,
     )
+    if settings.cloud:  # outermost: it sees the response that actually leaves (host guard and CORS included)
+        app.add_middleware(AfterFirstResponseMiddleware, start=background.start)
 
     _install_error_handlers(app)
     admin = admin_router or admin_router_default
@@ -506,10 +590,11 @@ def _start_cloud_background_tasks(
     publisher: Any,
     stop: threading.Event,
 ) -> None:
-    """Cloud start-up: load the chord models (and run one tiny analysis) while the first request is still
-    on its way, remove uploads abandoned by clients (older than a day) and fragments that chords-fetch left
-    (older than an hour), and retry the publishes that failed earlier (``publisher``, unless None: now, then
-    every ``PUBLISH_SWEEP_INTERVAL_S`` until ``stop`` is set)."""
+    """The cloud start-up background work, started by ``BackgroundStart`` once the first response of the instance has
+    been sent: load the chord models (and run one tiny analysis) before the first job comes, remove uploads abandoned
+    by clients (older than a day) and fragments that chords-fetch left (older than an hour), and retry the publishes
+    that failed earlier (``publisher``, unless None: now, then every ``PUBLISH_SWEEP_INTERVAL_S`` until ``stop`` is
+    set)."""
 
     def preload() -> None:
         try:
